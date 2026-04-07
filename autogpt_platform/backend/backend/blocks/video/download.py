@@ -19,7 +19,13 @@ from backend.blocks._base import (
 from backend.data.execution import ExecutionContext
 from backend.data.model import SchemaField
 from backend.util.exceptions import BlockExecutionError
-from backend.util.file import MediaFileType, get_exec_file_path, store_media_file
+from backend.util.file import (
+    MAX_FILE_SIZE_BYTES,
+    MediaFileType,
+    get_exec_file_path,
+    store_media_file,
+)
+from backend.util.request import validate_url_host
 
 
 class VideoDownloadBlock(Block):
@@ -73,6 +79,10 @@ class VideoDownloadBlock(Block):
             },
         )
 
+    async def validate_url(self, url: str) -> None:
+        """Validate URL for SSRF protection. Raises ValueError if blocked."""
+        await validate_url_host(url)
+
     async def _store_output_video(
         self, execution_context: ExecutionContext, file: MediaFileType
     ) -> MediaFileType:
@@ -112,6 +122,8 @@ class VideoDownloadBlock(Block):
             "merge_output_format": output_format,
             "quiet": True,
             "no_warnings": True,
+            "max_filesize": MAX_FILE_SIZE_BYTES,
+            "noplaylist": True,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -141,6 +153,16 @@ class VideoDownloadBlock(Block):
     ) -> BlockOutput:
         try:
             assert execution_context.graph_exec_id is not None
+
+            # Validate URL before yt-dlp touches it (SSRF protection)
+            try:
+                await self.validate_url(input_data.url)
+            except ValueError as e:
+                raise BlockExecutionError(
+                    message=f"URL validation failed: {e}",
+                    block_name=self.name,
+                    block_id=str(self.id),
+                ) from e
 
             # Get the exec file directory
             output_dir = get_exec_file_path(execution_context.graph_exec_id, "")
