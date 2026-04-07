@@ -113,14 +113,19 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockReturnValue(new Promise(() => {}));
     mockGetLogs.mockReturnValue(new Promise(() => {}));
     renderComponent();
-    expect(screen.getByText("Loading...")).toBeDefined();
+    // Loading state renders Skeleton placeholders (animate-pulse divs) instead of content
+    expect(screen.queryByText("Loading...")).toBeNull();
+    // Summary cards and table content are not yet shown
+    expect(screen.queryByText("Known Cost")).toBeNull();
   });
 
   it("renders empty dashboard", async () => {
     mockGetDashboard.mockResolvedValue(emptyDashboard);
     mockGetLogs.mockResolvedValue(emptyLogs);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     // Verify the two summary cards that show $0.0000 — Known Cost and Estimated Total
     const zeroCostItems = screen.getAllByText("$0.0000");
     expect(zeroCostItems.length).toBe(2);
@@ -131,7 +136,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("$5.0000")).toBeDefined();
     expect(screen.getByText("100")).toBeDefined();
     expect(screen.getByText("5")).toBeDefined();
@@ -143,7 +150,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("tokens")).toBeDefined();
     expect(screen.getByText("per_run")).toBeDefined();
   });
@@ -152,7 +161,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockRejectedValue(new Error("Network error"));
     mockGetLogs.mockRejectedValue(new Error("Network error"));
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("Network error")).toBeDefined();
   });
 
@@ -160,7 +171,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(emptyDashboard);
     mockGetLogs.mockResolvedValue(emptyLogs);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("By Provider")).toBeDefined();
     expect(screen.getByText("By User")).toBeDefined();
     expect(screen.getByText("Raw Logs")).toBeDefined();
@@ -170,7 +183,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getAllByText("Known Cost").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Estimated Total")).toBeDefined();
     expect(screen.getByText("Total Requests")).toBeDefined();
@@ -181,7 +196,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(emptyDashboard);
     mockGetLogs.mockResolvedValue(emptyLogs);
     renderComponent();
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("Start Date")).toBeDefined();
     expect(screen.getByText("End Date")).toBeDefined();
     expect(screen.getAllByText(/Provider/i).length).toBeGreaterThanOrEqual(1);
@@ -193,7 +210,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent({ tab: "by-user" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("alice@example.com")).toBeDefined();
   });
 
@@ -201,7 +220,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent({ tab: "logs" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("LLMBlock")).toBeDefined();
     expect(screen.getByText("gpt-4")).toBeDefined();
   });
@@ -210,7 +231,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(emptyDashboard);
     mockGetLogs.mockResolvedValue(emptyLogs);
     renderComponent({ tab: "logs" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("No logs found")).toBeDefined();
   });
 
@@ -227,7 +250,9 @@ describe("PlatformCostContent", () => {
     };
     mockGetLogs.mockResolvedValue(multiPageLogs);
     renderComponent({ tab: "logs" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("Previous")).toBeDefined();
     expect(screen.getByText("Next")).toBeDefined();
     expect(screen.getByText(/Page 1 of 4/)).toBeDefined();
@@ -250,7 +275,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashWithNullEmail);
     mockGetLogs.mockResolvedValue(emptyLogs);
     renderComponent({ tab: "by-user" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("Unknown")).toBeDefined();
   });
 
@@ -258,7 +285,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent({ tab: "by-user" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("alice@example.com")).toBeDefined();
     // overview tab content should not be visible
     expect(screen.queryByText("openai")).toBeNull();
@@ -268,7 +297,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(dashboardWithData);
     mockGetLogs.mockResolvedValue(logsWithData);
     renderComponent({ tab: "logs" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("LLMBlock")).toBeDefined();
     expect(screen.getByText("gpt-4")).toBeDefined();
   });
@@ -303,7 +334,9 @@ describe("PlatformCostContent", () => {
     mockGetDashboard.mockResolvedValue(emptyDashboard);
     mockGetLogs.mockResolvedValue(logWithNullUser);
     renderComponent({ tab: "logs" });
-    await waitFor(() => expect(screen.queryByText("Loading...")).toBeNull());
+    await waitFor(() =>
+      expect(document.querySelector(".animate-pulse")).toBeNull(),
+    );
     expect(screen.getByText("copilot:SDK")).toBeDefined();
     expect(screen.getByText("anthropic")).toBeDefined();
   });

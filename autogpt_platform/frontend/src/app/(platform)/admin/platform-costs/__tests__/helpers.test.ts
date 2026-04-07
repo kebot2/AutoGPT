@@ -219,9 +219,9 @@ describe("trackingValue", () => {
     expect(trackingValue(row)).toBe("1.0K tokens");
   });
 
-  it("returns formatted duration for duration_seconds", () => {
+  it("returns formatted duration for sandbox_seconds", () => {
     const row = makeRow({
-      tracking_type: "duration_seconds",
+      tracking_type: "sandbox_seconds",
       total_duration_seconds: 120,
     });
     expect(trackingValue(row)).toBe("2.0m");
