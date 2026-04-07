@@ -9,18 +9,20 @@ import { PlatformCostContent } from "../components/PlatformCostContent";
 import type { PlatformCostDashboard } from "@/app/api/__generated__/models/platformCostDashboard";
 import type { PlatformCostLogsResponse } from "@/app/api/__generated__/models/platformCostLogsResponse";
 
-const mockGetDashboard = vi.fn();
-const mockGetLogs = vi.fn();
+// Mock the generated Orval hooks so tests don't hit the network
+const mockUseGetDashboard = vi.fn();
+const mockUseGetLogs = vi.fn();
 
-vi.mock("../actions", () => ({
-  getPlatformCostDashboard: (...args: unknown[]) => mockGetDashboard(...args),
-  getPlatformCostLogs: (...args: unknown[]) => mockGetLogs(...args),
+vi.mock("@/app/api/__generated__/endpoints/admin/admin", () => ({
+  useGetV2GetPlatformCostDashboard: (...args: unknown[]) =>
+    mockUseGetDashboard(...args),
+  useGetV2GetPlatformCostLogs: (...args: unknown[]) => mockUseGetLogs(...args),
 }));
 
 afterEach(() => {
   cleanup();
-  mockGetDashboard.mockReset();
-  mockGetLogs.mockReset();
+  mockUseGetDashboard.mockReset();
+  mockUseGetLogs.mockReset();
 });
 
 const emptyDashboard: PlatformCostDashboard = {
@@ -110,8 +112,8 @@ function renderComponent(searchParams = {}) {
 
 describe("PlatformCostContent", () => {
   it("shows loading state initially", () => {
-    mockGetDashboard.mockReturnValue(new Promise(() => {}));
-    mockGetLogs.mockReturnValue(new Promise(() => {}));
+    mockUseGetDashboard.mockReturnValue({ data: undefined, isLoading: true });
+    mockUseGetLogs.mockReturnValue({ data: undefined, isLoading: true });
     renderComponent();
     // Loading state renders Skeleton placeholders (animate-pulse divs) instead of content
     expect(screen.queryByText("Loading...")).toBeNull();
@@ -120,8 +122,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders empty dashboard", async () => {
-    mockGetDashboard.mockResolvedValue(emptyDashboard);
-    mockGetLogs.mockResolvedValue(emptyLogs);
+    mockUseGetDashboard.mockReturnValue({
+      data: emptyDashboard,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: emptyLogs,
+      isLoading: false,
+    });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -133,8 +141,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders dashboard with provider data", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -147,8 +161,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders tracking type badges", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -158,8 +178,16 @@ describe("PlatformCostContent", () => {
   });
 
   it("shows error state on fetch failure", async () => {
-    mockGetDashboard.mockRejectedValue(new Error("Network error"));
-    mockGetLogs.mockRejectedValue(new Error("Network error"));
+    mockUseGetDashboard.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("Network error"),
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("Network error"),
+    });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -168,8 +196,11 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders tab buttons", async () => {
-    mockGetDashboard.mockResolvedValue(emptyDashboard);
-    mockGetLogs.mockResolvedValue(emptyLogs);
+    mockUseGetDashboard.mockReturnValue({
+      data: emptyDashboard,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({ data: emptyLogs, isLoading: false });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -180,8 +211,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders summary cards with correct labels", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -193,8 +230,11 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders filter inputs", async () => {
-    mockGetDashboard.mockResolvedValue(emptyDashboard);
-    mockGetLogs.mockResolvedValue(emptyLogs);
+    mockUseGetDashboard.mockReturnValue({
+      data: emptyDashboard,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({ data: emptyLogs, isLoading: false });
     renderComponent();
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -207,8 +247,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders by-user tab when specified", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent({ tab: "by-user" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -217,8 +263,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders logs tab when specified", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent({ tab: "logs" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -228,8 +280,11 @@ describe("PlatformCostContent", () => {
   });
 
   it("renders no logs message when empty", async () => {
-    mockGetDashboard.mockResolvedValue(emptyDashboard);
-    mockGetLogs.mockResolvedValue(emptyLogs);
+    mockUseGetDashboard.mockReturnValue({
+      data: emptyDashboard,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({ data: emptyLogs, isLoading: false });
     renderComponent({ tab: "logs" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -238,7 +293,10 @@ describe("PlatformCostContent", () => {
   });
 
   it("shows pagination when multiple pages", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
     const multiPageLogs: PlatformCostLogsResponse = {
       logs: logsWithData.logs,
       pagination: {
@@ -248,7 +306,10 @@ describe("PlatformCostContent", () => {
         total_pages: 4,
       },
     };
-    mockGetLogs.mockResolvedValue(multiPageLogs);
+    mockUseGetLogs.mockReturnValue({
+      data: multiPageLogs,
+      isLoading: false,
+    });
     renderComponent({ tab: "logs" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -272,8 +333,11 @@ describe("PlatformCostContent", () => {
         },
       ],
     };
-    mockGetDashboard.mockResolvedValue(dashWithNullEmail);
-    mockGetLogs.mockResolvedValue(emptyLogs);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashWithNullEmail,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({ data: emptyLogs, isLoading: false });
     renderComponent({ tab: "by-user" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -282,8 +346,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("by-user tab content visible when tab=by-user param set", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent({ tab: "by-user" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -294,8 +364,14 @@ describe("PlatformCostContent", () => {
   });
 
   it("logs tab content visible when tab=logs param set", async () => {
-    mockGetDashboard.mockResolvedValue(dashboardWithData);
-    mockGetLogs.mockResolvedValue(logsWithData);
+    mockUseGetDashboard.mockReturnValue({
+      data: dashboardWithData,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logsWithData,
+      isLoading: false,
+    });
     renderComponent({ tab: "logs" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
@@ -331,8 +407,14 @@ describe("PlatformCostContent", () => {
         total_pages: 1,
       },
     };
-    mockGetDashboard.mockResolvedValue(emptyDashboard);
-    mockGetLogs.mockResolvedValue(logWithNullUser);
+    mockUseGetDashboard.mockReturnValue({
+      data: emptyDashboard,
+      isLoading: false,
+    });
+    mockUseGetLogs.mockReturnValue({
+      data: logWithNullUser,
+      isLoading: false,
+    });
     renderComponent({ tab: "logs" });
     await waitFor(() =>
       expect(document.querySelector(".animate-pulse")).toBeNull(),
