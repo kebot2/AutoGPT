@@ -2610,6 +2610,7 @@ class TestPR16Transfers:
         result = await reject_transfer(
             transfer_id="tr-1",
             user_id=USER_ID,
+            org_id=pending.sourceOrganizationId,
         )
 
         assert result.status == "REJECTED"
@@ -3171,9 +3172,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: decline_invitation doesn't check if already accepted"
-    )
     async def test_decline_already_accepted_invitation_blocked(self):
         """Cannot decline an invitation that was already accepted."""
         accepted_inv = self._make_invitation(
@@ -3208,9 +3206,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: decline_invitation doesn't check if already revoked"
-    )
     async def test_decline_already_revoked_invitation_blocked(self):
         """Cannot decline an invitation that was already revoked."""
         revoked_inv = self._make_invitation(
@@ -3245,9 +3240,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: join_team doesn't verify ctx.org_id == path org_id"
-    )
     async def test_join_team_rejects_mismatched_org_id(self):
         """join_team route should reject when ctx.org_id != path org_id."""
         ctx = self._owner_ctx(org_id="org-A")
@@ -3264,9 +3256,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: leave_team doesn't verify ctx.org_id == path org_id"
-    )
     async def test_leave_team_rejects_mismatched_org_id(self):
         """leave_team route should reject when ctx.org_id != path org_id."""
         ctx = self._owner_ctx(org_id="org-A")
@@ -3312,9 +3301,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: reject_transfer has no org membership check"
-    )
     async def test_reject_transfer_requires_org_membership(self):
         """Only source or target org members can reject a transfer."""
         transfer = self._make_transfer(
@@ -3344,9 +3330,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: update_org doesn't sync OrganizationProfile on rename"
-    )
     async def test_update_org_syncs_profile_on_rename(self):
         """When org name or slug changes, OrganizationProfile should be
         updated too."""
@@ -3398,10 +3381,6 @@ class TestReviewFindings:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="Review: approve_transfer sets COMPLETED before resource is "
-        "moved"
-    )
     async def test_approve_transfer_does_not_set_completed(self):
         """approve_transfer should NOT set status=COMPLETED -- only execute
         should."""
