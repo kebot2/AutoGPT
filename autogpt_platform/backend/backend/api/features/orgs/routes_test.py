@@ -271,6 +271,7 @@ class TestOrgDbUpdateOrg:
         self.prisma.organizationalias.find_unique = AsyncMock(return_value=None)
         self.prisma.organizationalias.create = AsyncMock()
         self.prisma.organization.update = AsyncMock()
+        self.prisma.organizationprofile.update = AsyncMock()
         mocker.patch("backend.api.features.orgs.db.prisma", self.prisma)
 
     @pytest.mark.asyncio
@@ -2299,6 +2300,7 @@ class TestUpdateOrgTypedModel:
     @pytest.fixture(autouse=True)
     def setup(self, mocker):
         self.prisma = MagicMock()
+        self.prisma.organizationprofile.update = AsyncMock()
         mocker.patch("backend.api.features.orgs.db.prisma", self.prisma)
 
     @pytest.mark.asyncio
@@ -2418,6 +2420,7 @@ class TestPRReviewBugs:
         inv = MagicMock()
         inv.acceptedAt = None
         inv.revokedAt = None
+        inv.expiresAt = datetime.now(timezone.utc) + timedelta(days=7)
         inv.email = "alice@example.com"
         self.prisma.orginvitation.find_unique = AsyncMock(return_value=inv)
 
