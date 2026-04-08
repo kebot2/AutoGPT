@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { HeartIcon, ListIcon } from "@phosphor-icons/react";
-import { JumpBackIn } from "./components/JumpBackIn/JumpBackIn";
 import { LibraryActionHeader } from "./components/LibraryActionHeader/LibraryActionHeader";
 import { LibraryAgentList } from "./components/LibraryAgentList/LibraryAgentList";
 import { useLibraryListPage } from "./components/useLibraryListPage";
@@ -45,7 +44,6 @@ export default function LibraryPage() {
     >
       <main className="pt-160 container min-h-screen space-y-4 pb-20 pt-16 sm:px-8 md:px-12">
         <LibraryActionHeader setSearchTerm={setSearchTerm} />
-        <JumpBackIn />
         <LibraryAgentList
           searchTerm={searchTerm}
           librarySort={librarySort}
