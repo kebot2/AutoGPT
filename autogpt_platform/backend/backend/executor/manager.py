@@ -807,6 +807,29 @@ class ExecutionProcessor:
                 db_client=db_client,
             )
 
+        # If the node failed because a nested tool charge raised
+        # InsufficientBalanceError (orchestrator agent mode), the main
+        # queue's _charge_usage IBE notification path was bypassed (the
+        # initial charge succeeded — only the nested tool charge failed).
+        # Send the user notification here so they understand why their
+        # agent run stopped.  Failures are logged but not raised so the
+        # node-execution path stays clean.
+        if status == ExecutionStatus.FAILED and isinstance(
+            execution_stats.error, InsufficientBalanceError
+        ):
+            try:
+                await asyncio.to_thread(
+                    self._handle_insufficient_funds_notif,
+                    get_db_client(),
+                    node_exec.user_id,
+                    node_exec.graph_id,
+                    execution_stats.error,
+                )
+            except Exception as notif_error:  # pragma: no cover
+                log_metadata.warning(
+                    f"Failed to send insufficient funds notification: " f"{notif_error}"
+                )
+
         return execution_stats
 
     @async_time_measured
