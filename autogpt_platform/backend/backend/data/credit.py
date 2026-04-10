@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 import stripe
+from fastapi.concurrency import run_in_threadpool
 from prisma.enums import (
     CreditRefundRequestStatus,
     CreditTransactionType,
@@ -1236,7 +1237,8 @@ async def get_stripe_customer_id(user_id: str) -> str:
     if user.stripe_customer_id:
         return user.stripe_customer_id
 
-    customer = stripe.Customer.create(
+    customer = await run_in_threadpool(
+        stripe.Customer.create,
         name=user.name or "",
         email=user.email,
         metadata={"user_id": user_id},
@@ -1270,32 +1272,41 @@ async def set_subscription_tier(user_id: str, tier: SubscriptionTier) -> None:
 
 
 async def cancel_stripe_subscription(user_id: str) -> None:
-    """Cancel all active Stripe subscriptions for a user (called on downgrade to FREE).
+    """Cancel all active/trialing Stripe subscriptions for a user (called on downgrade to FREE).
 
     Raises stripe.StripeError if any cancellation fails, so the caller can avoid
     updating the DB tier when Stripe is inconsistent.
     """
     customer_id = await get_stripe_customer_id(user_id)
-    try:
-        subscriptions = stripe.Subscription.list(
-            customer=customer_id, status="active", limit=10
-        )
-    except stripe.StripeError:
-        logger.warning(
-            "cancel_stripe_subscription: failed to list subscriptions for user %s",
-            user_id,
-        )
-        raise
-    for sub in subscriptions.auto_paging_iter():
+    seen_ids: set[str] = set()
+    for status in ("active", "trialing"):
         try:
-            stripe.Subscription.cancel(sub["id"])
+            subscriptions = await run_in_threadpool(
+                stripe.Subscription.list,
+                customer=customer_id,
+                status=status,
+                limit=10,
+            )
         except stripe.StripeError:
             logger.warning(
-                "cancel_stripe_subscription: failed to cancel sub %s for user %s",
-                sub["id"],
+                "cancel_stripe_subscription: failed to list %s subscriptions for user %s",
+                status,
                 user_id,
             )
             raise
+        for sub in subscriptions.auto_paging_iter():
+            if sub["id"] in seen_ids:
+                continue
+            seen_ids.add(sub["id"])
+            try:
+                await run_in_threadpool(stripe.Subscription.cancel, sub["id"])
+            except stripe.StripeError:
+                logger.warning(
+                    "cancel_stripe_subscription: failed to cancel sub %s for user %s",
+                    sub["id"],
+                    user_id,
+                )
+                raise
 
 
 async def get_auto_top_up(user_id: str) -> AutoTopUpConfig:
@@ -1331,7 +1342,8 @@ async def create_subscription_checkout(
     if not price_id:
         raise ValueError(f"Subscription not available for tier {tier.value}")
     customer_id = await get_stripe_customer_id(user_id)
-    session = stripe.checkout.Session.create(
+    session = await run_in_threadpool(
+        stripe.checkout.Session.create,
         customer=customer_id,
         mode="subscription",
         line_items=[{"price": price_id, "quantity": 1}],
@@ -1339,7 +1351,9 @@ async def create_subscription_checkout(
         cancel_url=cancel_url,
         subscription_data={"metadata": {"user_id": user_id, "tier": tier.value}},
     )
-    return session.url or ""
+    if not session.url:
+        raise ValueError("Stripe did not return a checkout session URL")
+    return session.url
 
 
 async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:

@@ -771,10 +771,14 @@ async def update_subscription_tier(
         if payment_enabled:
             try:
                 await cancel_stripe_subscription(user_id)
-            except stripe.StripeError as e:
+            except stripe.StripeError:
+                logger.exception(
+                    "update_subscription_tier: failed to cancel Stripe subscription for user %s",
+                    user_id,
+                )
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Failed to cancel Stripe subscription: {e}",
+                    detail="Unable to cancel your subscription right now. Please try again later.",
                 )
         await set_subscription_tier(user_id, tier)
         return SubscriptionCheckoutResponse(url="")
@@ -807,25 +811,29 @@ async def update_subscription_tier(
     path="/credits/stripe_webhook", summary="Handle Stripe webhooks", tags=["credits"]
 )
 async def stripe_webhook(request: Request):
+    webhook_secret = settings.secrets.stripe_webhook_secret
+    if not webhook_secret:
+        # Guard: an empty secret allows HMAC forgery (attacker can compute a valid
+        # signature over the same empty key). Reject all webhook calls when unconfigured.
+        logger.error(
+            "stripe_webhook: STRIPE_WEBHOOK_SECRET is not configured — "
+            "rejecting request to prevent signature bypass"
+        )
+        raise HTTPException(status_code=503, detail="Webhook not configured")
+
     # Get the raw request body
     payload = await request.body()
     # Get the signature header
     sig_header = request.headers.get("stripe-signature")
 
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.secrets.stripe_webhook_secret
-        )
-    except ValueError as e:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except ValueError:
         # Invalid payload
-        raise HTTPException(
-            status_code=400, detail=f"Invalid payload: {str(e) or type(e).__name__}"
-        )
-    except stripe.SignatureVerificationError as e:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.SignatureVerificationError:
         # Invalid signature
-        raise HTTPException(
-            status_code=400, detail=f"Invalid signature: {str(e) or type(e).__name__}"
-        )
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     if (
         event["type"] == "checkout.session.completed"

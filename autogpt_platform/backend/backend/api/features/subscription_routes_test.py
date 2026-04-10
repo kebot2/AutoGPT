@@ -324,5 +324,22 @@ def test_update_subscription_tier_free_cancel_failure_returns_502(
         response = client.post("/credits/subscription", json={"tier": "FREE"})
 
         assert response.status_code == 502
+        assert "Stripe" not in response.json().get("detail", "")
     finally:
         teardown_auth(app)
+
+
+def test_stripe_webhook_unconfigured_secret_returns_503(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """Stripe webhook endpoint returns 503 when STRIPE_WEBHOOK_SECRET is not set."""
+    mocker.patch(
+        "backend.api.features.v1.settings.secrets.stripe_webhook_secret",
+        new="",
+    )
+    response = client.post(
+        "/credits/stripe_webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert response.status_code == 503

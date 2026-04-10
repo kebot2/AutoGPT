@@ -161,6 +161,38 @@ async def test_cancel_stripe_subscription_no_active():
 
 
 @pytest.mark.asyncio
+async def test_cancel_stripe_subscription_cancels_trialing():
+    """cancel_stripe_subscription also cancels subscriptions in 'trialing' status."""
+    mock_sub = {"id": "sub_trial_123"}
+    active_subs = MagicMock()
+    active_subs.auto_paging_iter.return_value = iter([])
+    trial_subs = MagicMock()
+    trial_subs.auto_paging_iter.return_value = iter([mock_sub])
+
+    def mock_list(**kwargs):
+        if kwargs.get("status") == "active":
+            return active_subs
+        if kwargs.get("status") == "trialing":
+            return trial_subs
+        return MagicMock(auto_paging_iter=lambda: iter([]))
+
+    with (
+        patch(
+            "backend.data.credit.get_stripe_customer_id",
+            new_callable=AsyncMock,
+            return_value="cus_123",
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            side_effect=mock_list,
+        ),
+        patch("backend.data.credit.stripe.Subscription.cancel") as mock_cancel,
+    ):
+        await cancel_stripe_subscription("user-1")
+        mock_cancel.assert_called_once_with("sub_trial_123")
+
+
+@pytest.mark.asyncio
 async def test_cancel_stripe_subscription_raises_on_list_failure():
     """stripe.Subscription.list() failure propagates so DB tier is not updated."""
     with (
