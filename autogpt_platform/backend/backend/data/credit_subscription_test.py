@@ -162,16 +162,24 @@ async def test_sync_subscription_from_stripe_enterprise_not_overwritten():
 
 @pytest.mark.asyncio
 async def test_sync_subscription_from_stripe_cancelled():
+    """When the only active sub is cancelled, the user is downgraded to FREE."""
     mock_user = _make_user(tier=SubscriptionTier.PRO)
     stripe_sub = {
+        "id": "sub_old",
         "customer": "cus_123",
         "status": "canceled",
         "items": {"data": []},
     }
+    empty_list = MagicMock()
+    empty_list.data = []
     with (
         patch(
             "backend.data.credit.User.prisma",
             return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            return_value=empty_list,
         ),
         patch(
             "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
@@ -179,6 +187,51 @@ async def test_sync_subscription_from_stripe_cancelled():
     ):
         await sync_subscription_from_stripe(stripe_sub)
         mock_set.assert_awaited_once_with("user-1", SubscriptionTier.FREE)
+
+
+@pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_cancelled_but_other_active_sub_exists():
+    """Cancelling sub_old must NOT downgrade the user if sub_new is still active.
+
+    This covers the race condition where `customer.subscription.deleted` for
+    the old sub arrives after `customer.subscription.created` for the new sub
+    was already processed. Unconditionally downgrading to FREE here would
+    immediately undo the user's upgrade.
+    """
+    mock_user = _make_user(tier=SubscriptionTier.BUSINESS)
+    stripe_sub = {
+        "id": "sub_old",
+        "customer": "cus_123",
+        "status": "canceled",
+        "items": {"data": []},
+    }
+    # Stripe still shows sub_new as active for this customer.
+    active_list = MagicMock()
+    active_list.data = [{"id": "sub_new"}]
+    empty_list = MagicMock()
+    empty_list.data = []
+
+    def list_side_effect(*args, **kwargs):
+        if kwargs.get("status") == "active":
+            return active_list
+        return empty_list
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            side_effect=list_side_effect,
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
+        ) as mock_set,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        # Must NOT write FREE — another active sub is still present.
+        mock_set.assert_not_awaited()
 
 
 @pytest.mark.asyncio

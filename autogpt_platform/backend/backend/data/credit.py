@@ -1443,6 +1443,47 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
         if new_sub_id:
             await _cleanup_stale_subscriptions(customer_id, new_sub_id)
     else:
+        # A subscription was cancelled or ended. DO NOT unconditionally downgrade
+        # to FREE — Stripe does not guarantee webhook delivery order, so a
+        # `customer.subscription.deleted` for the OLD sub can arrive after we've
+        # already processed `customer.subscription.created` for a new paid sub.
+        # Ask Stripe whether any OTHER active/trialing subs exist for this
+        # customer; if they do, keep the user's current tier (the other sub's
+        # own event will/has already set the correct tier).
+        try:
+            other_subs_active = await run_in_threadpool(
+                stripe.Subscription.list,
+                customer=customer_id,
+                status="active",
+                limit=10,
+            )
+            other_subs_trialing = await run_in_threadpool(
+                stripe.Subscription.list,
+                customer=customer_id,
+                status="trialing",
+                limit=10,
+            )
+        except stripe.StripeError:
+            logger.warning(
+                "sync_subscription_from_stripe: could not verify other active"
+                " subs for customer %s on cancel event %s; preserving current"
+                " tier to avoid an unsafe downgrade",
+                customer_id,
+                new_sub_id,
+            )
+            return
+        still_has_active_sub = any(
+            sub["id"] != new_sub_id for sub in other_subs_active.data
+        ) or any(sub["id"] != new_sub_id for sub in other_subs_trialing.data)
+        if still_has_active_sub:
+            logger.info(
+                "sync_subscription_from_stripe: sub %s cancelled but customer %s"
+                " still has another active sub; keeping tier %s",
+                new_sub_id,
+                customer_id,
+                current_tier.value,
+            )
+            return
         tier = SubscriptionTier.FREE
     # Idempotency: Stripe retries webhooks on delivery failure, and several event
     # types map to the same final tier. Skip the DB write + cache invalidation
