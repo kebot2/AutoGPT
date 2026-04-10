@@ -322,8 +322,16 @@ def gated_processor(monkeypatch):
     inner_result = {"status": ExecutionStatus.COMPLETED, "llm_call_count": 3}
 
     async def fake_inner(
-        self, *, node, node_exec, node_exec_progress, stats, db_client,
-        log_metadata, nodes_input_masks=None, nodes_to_skip=None,
+        self,
+        *,
+        node,
+        node_exec,
+        node_exec_progress,
+        stats,
+        db_client,
+        log_metadata,
+        nodes_input_masks=None,
+        nodes_to_skip=None,
     ):
         stats.llm_call_count = inner_result["llm_call_count"]
         return MagicMock(wall_time=0.1, cpu_time=0.1), inner_result["status"]
@@ -379,8 +387,12 @@ async def test_on_node_execution_charges_extra_iterations_when_gate_passes(
     inner["llm_call_count"] = 3  # → extra_iterations = 2
     fake_db.get_node = AsyncMock(return_value=_FakeNode(charge_per_llm_call=True))
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=False),
         node_exec_progress=MagicMock(),
@@ -399,8 +411,12 @@ async def test_on_node_execution_skips_when_status_not_completed(gated_processor
     inner["llm_call_count"] = 5
     fake_db.get_node = AsyncMock(return_value=_FakeNode(charge_per_llm_call=True))
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=False),
         node_exec_progress=MagicMock(),
@@ -419,8 +435,12 @@ async def test_on_node_execution_skips_when_charge_flag_false(gated_processor):
     inner["llm_call_count"] = 5
     fake_db.get_node = AsyncMock(return_value=_FakeNode(charge_per_llm_call=False))
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=False),
         node_exec_progress=MagicMock(),
@@ -439,8 +459,12 @@ async def test_on_node_execution_skips_when_llm_call_count_le_1(gated_processor)
     inner["llm_call_count"] = 1  # exactly the base charge, no extras
     fake_db.get_node = AsyncMock(return_value=_FakeNode(charge_per_llm_call=True))
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=False),
         node_exec_progress=MagicMock(),
@@ -459,8 +483,12 @@ async def test_on_node_execution_skips_when_dry_run(gated_processor):
     inner["llm_call_count"] = 5
     fake_db.get_node = AsyncMock(return_value=_FakeNode(charge_per_llm_call=True))
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=True),
         node_exec_progress=MagicMock(),
@@ -472,7 +500,8 @@ async def test_on_node_execution_skips_when_dry_run(gated_processor):
 
 @pytest.mark.asyncio
 async def test_on_node_execution_insufficient_balance_records_error_and_notifies(
-    monkeypatch, gated_processor,
+    monkeypatch,
+    gated_processor,
 ):
     """When extra-iteration charging fails with InsufficientBalanceError:
 
@@ -501,8 +530,12 @@ async def test_on_node_execution_insufficient_balance_records_error_and_notifies
         manager.ExecutionProcessor, "charge_extra_iterations", raise_ibe
     )
 
-    stats_pair = (MagicMock(node_count=0, nodes_cputime=0, nodes_walltime=0,
-                            cost=0, node_error_count=0), threading.Lock())
+    stats_pair = (
+        MagicMock(
+            node_count=0, nodes_cputime=0, nodes_walltime=0, cost=0, node_error_count=0
+        ),
+        threading.Lock(),
+    )
     result_stats = await proc.on_node_execution(
         node_exec=_make_node_exec(dry_run=False),
         node_exec_progress=MagicMock(),
@@ -520,7 +553,10 @@ async def test_on_node_execution_insufficient_balance_records_error_and_notifies
 
 
 async def _run_tool_exec_with_stats(
-    *, dry_run: bool, tool_stats_error, charge_node_usage_mock=None,
+    *,
+    dry_run: bool,
+    tool_stats_error,
+    charge_node_usage_mock=None,
 ):
     """Invoke _execute_single_tool_with_manager against fully mocked deps
     and return (charge_call_count, merge_stats_calls).
@@ -549,9 +585,7 @@ async def _run_tool_exec_with_stats(
         mock_node_exec_result,
         {"query": "t"},
     )
-    mock_db_client.get_execution_outputs_by_node_exec_id.return_value = {
-        "result": "ok"
-    }
+    mock_db_client.get_execution_outputs_by_node_exec_id.return_value = {"result": "ok"}
 
     # ExecutionProcessor mock: on_node_execution returns supplied error.
     mock_processor = AsyncMock()
@@ -561,8 +595,8 @@ async def _run_tool_exec_with_stats(
     mock_node_stats = MagicMock()
     mock_node_stats.error = tool_stats_error
     mock_processor.on_node_execution = AsyncMock(return_value=mock_node_stats)
-    mock_processor.charge_node_usage = (
-        charge_node_usage_mock or MagicMock(return_value=(10, 990))
+    mock_processor.charge_node_usage = charge_node_usage_mock or MagicMock(
+        return_value=(10, 990)
     )
 
     # Build a tool_info shaped like _build_tool_info_from_args output.

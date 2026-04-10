@@ -729,9 +729,13 @@ class ExecutionProcessor:
                         "error": str(e),
                     },
                 )
-                # Surface on execution_stats so node_stats persistence
-                # below records the billing failure for monitoring.
-                execution_stats.error = e
+                # NOTE: Do NOT set execution_stats.error here. The node ran
+                # to completion — only the post-hoc charge failed. Setting
+                # .error would (a) flip node_error_count below, creating an
+                # "errored COMPLETED node" inconsistency in the metrics, and
+                # (b) leak balance amounts into the persisted node_stats.
+                # The structured ERROR log above is the alerting hook;
+                # node_stats stays clean.
                 # Notify the user they're out of credits. Runs through
                 # Redis dedup (per user+graph) so repeat runs don't spam.
                 try:

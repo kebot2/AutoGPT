@@ -35,7 +35,10 @@ from backend.data.dynamic_fields import (
 from backend.data.execution import ExecutionContext
 from backend.data.model import NodeExecutionStats, SchemaField
 from backend.util import json
-from backend.util.clients import get_database_manager_async_client
+from backend.util.clients import (
+    get_database_manager_async_client,
+    get_database_manager_client,
+)
 from backend.util.exceptions import InsufficientBalanceError
 from backend.util.prompt import MAIN_OBJECTIVE_PREFIX
 from backend.util.security import SENSITIVE_FIELD_NAMES
@@ -1139,12 +1142,22 @@ class OrchestratorBlock(Block):
                 and tool_node_stats is not None
                 and tool_node_stats.error is None
             ):
-                tool_cost, _ = await asyncio.to_thread(
+                tool_cost, remaining_balance = await asyncio.to_thread(
                     execution_processor.charge_node_usage,
                     node_exec_entry,
                 )
                 if tool_cost > 0:
                     self.merge_stats(NodeExecutionStats(extra_cost=tool_cost))
+                    # Notify the user if their balance is now low — mirrors
+                    # the main queue path so nested tool charges don't
+                    # bypass low-balance alerts.
+                    await asyncio.to_thread(
+                        execution_processor._handle_low_balance,
+                        db_client=get_database_manager_client(),
+                        user_id=execution_params.user_id,
+                        current_balance=remaining_balance,
+                        transaction_cost=tool_cost,
+                    )
 
             # Get outputs from database after execution completes using database manager client
             node_outputs = await db_client.get_execution_outputs_by_node_exec_id(
