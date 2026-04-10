@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import orjson
 import pytest
 
+from backend.executor.utils import is_credential_validation_error_message
 from backend.util.exceptions import GraphValidationError
 
 from ._test_data import (
@@ -470,24 +471,22 @@ async def test_run_agent_rejects_unknown_input_fields(setup_test_data):
 # ---------------------------------------------------------------------------
 
 
-def test_is_credential_node_error_message_recognises_credential_strings():
-    """Static helper should match all credential error strings emitted by
+def test_is_credential_validation_error_message_recognises_credential_strings():
+    """Shared helper should match all credential error strings emitted by
     ``backend.executor.utils._validate_node_input_credentials``."""
-    matcher = RunAgentTool._is_credential_node_error_message
-    assert matcher("These credentials are required")
-    assert matcher("THESE CREDENTIALS ARE REQUIRED")
-    assert matcher("Invalid credentials: not found")
-    assert matcher("Credentials not available: github")
-    assert matcher("Unknown credentials #abc-123")
+    assert is_credential_validation_error_message("These credentials are required")
+    assert is_credential_validation_error_message("THESE CREDENTIALS ARE REQUIRED")
+    assert is_credential_validation_error_message("Invalid credentials: not found")
+    assert is_credential_validation_error_message("Credentials not available: github")
+    assert is_credential_validation_error_message("Unknown credentials #abc-123")
 
 
-def test_is_credential_node_error_message_rejects_non_credential_strings():
-    """Static helper should ignore unrelated graph validation messages."""
-    matcher = RunAgentTool._is_credential_node_error_message
-    assert not matcher("Input field 'url' is required")
-    assert not matcher("Block configuration invalid")
-    assert not matcher("")
-    assert not matcher("credentials are fine")
+def test_is_credential_validation_error_message_rejects_non_credential_strings():
+    """Shared helper should ignore unrelated graph validation messages."""
+    assert not is_credential_validation_error_message("Input field 'url' is required")
+    assert not is_credential_validation_error_message("Block configuration invalid")
+    assert not is_credential_validation_error_message("")
+    assert not is_credential_validation_error_message("credentials are fine")
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -505,10 +504,13 @@ async def test_build_setup_requirements_from_credential_validation_error(
         node_errors={"some-node-id": {"credentials": "These credentials are required"}},
     )
 
+    # No matched credentials => missing_credentials should equal the full
+    # requirements set (the credential race with nothing connected).
     response = tool._build_setup_requirements_from_validation_error(
         graph=graph,
         error=error,
         session_id="test-session",
+        graph_credentials={},
     )
 
     assert isinstance(response, SetupRequirementsResponse)
@@ -520,6 +522,53 @@ async def test_build_setup_requirements_from_credential_validation_error(
     # rebuilt missing-credentials map matches the graph schema.
     assert len(response.setup_info.user_readiness.missing_credentials) > 0
     assert "credentials" in response.message.lower()
+    # Message must be action-neutral: this helper is shared by the run
+    # path and the schedule path, so hardcoding "scheduling again" would
+    # mislead users on the run path.
+    assert "scheduling again" not in response.message.lower()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_build_setup_requirements_filters_matched_credentials(
+    setup_firecrawl_test_data,
+):
+    """``missing_credentials`` must exclude credentials the user already
+    has connected (``graph_credentials``), otherwise the inline card
+    would show every connected credential as missing during a race."""
+    from typing import cast
+
+    from backend.data.model import CredentialsMetaInput
+
+    graph = setup_firecrawl_test_data["graph"]
+    tool = RunAgentTool()
+
+    # Derive the graph's aggregated credential field keys and fabricate
+    # a fully-matched credentials map so that filtering leaves the
+    # missing_credentials map empty.  The helper only reads
+    # ``graph_credentials.keys()`` (via ``build_missing_credentials_from_graph``),
+    # so the values are opaque sentinels.
+    aggregated = graph.aggregate_credentials_inputs()
+    graph_credentials = cast(
+        dict[str, CredentialsMetaInput],
+        {field_key: object() for field_key in aggregated.keys()},
+    )
+
+    error = GraphValidationError(
+        message="Graph is invalid",
+        node_errors={"some-node-id": {"credentials": "These credentials are required"}},
+    )
+
+    response = tool._build_setup_requirements_from_validation_error(
+        graph=graph,
+        error=error,
+        session_id="test-session",
+        graph_credentials=graph_credentials,
+    )
+
+    assert isinstance(response, SetupRequirementsResponse)
+    # All fields matched => missing_credentials is empty, requirements still populated.
+    assert response.setup_info.user_readiness.missing_credentials == {}
+    assert len(response.setup_info.requirements["credentials"]) > 0
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -540,6 +589,7 @@ async def test_build_setup_requirements_returns_none_for_non_credential_error(
         graph=graph,
         error=error,
         session_id="test-session",
+        graph_credentials={},
     )
 
     assert response is None

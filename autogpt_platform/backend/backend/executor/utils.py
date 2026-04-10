@@ -249,6 +249,28 @@ def validate_exec(
     return data, node_block.name
 
 
+def is_credential_validation_error_message(message: str) -> bool:
+    """Return True if *message* came from the credential gate in
+    :func:`_validate_node_input_credentials`.
+
+    Kept as a public module-level helper so other layers (e.g. the
+    copilot tool that rebuilds the inline credentials setup card on a
+    credential race) can distinguish credential failures from other
+    graph validation errors without redefining the string list.
+
+    Adding a new error string in ``_validate_node_input_credentials``
+    **must** also be reflected here — otherwise the copilot will fall
+    back to a plain text error for that case.
+    """
+    lower = message.lower()
+    return (
+        lower == "these credentials are required"
+        or lower.startswith("invalid credentials:")
+        or lower.startswith("credentials not available:")
+        or lower.startswith("unknown credentials #")
+    )
+
+
 async def _validate_node_input_credentials(
     graph: GraphModel,
     user_id: str,
@@ -476,22 +498,11 @@ async def _construct_starting_node_execution_input(
     # Dry runs simulate every block — missing credentials are irrelevant.
     # Strip credential-only errors so the graph can proceed.
     if dry_run and validation_errors:
-
-        def _is_credential_error(msg: str) -> bool:
-            """Match errors produced by _validate_node_input_credentials."""
-            m = msg.lower()
-            return (
-                m == "these credentials are required"
-                or m.startswith("invalid credentials:")
-                or m.startswith("credentials not available:")
-                or m.startswith("unknown credentials #")
-            )
-
         validation_errors = {
             node_id: {
                 field: msg
                 for field, msg in errors.items()
-                if not _is_credential_error(msg)
+                if not is_credential_validation_error_message(msg)
             }
             for node_id, errors in validation_errors.items()
         }

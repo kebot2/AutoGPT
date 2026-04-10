@@ -13,6 +13,7 @@ from backend.data.execution import ExecutionStatus
 from backend.data.graph import GraphModel
 from backend.data.model import CredentialsMetaInput
 from backend.executor import utils as execution_utils
+from backend.executor.utils import is_credential_validation_error_message
 from backend.util.clients import get_scheduler_client
 from backend.util.exceptions import DatabaseError, GraphValidationError, NotFoundError
 from backend.util.timezone_utils import (
@@ -363,54 +364,47 @@ class RunAgentTool(BaseTool):
             trigger_info=trigger_info,
         )
 
-    @staticmethod
-    def _is_credential_node_error_message(message: str) -> bool:
-        """Return True if *message* came from the executor's credential gate.
-
-        Mirrors the recognised strings in
-        ``backend.executor.utils._validate_node_input_credentials`` so we
-        can distinguish credential failures from other graph validation
-        errors (input schema mismatch, invalid block config, ...) when
-        the scheduler raises a generic ``GraphValidationError``.
-        """
-        lower = message.lower()
-        return (
-            lower == "these credentials are required"
-            or lower.startswith("invalid credentials:")
-            or lower.startswith("credentials not available:")
-            or lower.startswith("unknown credentials #")
-        )
-
     def _build_setup_requirements_from_validation_error(
         self,
         graph: GraphModel,
         error: GraphValidationError,
         session_id: str,
+        graph_credentials: dict[str, CredentialsMetaInput],
     ) -> SetupRequirementsResponse | None:
         """Convert a credential-related ``GraphValidationError`` into
         the inline ``SetupRequirementsResponse`` the frontend renders.
 
         Returns ``None`` if *error* isn't credential-related — the
         caller should then fall back to a plain text error.
+
+        ``graph_credentials`` is the already-matched credentials map
+        from ``_check_prerequisites``. It is used to filter
+        ``missing_credentials`` down to the credential fields the user
+        still needs to connect — mirroring how the non-race path builds
+        the same card at lines 478-481.
         """
         has_credential_error = any(
-            self._is_credential_node_error_message(msg)
+            is_credential_validation_error_message(msg)
             for node_errors in error.node_errors.values()
             for msg in node_errors.values()
         )
         if not has_credential_error:
             return None
 
-        # Rebuild the missing-credentials map from the graph schema so
-        # the card renders the same fields the user would see if the
-        # check had fired at ``_check_prerequisites`` time.
+        # ``requirements_creds_dict`` is the full credential schema
+        # (what the card's "Requirements" section renders). The
+        # ``missing_credentials_dict`` is the subset the user still
+        # needs to connect — we pass in the already-matched
+        # ``graph_credentials`` so connected credentials are excluded.
         requirements_creds_dict = build_missing_credentials_from_graph(graph, None)
-        missing_credentials_dict = build_missing_credentials_from_graph(graph, None)
+        missing_credentials_dict = build_missing_credentials_from_graph(
+            graph, graph_credentials
+        )
         return SetupRequirementsResponse(
             message=(
                 f"Agent '{graph.name}' has credentials that are missing or "
                 "no longer valid. Please connect the required account(s) "
-                "and try scheduling again."
+                "and try again."
             ),
             session_id=session_id,
             setup_info=SetupInfo(
@@ -584,6 +578,7 @@ class RunAgentTool(BaseTool):
                 graph=graph,
                 error=e,
                 session_id=session_id,
+                graph_credentials=graph_credentials,
             )
             if creds_setup is not None:
                 return creds_setup
@@ -779,6 +774,7 @@ class RunAgentTool(BaseTool):
                 graph=graph,
                 error=e,
                 session_id=session_id,
+                graph_credentials=graph_credentials,
             )
             if creds_setup is not None:
                 return creds_setup
