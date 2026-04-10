@@ -328,31 +328,51 @@ async def test_response_includes_created_at(tool: DecomposeGoalTool, session):
 
 def test_predicate_passes_when_no_user_messages_after_baseline():
     session = make_session(_USER_ID)
-    session.messages.append(
-        ChatMessage(role="assistant", content="tool call", sequence=5)
-    )
-    assert _no_user_action_since(5)(session) is True
+    # Two pre-existing messages (indices 0, 1).
+    session.messages.append(ChatMessage(role="user", content="initial"))
+    session.messages.append(ChatMessage(role="assistant", content="tool call"))
+    # Tool result lands at index 2 — this is what the executor appends after
+    # _execute returns. baseline_index was captured at 2 inside _execute.
+    session.messages.append(ChatMessage(role="tool", content="{...}"))
+    assert _no_user_action_since(2)(session) is True
 
 
 def test_predicate_rejects_when_user_message_after_baseline():
     session = make_session(_USER_ID)
-    session.messages.append(
-        ChatMessage(role="assistant", content="tool call", sequence=5)
-    )
-    session.messages.append(
-        ChatMessage(role="user", content="user replied", sequence=6)
-    )
-    assert _no_user_action_since(5)(session) is False
+    session.messages.append(ChatMessage(role="user", content="initial"))
+    session.messages.append(ChatMessage(role="assistant", content="tool call"))
+    session.messages.append(ChatMessage(role="tool", content="{...}"))
+    session.messages.append(ChatMessage(role="user", content="Approved"))
+    assert _no_user_action_since(2)(session) is False
 
 
 def test_predicate_ignores_assistant_messages_after_baseline():
     """Only user messages count as 'user action' — assistant messages are
     just the LLM continuing on its own."""
     session = make_session(_USER_ID)
-    session.messages.append(
-        ChatMessage(role="assistant", content="more stuff", sequence=6)
-    )
-    assert _no_user_action_since(5)(session) is True
+    session.messages.append(ChatMessage(role="user", content="initial"))
+    session.messages.append(ChatMessage(role="assistant", content="tool call"))
+    session.messages.append(ChatMessage(role="tool", content="{...}"))
+    session.messages.append(ChatMessage(role="assistant", content="summary"))
+    assert _no_user_action_since(2)(session) is True
+
+
+def test_predicate_handles_messages_with_none_sequence():
+    """Regression: the previous sequence-based predicate ignored messages
+    whose sequence was None (which is what cached/in-memory messages have
+    until they're round-tripped through the DB), causing the auto-approve
+    to fire after the user had already manually approved. The new
+    index-based predicate must catch user messages regardless of sequence.
+    """
+    session = make_session(_USER_ID)
+    session.messages.append(ChatMessage(role="user", content="initial"))
+    session.messages.append(ChatMessage(role="assistant", content="tool call"))
+    session.messages.append(ChatMessage(role="tool", content="{...}"))
+    # Sequence intentionally None — the cache often returns this state.
+    user_msg = ChatMessage(role="user", content="Approved", sequence=None)
+    session.messages.append(user_msg)
+    assert user_msg.sequence is None
+    assert _no_user_action_since(2)(session) is False
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +416,7 @@ async def test_auto_approve_fires_when_user_idle():
         await decompose_goal_module._run_auto_approve(
             session_id=session_id,
             user_id=_USER_ID,
-            baseline_sequence=5,
+            baseline_index=5,
         )
 
     assert captured_message["msg"].role == "user"
@@ -439,7 +459,7 @@ async def test_auto_approve_skips_when_user_already_acted():
         await decompose_goal_module._run_auto_approve(
             session_id="session-acted",
             user_id=_USER_ID,
-            baseline_sequence=5,
+            baseline_index=5,
         )
 
     fake_append_message_if.assert_awaited_once()
@@ -469,22 +489,24 @@ async def test_auto_approve_swallows_unexpected_errors():
         await decompose_goal_module._run_auto_approve(
             session_id="session-error",
             user_id=_USER_ID,
-            baseline_sequence=0,
+            baseline_index=0,
         )
 
 
 @pytest.mark.asyncio
 async def test_schedule_auto_approve_creates_task(monkeypatch):
     """_schedule_auto_approve should add a task to the tracking set and
-    auto-remove it on completion."""
+    auto-remove it on completion. The baseline passed to _run_auto_approve
+    must be the current message-list length at schedule time."""
     monkeypatch.setattr(decompose_goal_module, "AUTO_APPROVE_SERVER_SECONDS", 0)
     fake_run = AsyncMock()
     monkeypatch.setattr(decompose_goal_module, "_run_auto_approve", fake_run)
 
     session = make_session(_USER_ID)
-    session.messages.append(
-        ChatMessage(role="assistant", content="tool call", sequence=3)
-    )
+    # Two messages already in the session — the next one (the tool result)
+    # will land at index 2.
+    session.messages.append(ChatMessage(role="user", content="initial"))
+    session.messages.append(ChatMessage(role="assistant", content="tool call"))
 
     _REAL_SCHEDULE_AUTO_APPROVE(
         session_id="session-schedule",
@@ -497,7 +519,7 @@ async def test_schedule_auto_approve_creates_task(monkeypatch):
     while decompose_goal_module._auto_approve_tasks:
         await asyncio.sleep(0)
 
-    fake_run.assert_awaited_once_with("session-schedule", _USER_ID, 3)
+    fake_run.assert_awaited_once_with("session-schedule", _USER_ID, 2)
 
 
 def test_schedule_auto_approve_no_op_without_session_id():

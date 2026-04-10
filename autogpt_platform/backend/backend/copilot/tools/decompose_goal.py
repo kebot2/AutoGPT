@@ -38,13 +38,25 @@ AUTO_APPROVE_MESSAGE = "Approved. Please build the agent."
 _auto_approve_tasks: set[asyncio.Task] = set()
 
 
-def _no_user_action_since(baseline_sequence: int):
-    """Predicate: returns True iff no user message has been appended after
-    the message at ``baseline_sequence``."""
+def _no_user_action_since(baseline_index: int):
+    """Predicate: returns True iff no ``role == "user"`` message exists at
+    or after ``baseline_index`` in the session message list.
+
+    Why an index instead of ``ChatMessage.sequence``: ``_save_session_to_db``
+    persists messages with auto-assigned sequences in the DB but does NOT
+    write those sequences back onto the in-memory ``ChatMessage`` objects,
+    and ``cache_chat_session`` writes the in-memory copy to Redis. So when
+    this predicate later loads the session from cache, freshly-appended
+    messages have ``sequence=None``, which would falsely register as 0 and
+    miss them entirely — the predicate would treat the user's manual
+    "Approved" as if it never happened, and the auto-approve would fire a
+    duplicate after the agent build had already completed. Indices are
+    monotonic and require no DB-side bookkeeping.
+    """
 
     def _check(session: ChatSession) -> bool:
-        for m in session.messages:
-            if m.role == "user" and (m.sequence or 0) > baseline_sequence:
+        for m in session.messages[baseline_index:]:
+            if m.role == "user":
                 return False
         return True
 
@@ -54,7 +66,7 @@ def _no_user_action_since(baseline_sequence: int):
 async def _run_auto_approve(
     session_id: str,
     user_id: str | None,
-    baseline_sequence: int,
+    baseline_index: int,
 ) -> None:
     """Wait the server-side timeout and inject a synthetic approval if the
     user has not acted in the meantime.
@@ -75,7 +87,7 @@ async def _run_auto_approve(
         result = await append_message_if(
             session_id=session_id,
             message=approval,
-            predicate=_no_user_action_since(baseline_sequence),
+            predicate=_no_user_action_since(baseline_index),
         )
         if result is None:
             # User already acted (or the session is gone) — nothing to do.
@@ -114,16 +126,17 @@ async def _run_auto_approve(
 def _schedule_auto_approve(
     session_id: str | None, user_id: str | None, session: ChatSession
 ) -> None:
-    """Schedule the fire-and-forget auto-approve task for this session."""
+    """Schedule the fire-and-forget auto-approve task for this session.
+
+    The baseline is the current message-list length: any message that
+    arrives at or after this index is "after the decomposition", so a
+    user message there means the user (or a follow-up turn) has acted
+    and the auto-approve should be skipped.
+    """
     if not session_id:
         return
-    baseline_sequence = max(
-        (m.sequence or 0 for m in session.messages),
-        default=0,
-    )
-    task = asyncio.create_task(
-        _run_auto_approve(session_id, user_id, baseline_sequence)
-    )
+    baseline_index = len(session.messages)
+    task = asyncio.create_task(_run_auto_approve(session_id, user_id, baseline_index))
     _auto_approve_tasks.add(task)
     task.add_done_callback(_auto_approve_tasks.discard)
 
