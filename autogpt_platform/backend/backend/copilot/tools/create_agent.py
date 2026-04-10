@@ -23,12 +23,8 @@ class CreateAgentTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Create a new agent from JSON (nodes + links). Validates, "
-            "auto-fixes, and saves. Before calling, search for existing "
-            "agents with find_library_agent. "
-            "DO NOT call this tool to configure credentials on an existing "
-            "agent — use run_agent (which surfaces the inline "
-            "credentials-setup card) or connect_integration for that."
+            "Create a new agent from JSON (nodes + links). Validates, auto-fixes, and saves. "
+            "Before calling, search for existing agents with find_library_agent."
         )
 
     @property

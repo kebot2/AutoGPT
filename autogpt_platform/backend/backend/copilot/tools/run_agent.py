@@ -106,15 +106,10 @@ class RunAgentTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Run or schedule an agent. Automatically checks inputs and "
-            "credentials and surfaces the inline credentials-setup card if "
-            "anything is missing. Identify by username_agent_slug "
-            "('user/agent') or library_agent_id. For scheduling, provide "
-            "schedule_name + cron. When the user wants to run/schedule an "
-            "existing agent that needs credentials, ALWAYS call this tool "
-            "(or connect_integration) — do NOT redirect the user to the "
-            "Builder; the inline setup card handles credential connection "
-            "without leaving the chat."
+            "Run or schedule an agent. Automatically checks inputs and credentials "
+            "and surfaces the inline credentials-setup card if anything is missing. "
+            "Identify by username_agent_slug ('user/agent') or library_agent_id. "
+            "For scheduling, provide schedule_name + cron."
         )
 
     @property

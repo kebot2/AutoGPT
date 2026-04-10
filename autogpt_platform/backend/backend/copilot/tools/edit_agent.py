@@ -23,13 +23,8 @@ class EditAgentTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Edit an existing agent's graph structure. Validates, auto-fixes, "
-            "and saves. Before calling, search for existing agents with "
-            "find_library_agent. "
-            "DO NOT call this tool just to set up credentials — use "
-            "run_agent (which surfaces the inline credentials-setup card) "
-            "or connect_integration for that. This tool is for structural "
-            "edits to the agent graph."
+            "Edit an existing agent. Validates, auto-fixes, and saves. "
+            "Before calling, search for existing agents with find_library_agent."
         )
 
     @property
