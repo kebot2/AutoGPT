@@ -1333,7 +1333,6 @@ async def create_subscription_checkout(
         success_url=success_url,
         cancel_url=cancel_url,
         subscription_data={"metadata": {"user_id": user_id, "tier": tier.value}},
-        customer_update={"payment_method": "auto"},
     )
     return session.url or ""
 
