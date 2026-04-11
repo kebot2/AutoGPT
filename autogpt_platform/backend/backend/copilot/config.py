@@ -358,11 +358,20 @@ class ChatConfig(BaseSettings):
         usual truthy/falsy coercion (``"1"``, ``"true"``, ``"yes"``,
         ``"on"`` → True), so operators get the same behaviour they'd
         get from the prefixed env var.
+
+        Note: unlike the ``claude_agent_cli_path`` case, this field has
+        a non-``None`` default (``False``), so Pydantic passes the
+        default bool into the validator when no value is set — a
+        simple ``if v is None`` check wouldn't fire. We instead inspect
+        the raw process env directly: if the prefixed var is set we
+        let Pydantic's value stand; otherwise the unprefixed var wins.
         """
-        if v is None:
-            v = os.getenv("CHAT_CLAUDE_AGENT_USE_COMPAT_PROXY")
-            if v is None:
-                v = os.getenv("CLAUDE_AGENT_USE_COMPAT_PROXY")
+        if os.getenv("CHAT_CLAUDE_AGENT_USE_COMPAT_PROXY") is not None:
+            # Prefixed var is set — trust Pydantic's parsed value.
+            return v
+        unprefixed = os.getenv("CLAUDE_AGENT_USE_COMPAT_PROXY")
+        if unprefixed is not None:
+            return unprefixed
         return v
 
     # Prompt paths for different contexts
