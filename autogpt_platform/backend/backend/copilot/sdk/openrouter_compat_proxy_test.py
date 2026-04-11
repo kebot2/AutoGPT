@@ -23,16 +23,15 @@ import pytest
 from aiohttp import web
 
 from backend.copilot.sdk.openrouter_compat_proxy import (
-    OpenRouterCompatProxy,
     _FORBIDDEN_BETA_TOKENS,
     _HOP_BY_HOP_HEADERS,
+    OpenRouterCompatProxy,
     clean_request_body_bytes,
     clean_request_headers,
     strip_forbidden_anthropic_beta_header,
     strip_forbidden_betas_from_body,
     strip_tool_reference_blocks,
 )
-
 
 # ---------------------------------------------------------------------------
 # strip_tool_reference_blocks

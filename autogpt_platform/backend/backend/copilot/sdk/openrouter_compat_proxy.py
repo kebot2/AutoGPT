@@ -62,6 +62,7 @@ import asyncio
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
@@ -295,10 +296,16 @@ class OpenRouterCompatProxy:
             raise RuntimeError("Compat proxy server has no listening sockets.")
         self._port = sockets[0].getsockname()[1]
         self._runner = runner
+        # Log only the host of the upstream — never the full URL — so a
+        # base URL that happens to embed credentials (e.g. via a path
+        # token, though OpenRouter doesn't do this) cannot leak into
+        # logs.  CodeQL `py/clear-text-logging-sensitive-data` defends
+        # against this case.
+        upstream_host = urlparse(self._target_base_url).netloc or "<unknown>"
         logger.info(
-            "OpenRouter compat proxy listening on %s -> %s",
-            self.local_url,
-            self._target_base_url,
+            "OpenRouter compat proxy listening on 127.0.0.1:%d -> %s",
+            self._port,
+            upstream_host,
         )
 
     async def stop(self) -> None:
@@ -359,10 +366,14 @@ class OpenRouterCompatProxy:
                 allow_redirects=False,
             )
         except aiohttp.ClientError as e:
+            # Log the detailed error for ops, but return a generic
+            # message to the caller — exception strings can leak
+            # internal hostnames, ports, or stack frames (CodeQL
+            # `py/stack-trace-exposure`).
             logger.warning(
                 "OpenRouter compat proxy upstream error: %s (url=%s)", e, upstream_url
             )
-            return web.Response(status=502, text=f"upstream error: {e}")
+            return web.Response(status=502, text="upstream error")
 
         # Stream the response back unchanged (apart from hop-by-hop
         # header filtering).
