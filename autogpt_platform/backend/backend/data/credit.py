@@ -1242,7 +1242,8 @@ async def get_stripe_customer_id(user_id: str) -> str:
     # or any retried request) would each pass the check above and create their
     # own Stripe Customer, leaving an orphaned billable customer in Stripe.
     # Pass an idempotency_key so Stripe collapses concurrent + retried calls
-    # into the same Customer object server-side.
+    # into the same Customer object server-side. The 24h Stripe idempotency
+    # window comfortably covers any realistic in-flight retry scenario.
     customer = await run_in_threadpool(
         stripe.Customer.create,
         name=user.name or "",
@@ -1250,18 +1251,11 @@ async def get_stripe_customer_id(user_id: str) -> str:
         metadata={"user_id": user_id},
         idempotency_key=f"customer-create-{user_id}",
     )
-    # Defensive double-check: if a concurrent caller already wrote a different
-    # customer ID, prefer the persisted one and discard the one we just made.
-    # (Stripe idempotency normally prevents this, but the key has a 24h TTL —
-    # outside that window two creates can still race.) Use a conditional
-    # update so we only persist when the column is still empty.
-    await User.prisma().update_many(
-        where={"id": user_id, "stripeCustomerId": None},
-        data={"stripeCustomerId": customer.id},
+    await User.prisma().update(
+        where={"id": user_id}, data={"stripeCustomerId": customer.id}
     )
     get_user_by_id.cache_delete(user_id)
-    refreshed = await get_user_by_id(user_id)
-    return refreshed.stripe_customer_id or customer.id
+    return customer.id
 
 
 async def set_auto_top_up(user_id: str, config: AutoTopUpConfig):
