@@ -1980,6 +1980,13 @@ async def stream_chat_completion_sdk(
     transcript_content: str = ""
     state: _RetryState | None = None
 
+    # OpenRouter compat proxy — started inside the try and stopped in finally
+    # when ``ChatConfig.claude_agent_use_compat_proxy`` is enabled. The proxy
+    # rewrites outgoing CLI requests to strip ``tool_reference`` content
+    # blocks and the ``context-management-2025-06-27`` beta so the latest
+    # SDK / CLI versions stop tripping OpenRouter's validation.
+    _compat_proxy: Any = None  # OpenRouterCompatProxy | None — lazy import
+
     # Token usage accumulators — populated from ResultMessage at end of turn
     turn_prompt_tokens = 0  # uncached input tokens only
     turn_completion_tokens = 0
@@ -2241,6 +2248,46 @@ async def stream_chat_completion_sdk(
         }
         if sdk_model:
             sdk_options_kwargs["model"] = sdk_model
+
+        # OpenRouter compatibility proxy — started here so its local URL
+        # can be injected into the CLI subprocess env BEFORE the env dict
+        # is passed to ``ClaudeAgentOptions``.  When this flag is on we
+        # transparently rewrite outgoing CLI requests via the proxy
+        # (stripping ``tool_reference`` blocks and the
+        # ``context-management-2025-06-27`` beta) so newer SDK / CLI
+        # versions can talk to OpenRouter without their stricter
+        # validation rejecting the request.
+        if config.claude_agent_use_compat_proxy:
+            from backend.copilot.sdk.openrouter_compat_proxy import (
+                OpenRouterCompatProxy,
+            )
+
+            # Use the same upstream URL the SDK would have hit directly.
+            # Prefer an explicit override in ``sdk_env`` (e.g. set by a
+            # caller wanting to test against a specific gateway), then
+            # the parent process env, then the platform-wide
+            # ``OPENROUTER_BASE_URL`` constant.
+            from backend.util.clients import OPENROUTER_BASE_URL
+
+            target_base_url = (
+                (sdk_env or {}).get("ANTHROPIC_BASE_URL")
+                or os.environ.get("ANTHROPIC_BASE_URL")
+                or OPENROUTER_BASE_URL
+            )
+            _compat_proxy = OpenRouterCompatProxy(target_base_url=target_base_url)
+            await _compat_proxy.start()
+            # Inject the proxy URL into the SDK env so the spawned CLI
+            # subprocess uses the proxy as its Anthropic endpoint.
+            if sdk_env is None:
+                sdk_env = {}
+            sdk_env["ANTHROPIC_BASE_URL"] = _compat_proxy.local_url
+            logger.info(
+                "%s OpenRouter compat proxy active: %s -> %s",
+                log_prefix,
+                _compat_proxy.local_url,
+                _compat_proxy.target_base_url,
+            )
+
         if sdk_env:
             sdk_options_kwargs["env"] = sdk_env
         if use_resume and resume_file:
@@ -2913,5 +2960,18 @@ async def stream_chat_completion_sdk(
         except Exception:
             logger.warning("%s SDK cleanup failed", log_prefix, exc_info=True)
         finally:
+            # Tear down the OpenRouter compat proxy if it was started for
+            # this session — releases the bound port and the aiohttp
+            # client. Wrapped so a stop failure can never block the
+            # downstream lock release.
+            if _compat_proxy is not None:
+                try:
+                    await _compat_proxy.stop()
+                except Exception:
+                    logger.warning(
+                        "%s OpenRouter compat proxy stop failed",
+                        log_prefix,
+                        exc_info=True,
+                    )
             # Release stream lock to allow new streams for this session
             await lock.release()

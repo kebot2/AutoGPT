@@ -186,6 +186,17 @@ class ChatConfig(BaseSettings):
         "or the unprefixed `CLAUDE_AGENT_CLI_PATH` environment variable "
         "(same pattern as `api_key` / `base_url`).",
     )
+    claude_agent_use_compat_proxy: bool = Field(
+        default=False,
+        description="Run the in-process OpenRouter compatibility proxy "
+        "(`backend.copilot.sdk.openrouter_compat_proxy`) in front of the "
+        "Claude Code CLI. The proxy strips `tool_reference` content "
+        "blocks and the `context-management-2025-06-27` beta header / "
+        "field from outgoing requests so newer SDK / CLI versions stop "
+        "tripping OpenRouter's stricter validation. Orthogonal to "
+        "`claude_agent_cli_path` — the override picks the binary, the "
+        "proxy rewrites whatever the binary sends.",
+    )
     use_openrouter: bool = Field(
         default=True,
         description="Enable routing API calls through the OpenRouter proxy. "
