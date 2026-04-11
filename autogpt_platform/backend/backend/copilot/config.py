@@ -8,13 +8,26 @@ from pydantic_settings import BaseSettings
 
 from backend.util.clients import OPENROUTER_BASE_URL
 
+# Per-request routing mode for a single chat turn.
+# - 'fast': route to the baseline OpenAI-compatible path with the cheaper model.
+# - 'extended_thinking': route to the Claude Agent SDK path with the default
+#   (opus) model.
+# ``None`` means "no override"; the server falls back to the Claude Code
+# subscription flag → LaunchDarkly COPILOT_SDK → config.use_claude_agent_sdk.
+CopilotMode = Literal["fast", "extended_thinking"]
+
 
 class ChatConfig(BaseSettings):
     """Configuration for the chat system."""
 
     # OpenAI API Configuration
     model: str = Field(
-        default="anthropic/claude-opus-4.6", description="Default model to use"
+        default="anthropic/claude-opus-4.6",
+        description="Default model for extended thinking mode",
+    )
+    fast_model: str = Field(
+        default="anthropic/claude-sonnet-4",
+        description="Model for fast mode (baseline path). Should be faster/cheaper than the default model.",
     )
     title_model: str = Field(
         default="openai/gpt-4o-mini",
@@ -132,6 +145,32 @@ class ChatConfig(BaseSettings):
         default=True,
         description="Use --resume for multi-turn conversations instead of "
         "history compression. Falls back to compression when unavailable.",
+    )
+    claude_agent_fallback_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Fallback model when the primary model is unavailable (e.g. 529 "
+        "overloaded). The SDK automatically retries with this cheaper model.",
+    )
+    claude_agent_max_turns: int = Field(
+        default=1000,
+        ge=1,
+        le=10000,
+        description="Maximum number of agentic turns (tool-use loops) per query. "
+        "Prevents runaway tool loops from burning budget.",
+    )
+    claude_agent_max_budget_usd: float = Field(
+        default=100.0,
+        ge=0.01,
+        le=1000.0,
+        description="Maximum spend in USD per SDK query. The CLI aborts the "
+        "request if this budget is exceeded.",
+    )
+    claude_agent_max_transient_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum number of retries for transient API errors "
+        "(429, 5xx, ECONNRESET) before surfacing the error to the user.",
     )
     use_openrouter: bool = Field(
         default=True,
