@@ -42,7 +42,7 @@ from backend.copilot.rate_limit import (
     reset_daily_usage,
 )
 from backend.copilot.response_model import StreamError, StreamFinish, StreamHeartbeat
-from backend.copilot.service import USER_CONTEXT_TAG
+from backend.copilot.service import strip_user_context_prefix
 from backend.copilot.tools.e2b_sandbox import kill_sandbox
 from backend.copilot.tools.models import (
     AgentDetailsResponse,
@@ -102,14 +102,17 @@ router = APIRouter(
 )
 
 
-_USER_CONTEXT_RE = re.compile(
-    rf"^<{USER_CONTEXT_TAG}>.*?</{USER_CONTEXT_TAG}>\n\n", re.DOTALL
-)
-
-
 def _strip_injected_context(message: dict) -> dict:
+    """Hide the server-side `<user_context>` prefix from the API response.
+
+    The strip is delegated to ``strip_user_context_prefix`` in
+    ``backend.copilot.service`` so the on-the-wire format stays in lockstep
+    with ``inject_user_context`` (the writer). Only ``user``-role messages
+    with string content are touched; assistant / multimodal blocks pass
+    through unchanged.
+    """
     if message.get("role") == "user" and isinstance(message.get("content"), str):
-        message["content"] = _USER_CONTEXT_RE.sub("", message["content"])
+        message["content"] = strip_user_context_prefix(message["content"])
     return message
 
 
