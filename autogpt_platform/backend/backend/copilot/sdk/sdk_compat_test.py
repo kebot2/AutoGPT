@@ -232,10 +232,19 @@ def test_sdk_exports_hook_event_type(hook_event: str):
 # version, so the SDK Python API surface and the CLI binary version can
 # be picked independently.
 
-# CLI versions verified to work against OpenRouter from production
-# traffic.  When upstream lands a fix and we can confirm a newer version
-# works, add it to this set rather than blanket-removing the assertion.
-_KNOWN_GOOD_BUNDLED_CLI_VERSIONS: frozenset[str] = frozenset({"2.1.63"})
+# CLI versions verified to work against OpenRouter via the CI bisect
+# probes that ran the reproduction test in
+# ``cli_openrouter_compat_test.py``.  When upstream lands a fix and we
+# can confirm a newer version works, add it to this set rather than
+# blanket-removing the assertion.
+_KNOWN_GOOD_BUNDLED_CLI_VERSIONS: frozenset[str] = frozenset(
+    {
+        "2.1.63",  # claude-agent-sdk 0.1.45 — original pin from PR #12294.
+        "2.1.70",  # claude-agent-sdk 0.1.47 — first version with the
+        #          tool_reference proxy-detection fix; bisect-verified
+        #          OpenRouter-safe in the bisect probe at #12742.
+    }
+)
 
 
 def test_bundled_cli_version_is_known_good_against_openrouter():
