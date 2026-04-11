@@ -63,11 +63,12 @@ def test_read_within_workspace_allowed():
     assert result == {}
 
 
-def test_write_within_workspace_allowed():
+def test_write_builtin_blocked():
+    """SDK built-in Write is blocked — all writes go through MCP Write tool."""
     result = _validate_tool_access(
         "Write", {"file_path": f"{SDK_CWD}/output.json"}, sdk_cwd=SDK_CWD
     )
-    assert result == {}
+    assert _is_denied(result)
 
 
 def test_edit_within_workspace_allowed():
