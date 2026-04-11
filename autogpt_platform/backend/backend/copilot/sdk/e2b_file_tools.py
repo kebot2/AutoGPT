@@ -138,11 +138,27 @@ async def _sandbox_write(sandbox: Any, path: str, content: str | bytes) -> None:
 
 async def _handle_read_file(args: dict[str, Any]) -> dict[str, Any]:
     """Read lines from a sandbox file, falling back to the local host for SDK-internal paths."""
+    if not args:
+        return _mcp(
+            "Your read_file call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your work into smaller steps.",
+            error=True,
+        )
     file_path: str = args.get("file_path", "")
-    offset: int = max(0, int(args.get("offset", 0)))
-    limit: int = max(1, int(args.get("limit", _DEFAULT_READ_LIMIT)))
+    try:
+        offset: int = max(0, int(args.get("offset", 0)))
+        limit: int = max(1, int(args.get("limit", _DEFAULT_READ_LIMIT)))
+    except (ValueError, TypeError):
+        return _mcp("Invalid offset/limit \u2014 must be integers.", error=True)
 
     if not file_path:
+        if "offset" in args or "limit" in args:
+            return _mcp(
+                "Your read_file call was truncated (file_path missing but "
+                "offset/limit were present). Resend with the full file_path.",
+                error=True,
+            )
         return _mcp("file_path is required", error=True)
 
     # SDK-internal paths (tool-results/tool-outputs, ephemeral working dir)
@@ -181,10 +197,25 @@ async def _handle_read_file(args: dict[str, Any]) -> dict[str, Any]:
 
 async def _handle_write_file(args: dict[str, Any]) -> dict[str, Any]:
     """Write content to a sandbox file, creating parent directories as needed."""
+    if not args:
+        return _mcp(
+            "Your write_file call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your work into smaller steps: use bash_exec with "
+            "'cat > file << \"EOF\"\\n...\\nEOF' for the first section, "
+            "'cat >> file << \"EOF\"\\n...\\nEOF' to append.",
+            error=True,
+        )
     file_path: str = args.get("file_path", "")
     content: str = args.get("content", "")
 
     if not file_path:
+        if content:
+            return _mcp(
+                "Partial truncation \u2014 file_path was cut off. "
+                "Write in chunks using bash_exec instead.",
+                error=True,
+            )
         return _mcp("file_path is required", error=True)
 
     result = _get_sandbox_and_path(file_path)
@@ -212,12 +243,27 @@ async def _handle_write_file(args: dict[str, Any]) -> dict[str, Any]:
 
 async def _handle_edit_file(args: dict[str, Any]) -> dict[str, Any]:
     """Replace a substring in a sandbox file, with optional replace-all support."""
+    if not args:
+        return _mcp(
+            "Your edit_file call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your edit into smaller replacements, or use bash_exec with "
+            "'sed' for large-scale find-and-replace.",
+            error=True,
+        )
     file_path: str = args.get("file_path", "")
     old_string: str = args.get("old_string", "")
     new_string: str = args.get("new_string", "")
     replace_all: bool = args.get("replace_all", False)
 
     if not file_path:
+        if old_string or new_string:
+            return _mcp(
+                "Your edit_file call was truncated (file_path missing but "
+                "old_string/new_string were present). Break your edit into "
+                "smaller replacements.",
+                error=True,
+            )
         return _mcp("file_path is required", error=True)
     if not old_string:
         return _mcp("old_string is required", error=True)
@@ -267,6 +313,13 @@ async def _handle_edit_file(args: dict[str, Any]) -> dict[str, Any]:
 
 async def _handle_glob(args: dict[str, Any]) -> dict[str, Any]:
     """Find files matching a name pattern inside the sandbox using ``find``."""
+    if not args:
+        return _mcp(
+            "Your glob call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your work into smaller steps.",
+            error=True,
+        )
     pattern: str = args.get("pattern", "")
     path: str = args.get("path", "")
 
@@ -294,6 +347,13 @@ async def _handle_glob(args: dict[str, Any]) -> dict[str, Any]:
 
 async def _handle_grep(args: dict[str, Any]) -> dict[str, Any]:
     """Search file contents by regex inside the sandbox using ``grep -rn``."""
+    if not args:
+        return _mcp(
+            "Your grep call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your work into smaller steps.",
+            error=True,
+        )
     pattern: str = args.get("pattern", "")
     path: str = args.get("path", "")
     include: str = args.get("include", "")
@@ -466,7 +526,6 @@ E2B_FILE_TOOLS: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = [
                     "description": "Number of lines to read. Default: 2000.",
                 },
             },
-            "required": ["file_path"],
         },
         _handle_read_file,
     ),
@@ -485,7 +544,6 @@ E2B_FILE_TOOLS: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = [
                 },
                 "content": {"type": "string", "description": "Content to write."},
             },
-            "required": ["file_path", "content"],
         },
         _handle_write_file,
     ),
@@ -507,7 +565,6 @@ E2B_FILE_TOOLS: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = [
                     "description": "Replace all occurrences (default: false).",
                 },
             },
-            "required": ["file_path", "old_string", "new_string"],
         },
         _handle_edit_file,
     ),
@@ -526,7 +583,6 @@ E2B_FILE_TOOLS: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = [
                     "description": "Directory to search. Default: /home/user.",
                 },
             },
-            "required": ["pattern"],
         },
         _handle_glob,
     ),
@@ -546,7 +602,6 @@ E2B_FILE_TOOLS: list[tuple[str, str, dict[str, Any], Callable[..., Any]]] = [
                     "description": "Glob to filter files (e.g. *.py).",
                 },
             },
-            "required": ["pattern"],
         },
         _handle_grep,
     ),

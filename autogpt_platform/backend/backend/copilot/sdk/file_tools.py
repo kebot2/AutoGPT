@@ -186,7 +186,6 @@ WRITE_TOOL_SCHEMA: dict[str, Any] = {
             "description": "The content to write to the file.",
         },
     },
-    "required": ["file_path", "content"],
 }
 
 
@@ -342,7 +341,6 @@ READ_TOOL_SCHEMA: dict[str, Any] = {
             "description": "Number of lines to read. Default: 2000.",
         },
     },
-    "required": ["file_path"],
 }
 
 
@@ -508,5 +506,4 @@ EDIT_TOOL_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "required": ["file_path", "old_string", "new_string"],
 }

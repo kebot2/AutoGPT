@@ -360,11 +360,18 @@ def create_tool_handler(base_tool: BaseTool):
 
 
 def _build_input_schema(base_tool: BaseTool) -> dict[str, Any]:
-    """Build a JSON Schema input schema for a tool."""
+    """Build a JSON Schema input schema for a tool.
+
+    ``required`` is intentionally omitted from the schema sent to the MCP SDK.
+    The SDK validates ``required`` fields BEFORE calling the Python handler \u2014
+    when the LLM's output tokens are truncated the tool call arrives as ``{}``
+    and the SDK rejects it with an opaque ``'X' is a required property`` error.
+    By omitting ``required`` the empty-args case reaches our Python handler
+    where ``_make_truncating_wrapper`` returns actionable chunking guidance.
+    """
     return {
         "type": "object",
         "properties": base_tool.parameters.get("properties", {}),
-        "required": base_tool.parameters.get("required", []),
     }
 
 
@@ -374,15 +381,29 @@ async def _read_file_handler(args: dict[str, Any]) -> dict[str, Any]:
     Supports ``workspace://`` URIs (delegated to the workspace manager) and
     local paths within the session's allowed directories (sdk_cwd + tool-results).
     """
-    file_path = args.get("file_path", "")
-    offset = max(0, int(args.get("offset", 0)))
-    limit = max(1, int(args.get("limit", 2000)))
 
     def _mcp_err(text: str) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": text}], "isError": True}
 
     def _mcp_ok(text: str) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": text}], "isError": False}
+
+    if not args:
+        return _mcp_err(
+            "Your Read call had empty arguments \u2014 this means your previous "
+            "response was too long and the tool call was truncated by the API. "
+            "Break your work into smaller steps."
+        )
+
+    file_path = args.get("file_path", "")
+    try:
+        offset = max(0, int(args.get("offset", 0)))
+        limit = max(1, int(args.get("limit", 2000)))
+    except (ValueError, TypeError):
+        return _mcp_err("Invalid offset/limit \u2014 must be integers.")
+
+    if not file_path:
+        return _mcp_err("file_path is required")
 
     if file_path.startswith("workspace://"):
         user_id, session = get_execution_context()
@@ -445,7 +466,6 @@ _READ_TOOL_SCHEMA = {
             "description": "Number of lines to read. Default: 2000",
         },
     },
-    "required": ["file_path"],
 }
 
 
@@ -752,7 +772,10 @@ BLOCKED_TOOLS = {
 # Tools allowed only when their path argument stays within the SDK workspace.
 # The SDK uses these to handle oversized tool results (writes to tool-results/
 # files, then reads them back) and for workspace file operations.
-WORKSPACE_SCOPED_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep"}
+# Write and Edit are NOT included: they are in SDK_DISALLOWED_TOOLS because
+# the SDK built-in versions are fully replaced by MCP equivalents.  Including
+# them here would conflict with the disallow list.
+WORKSPACE_SCOPED_TOOLS = {"Read", "Glob", "Grep"}
 
 # Dangerous patterns in tool inputs
 DANGEROUS_PATTERNS = [
@@ -791,10 +814,11 @@ def get_copilot_tool_names(*, use_e2b: bool = False) -> list[str]:
     if not use_e2b:
         return list(COPILOT_TOOL_NAMES)
 
+    # E2B_FILE_TOOL_NAMES already includes "read_file" \u2014 don't list
+    # READ_TOOL_NAME separately to avoid double registration.
     return [
         *[f"{MCP_TOOL_PREFIX}{name}" for name in TOOL_REGISTRY.keys()],
         f"{MCP_TOOL_PREFIX}{WRITE_TOOL_NAME}",
-        f"{MCP_TOOL_PREFIX}{READ_TOOL_NAME}",
         f"{MCP_TOOL_PREFIX}{EDIT_TOOL_NAME}",
         f"{MCP_TOOL_PREFIX}{_READ_TOOL_NAME}",
         *[f"{MCP_TOOL_PREFIX}{name}" for name in E2B_FILE_TOOL_NAMES],

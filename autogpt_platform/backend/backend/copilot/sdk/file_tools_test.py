@@ -56,9 +56,9 @@ class TestWriteToolSchema:
         props = list(WRITE_TOOL_SCHEMA["properties"].keys())
         assert props[0] == "file_path"
 
-    def test_both_fields_required(self):
-        assert "file_path" in WRITE_TOOL_SCHEMA["required"]
-        assert "content" in WRITE_TOOL_SCHEMA["required"]
+    def test_no_required_in_schema(self):
+        """required is omitted so MCP SDK does not reject truncated calls."""
+        assert "required" not in WRITE_TOOL_SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +212,9 @@ class TestReadToolSchema:
         props = list(READ_TOOL_SCHEMA["properties"].keys())
         assert props[0] == "file_path"
 
-    def test_file_path_required(self):
-        assert "file_path" in READ_TOOL_SCHEMA["required"]
-
-    def test_offset_and_limit_optional(self):
-        assert "offset" not in READ_TOOL_SCHEMA.get("required", [])
-        assert "limit" not in READ_TOOL_SCHEMA.get("required", [])
+    def test_no_required_in_schema(self):
+        """required is omitted so MCP SDK does not reject truncated calls."""
+        assert "required" not in READ_TOOL_SCHEMA
 
     def test_tool_name_is_read_file(self):
         assert READ_TOOL_NAME == "read_file"
@@ -417,13 +414,9 @@ class TestEditToolSchema:
         props = list(EDIT_TOOL_SCHEMA["properties"].keys())
         assert props[0] == "file_path"
 
-    def test_required_fields(self):
-        assert "file_path" in EDIT_TOOL_SCHEMA["required"]
-        assert "old_string" in EDIT_TOOL_SCHEMA["required"]
-        assert "new_string" in EDIT_TOOL_SCHEMA["required"]
-
-    def test_replace_all_optional(self):
-        assert "replace_all" not in EDIT_TOOL_SCHEMA.get("required", [])
+    def test_no_required_in_schema(self):
+        """required is omitted so MCP SDK does not reject truncated calls."""
+        assert "required" not in EDIT_TOOL_SCHEMA
 
     def test_tool_name_is_edit(self):
         assert EDIT_TOOL_NAME == "Edit"
