@@ -492,7 +492,16 @@ async def test_proxy_passes_through_clean_request_unchanged():
 @pytest.mark.asyncio
 async def test_proxy_returns_502_on_upstream_failure():
     """If the upstream is unreachable the proxy must return a clear
-    502, not silently hang."""
+    502, not silently hang.
+
+    Note: the outer ``client.post`` talks to the *proxy* on localhost,
+    not to the dead upstream directly. The proxy is the thing under
+    test, so it should always respond with a 502 — we must NOT
+    swallow ``aiohttp.ClientError`` / ``asyncio.TimeoutError`` on the
+    outer call, because that would mask a proxy crash and turn the
+    assertion into a false positive. Let any such exception fail the
+    test.
+    """
     proxy = OpenRouterCompatProxy(
         target_base_url="http://127.0.0.1:1",  # nothing listening
     )
@@ -502,14 +511,12 @@ async def test_proxy_returns_502_on_upstream_failure():
             async with client.post(
                 f"{proxy.local_url}/v1/messages",
                 json={"model": "x"},
-                timeout=aiohttp.ClientTimeout(total=5),
+                timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 assert resp.status == 502
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        # Some platforms refuse the connection so quickly aiohttp
-        # raises before the proxy can respond — that also satisfies
-        # the spirit of the test (no infinite hang).
-        pass
+                text = await resp.text()
+                # Generic error message — no internal hostname leaked.
+                assert "upstream error" in text
     finally:
         await proxy.stop()
 
