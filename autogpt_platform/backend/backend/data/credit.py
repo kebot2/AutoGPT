@@ -1303,6 +1303,14 @@ async def _cancel_customer_subscriptions(
         )
         # Iterate only the first page (up to 10); avoid auto_paging_iter which would
         # trigger additional sync HTTP calls inside the event loop.
+        if subscriptions.has_more:
+            logger.error(
+                "_cancel_customer_subscriptions: customer %s has more than 10 %s"
+                " subscriptions — only the first page was processed; remaining"
+                " subscriptions were NOT cancelled",
+                customer_id,
+                status,
+            )
         for sub in subscriptions.data:
             sub_id = sub["id"]
             if exclude_sub_id and sub_id == exclude_sub_id:
@@ -1514,9 +1522,13 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
                 customer_id,
             )
             return
-        still_has_active_sub = any(
-            sub["id"] != new_sub_id for sub in other_subs_active.data
-        ) or any(sub["id"] != new_sub_id for sub in other_subs_trialing.data)
+        other_active_ids = {sub["id"] for sub in other_subs_active.data} - {
+            new_sub_id
+        }
+        other_trialing_ids = {
+            sub["id"] for sub in other_subs_trialing.data
+        } - {new_sub_id}
+        still_has_active_sub = bool(other_active_ids or other_trialing_ids)
         if still_has_active_sub:
             logger.info(
                 "sync_subscription_from_stripe: sub %s cancelled but customer %s"
