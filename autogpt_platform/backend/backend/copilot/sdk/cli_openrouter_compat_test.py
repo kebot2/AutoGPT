@@ -304,6 +304,7 @@ async def _run_cli_against_fake_server(
     cli_path: Path,
     fake_server_port: int,
     timeout_seconds: float,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Spawn the CLI pointed at the fake Anthropic server and feed it a
     single ``user`` message via stream-json on stdin.
@@ -323,6 +324,7 @@ async def _run_cli_against_fake_server(
         # mid-test (telemetry, plugin marketplace fetch).
         "DISABLE_TELEMETRY": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        **(extra_env or {}),
     }
 
     # The CLI accepts stream-json input on stdin in `query` mode.  A
@@ -389,7 +391,9 @@ async def _run_cli_against_fake_server(
 
 
 async def _run_reproduction(
-    *, route_through_proxy: bool
+    *,
+    route_through_proxy: bool,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[int, str, str, list[_CapturedRequest]]:
     """Spawn the CLI against a fake Anthropic API and return what the
     *upstream* (post-proxy if any) saw.
@@ -430,6 +434,7 @@ async def _run_reproduction(
             cli_path=cli_path,
             fake_server_port=target_port,
             timeout_seconds=30.0,
+            extra_env=extra_env,
         )
     finally:
         if proxy is not None:
@@ -528,6 +533,25 @@ async def test_cli_via_compat_proxy_emits_clean_requests_to_upstream():
     """
     returncode, _stdout, stderr, captured = await _run_reproduction(
         route_through_proxy=True
+    )
+    _assert_no_forbidden_patterns(captured, returncode, stderr)
+
+
+@pytest.mark.asyncio
+async def test_disable_experimental_betas_env_var_strips_headers():
+    """Validate whether ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`` is
+    sufficient to strip the ``context-management-2025-06-27`` beta header
+    when ``ANTHROPIC_BASE_URL`` points to a non-Anthropic endpoint
+    (simulating OpenRouter).
+
+    If this test passes, the compat proxy is unnecessary and can be
+    removed — the env var alone is enough.  If it fails, the CLI's
+    provider-detection logic does not honour the env var for custom
+    base URLs and the proxy remains required.
+    """
+    returncode, _stdout, stderr, captured = await _run_reproduction(
+        route_through_proxy=False,
+        extra_env={"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"},
     )
     _assert_no_forbidden_patterns(captured, returncode, stderr)
 
