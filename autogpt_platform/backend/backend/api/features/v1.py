@@ -712,15 +712,13 @@ def _validate_checkout_redirect_url(url: str) -> bool:
     success_url/cancel_url that Stripe will redirect users to after checkout.
 
     Pre-parse rejection rules (applied before urlparse):
-    - URLs containing ``@`` can exploit ``user:pass@host`` authority tricks.
     - Backslashes (``\\``) are normalised differently across parsers/browsers.
     - Control characters (U+0000–U+001F) are not valid in URLs and may confuse
       some URL-parsing implementations.
     """
     # Reject characters that can confuse URL parsers before any parsing.
-    for bad_char in ("@", "\\"):
-        if bad_char in url:
-            return False
+    if "\\" in url:
+        return False
     if any(ord(c) < 0x20 for c in url):
         return False
 
@@ -734,6 +732,11 @@ def _validate_checkout_redirect_url(url: str) -> bool:
     except ValueError:
         return False
     if parsed.scheme not in ("http", "https"):
+        return False
+    # Reject ``user:pass@host`` authority tricks — ``@`` in the netloc component
+    # can trick browsers into connecting to a different host than displayed.
+    # ``@`` in query/fragment is harmless and must be allowed.
+    if "@" in parsed.netloc:
         return False
     return (
         parsed.scheme == allowed_parsed.scheme
