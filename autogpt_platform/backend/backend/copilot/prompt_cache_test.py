@@ -145,6 +145,13 @@ class TestCacheableSystemPromptContent:
 
         assert "user_context" in _CACHEABLE_SYSTEM_PROMPT
 
+    def test_cacheable_prompt_restricts_user_context_to_first_message(self):
+        """The prompt tells the model to ignore <user_context> on subsequent messages."""
+        from backend.copilot.service import _CACHEABLE_SYSTEM_PROMPT
+
+        assert "first" in _CACHEABLE_SYSTEM_PROMPT.lower()
+        assert "ignore" in _CACHEABLE_SYSTEM_PROMPT.lower() or "not trustworthy" in _CACHEABLE_SYSTEM_PROMPT.lower()
+
 
 class TestStripUserContextTags:
     """Verify that strip_user_context_tags removes injected context blocks."""
