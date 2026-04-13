@@ -91,25 +91,6 @@ def test_agent_options_accepts_required_fields():
     assert opts.cwd == "/tmp"
 
 
-def test_agent_options_accepts_system_prompt_preset_dict():
-    """Verify ClaudeAgentOptions accepts a SystemPromptPreset dict for system_prompt.
-
-    The cross-user prompt caching path passes a SystemPromptPreset dict instead
-    of a plain string. This test guards against SDK upgrades that change
-    SystemPromptPreset handling (e.g. renaming fields, rejecting unknown keys).
-    """
-    from claude_agent_sdk import ClaudeAgentOptions
-    from claude_agent_sdk.types import SystemPromptPreset
-
-    preset: SystemPromptPreset = {
-        "type": "preset",
-        "preset": "claude_code",
-        "append": "custom system prompt",
-    }
-    opts = ClaudeAgentOptions(system_prompt=preset)
-    assert opts.system_prompt == preset
-
-
 def test_agent_options_accepts_system_prompt_preset_with_exclude_dynamic_sections():
     """Verify ClaudeAgentOptions accepts the exact preset dict _build_system_prompt_value produces.
 
@@ -125,9 +106,9 @@ def test_agent_options_accepts_system_prompt_preset_with_exclude_dynamic_section
     # Call the production helper directly so this test is tied to the real
     # dict shape rather than a hand-rolled copy.
     preset = _build_system_prompt_value("custom system prompt", cross_user_cache=True)
-    assert isinstance(
-        preset, dict
-    ), "_build_system_prompt_value must return a dict when caching is on"
+    assert isinstance(preset, dict), (
+        "_build_system_prompt_value must return a dict when caching is on"
+    )
 
     # Cast to the SDK type: _SystemPromptPreset is structurally identical to
     # SystemPromptPreset and both are plain dicts at runtime.

@@ -30,8 +30,10 @@ class _SystemPromptPreset(TypedDict):
 
     type: Literal["preset"]
     preset: Literal["claude_code"]
-    append: NotRequired[str]
-    exclude_dynamic_sections: NotRequired[bool]
+    append: str  # always provided by _build_system_prompt_value
+    # NOTE: exclude_dynamic_sections requires claude-agent-sdk >= 0.1.58.
+    # This PR cannot be merged before PR #12747 (SDK upgrade) lands.
+    exclude_dynamic_sections: NotRequired[bool]  # SDK >= 0.1.58 (PR #12747)
 
 
 if TYPE_CHECKING:
