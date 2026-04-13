@@ -19,7 +19,7 @@ from sentry_sdk.api import flush as _sentry_flush
 from sentry_sdk.api import get_current_scope as _sentry_get_current_scope
 
 from backend.blocks import get_block
-from backend.blocks._base import BlockSchema
+from backend.blocks._base import Block, BlockSchema
 from backend.blocks.agent import AgentExecutorBlock
 from backend.blocks.io import AgentOutputBlock
 from backend.blocks.mcp.block import MCPToolBlock
@@ -731,19 +731,9 @@ class ExecutionProcessor:
                 # node_stats stays clean.
                 # Notify the user they're out of credits. Runs through
                 # Redis dedup (per user+graph) so repeat runs don't spam.
-                try:
-                    await asyncio.to_thread(
-                        self._handle_insufficient_funds_notif,
-                        get_db_client(),
-                        node_exec.user_id,
-                        node_exec.graph_id,
-                        e,
-                    )
-                except Exception as notif_error:  # pragma: no cover
-                    log_metadata.warning(
-                        f"Failed to send insufficient funds notification: "
-                        f"{notif_error}"
-                    )
+                await self._try_send_insufficient_funds_notif(
+                    node_exec.user_id, node_exec.graph_id, e, log_metadata
+                )
             except Exception as e:
                 # Unexpected billing failure (DB outage, network, etc.).
                 # Log at ERROR with structured fields and the same
@@ -805,23 +795,16 @@ class ExecutionProcessor:
         # queue's _charge_usage IBE notification path was bypassed (the
         # initial charge succeeded — only the nested tool charge failed).
         # Send the user notification here so they understand why their
-        # agent run stopped.  Failures are logged but not raised so the
-        # node-execution path stays clean.
+        # agent run stopped.
         if status == ExecutionStatus.FAILED and isinstance(
             execution_stats.error, InsufficientBalanceError
         ):
-            try:
-                await asyncio.to_thread(
-                    self._handle_insufficient_funds_notif,
-                    get_db_client(),
-                    node_exec.user_id,
-                    node_exec.graph_id,
-                    execution_stats.error,
-                )
-            except Exception as notif_error:  # pragma: no cover
-                log_metadata.warning(
-                    f"Failed to send insufficient funds notification: " f"{notif_error}"
-                )
+            await self._try_send_insufficient_funds_notif(
+                node_exec.user_id,
+                node_exec.graph_id,
+                execution_stats.error,
+                log_metadata,
+            )
 
         return execution_stats
 
@@ -1054,7 +1037,7 @@ class ExecutionProcessor:
     def _resolve_block_cost(
         self,
         node_exec: NodeExecutionEntry,
-    ) -> tuple[Any, int, dict]:
+    ) -> tuple[Block | None, int, dict]:
         """Look up the block and compute its base usage cost for an exec.
 
         Shared by :meth:`_charge_usage` and :meth:`charge_extra_iterations`
@@ -1661,6 +1644,31 @@ class ExecutionProcessor:
                 ),
             )
         )
+
+    async def _try_send_insufficient_funds_notif(
+        self,
+        user_id: str,
+        graph_id: str,
+        e: InsufficientBalanceError,
+        log_metadata: "LogMetadata",
+    ) -> None:
+        """Fire-and-forget wrapper around :meth:`_handle_insufficient_funds_notif`.
+
+        Catches all notification errors and logs a warning, so the caller's
+        execution path is never disrupted by a notification failure.
+        """
+        try:
+            await asyncio.to_thread(
+                self._handle_insufficient_funds_notif,
+                get_db_client(),
+                user_id,
+                graph_id,
+                e,
+            )
+        except Exception as notif_error:  # pragma: no cover
+            log_metadata.warning(
+                f"Failed to send insufficient funds notification: {notif_error}"
+            )
 
     def _handle_insufficient_funds_notif(
         self,

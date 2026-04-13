@@ -1175,10 +1175,12 @@ class OrchestratorBlock(Block):
             raise
         except Exception as e:
             logger.warning("Tool execution with manager failed: %s", e)
-            # Return error response
+            # Return a generic message — full exception text may contain
+            # server paths, DB details, or infrastructure info that should
+            # not be visible in LLM context.
             return _create_tool_response(
                 tool_call.id,
-                f"Tool execution failed: {e}",
+                "Tool execution failed due to an internal error",
                 responses_api=responses_api,
             )
 
