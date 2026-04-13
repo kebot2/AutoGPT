@@ -392,7 +392,7 @@ async def get_platform_cost_dashboard(
             count=True,
         ),
         # Total aggregate (filtered): group by (provider, trackingType) so we can
-        # compute grand totals for cost/tokens within the active filter window.
+        # compute cost-bearing and token-bearing denominators for avg stats.
         PrismaLog.prisma().group_by(
             by=["provider", "trackingType"],
             where=where,
@@ -482,6 +482,12 @@ async def get_platform_cost_dashboard(
         results[7] if tracking_type is not None else total_agg_groups
     )
 
+    # Compute token grand-totals BEFORE slicing so the cap doesn't skew totals.
+    # by_provider_groups already groups by (provider, trackingType, model) with
+    # the same filter scope as total_agg_groups — no extra query needed.
+    total_input_tokens = sum(_si(r, "inputTokens") for r in by_provider_groups)
+    total_output_tokens = sum(_si(r, "outputTokens") for r in by_provider_groups)
+
     # Sort by_provider by total cost descending and cap at MAX_PROVIDER_ROWS.
     by_provider_groups.sort(key=lambda r: _si(r, "costMicrodollars"), reverse=True)
     by_provider_groups = by_provider_groups[:MAX_PROVIDER_ROWS]
@@ -505,8 +511,6 @@ async def get_platform_cost_dashboard(
     # Grand totals — sum across all provider groups (no LIMIT applied above).
     total_cost = sum(_si(r, "costMicrodollars") for r in total_agg_groups)
     total_requests = sum(_ca(r) for r in total_agg_groups)
-    total_input_tokens = sum(_si(r, "inputTokens") for r in total_agg_groups)
-    total_output_tokens = sum(_si(r, "outputTokens") for r in total_agg_groups)
 
     # Extract percentile values from the raw query result.
     pctl = percentile_rows[0] if percentile_rows else {}

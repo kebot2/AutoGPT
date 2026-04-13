@@ -34,10 +34,18 @@ function ProviderTable({ data, rateOverrides, onRateOverride }: Props) {
             <th scope="col" className="px-4 py-3 text-right">
               Usage
             </th>
-            <th scope="col" className="px-4 py-3 text-right">
+            <th
+              scope="col"
+              className="px-4 py-3 text-right"
+              title="Only populated for token-tracking providers (e.g. LLM calls). Non-token rows (per_run, characters, etc.) show —."
+            >
               Input Tokens
             </th>
-            <th scope="col" className="px-4 py-3 text-right">
+            <th
+              scope="col"
+              className="px-4 py-3 text-right"
+              title="Only populated for token-tracking providers (e.g. LLM calls). Non-token rows (per_run, characters, etc.) show —."
+            >
               Output Tokens
             </th>
             <th scope="col" className="px-4 py-3 text-right">

@@ -248,55 +248,47 @@ export function PlatformCostContent({ searchParams }: Props) {
                   {
                     label: "Avg Cost / Request",
                     value: formatMicrodollars(
-                      dashboard.avg_cost_microdollars_per_request ?? 0,
+                      dashboard.avg_cost_microdollars_per_request,
                     ),
                     subtitle: "Known cost divided by cost-bearing requests",
                   },
                   {
                     label: "Avg Input Tokens",
                     value: Math.round(
-                      dashboard.avg_input_tokens_per_request ?? 0,
+                      dashboard.avg_input_tokens_per_request,
                     ).toLocaleString(),
                     subtitle: "Prompt tokens per request (context size)",
                   },
                   {
                     label: "Avg Output Tokens",
                     value: Math.round(
-                      dashboard.avg_output_tokens_per_request ?? 0,
+                      dashboard.avg_output_tokens_per_request,
                     ).toLocaleString(),
                     subtitle: "Completion tokens per request (response length)",
                   },
                   {
                     label: "Total Tokens",
-                    value: `${formatTokens(dashboard.total_input_tokens ?? 0)} in / ${formatTokens(dashboard.total_output_tokens ?? 0)} out`,
+                    value: `${formatTokens(dashboard.total_input_tokens)} in / ${formatTokens(dashboard.total_output_tokens)} out`,
                     subtitle: "Prompt vs completion token split",
                   },
                   {
                     label: "Typical Cost (P50)",
-                    value: formatMicrodollars(
-                      dashboard.cost_p50_microdollars ?? 0,
-                    ),
+                    value: formatMicrodollars(dashboard.cost_p50_microdollars),
                     subtitle: "Median cost per request",
                   },
                   {
                     label: "Upper Cost (P75)",
-                    value: formatMicrodollars(
-                      dashboard.cost_p75_microdollars ?? 0,
-                    ),
+                    value: formatMicrodollars(dashboard.cost_p75_microdollars),
                     subtitle: "75th percentile cost",
                   },
                   {
                     label: "High Cost (P95)",
-                    value: formatMicrodollars(
-                      dashboard.cost_p95_microdollars ?? 0,
-                    ),
+                    value: formatMicrodollars(dashboard.cost_p95_microdollars),
                     subtitle: "95th percentile cost",
                   },
                   {
                     label: "Peak Cost (P99)",
-                    value: formatMicrodollars(
-                      dashboard.cost_p99_microdollars ?? 0,
-                    ),
+                    value: formatMicrodollars(dashboard.cost_p99_microdollars),
                     subtitle: "99th percentile cost",
                   },
                 ];

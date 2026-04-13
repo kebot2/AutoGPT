@@ -5,9 +5,9 @@
  * This server is used to execute agents that are created by the AutoGPT system.
  * OpenAPI spec version: 0.1
  */
-import type { CostBucket } from "./costBucket";
 import type { ProviderCostSummary } from "./providerCostSummary";
 import type { UserCostSummary } from "./userCostSummary";
+import type { CostBucket } from "./costBucket";
 
 export interface PlatformCostDashboard {
   by_provider: ProviderCostSummary[];
@@ -15,14 +15,14 @@ export interface PlatformCostDashboard {
   total_cost_microdollars: number;
   total_requests: number;
   total_users: number;
-  total_input_tokens?: number;
-  total_output_tokens?: number;
-  avg_input_tokens_per_request?: number;
-  avg_output_tokens_per_request?: number;
-  avg_cost_microdollars_per_request?: number;
-  cost_p50_microdollars?: number;
-  cost_p75_microdollars?: number;
-  cost_p95_microdollars?: number;
-  cost_p99_microdollars?: number;
-  cost_buckets?: CostBucket[];
+  total_input_tokens: number;
+  total_output_tokens: number;
+  avg_input_tokens_per_request: number;
+  avg_output_tokens_per_request: number;
+  avg_cost_microdollars_per_request: number;
+  cost_p50_microdollars: number;
+  cost_p75_microdollars: number;
+  cost_p95_microdollars: number;
+  cost_p99_microdollars: number;
+  cost_buckets: CostBucket[];
 }
