@@ -183,7 +183,5 @@ class TestDispatchResponseThinkingStrip:
             False,
             "[test]",
         )
-        # Either None (suppressed) or empty delta
-        if result is not None:
-            assert result.delta == ""
+        assert result is None
         assert acc.assistant_response.content == ""

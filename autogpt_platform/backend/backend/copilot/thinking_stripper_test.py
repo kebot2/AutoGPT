@@ -91,3 +91,24 @@ def test_reasoning_at_end_of_stream() -> None:
     out = s.process("Answer<internal_reasoning>my thoughts</internal_reasoning>")
     out += s.flush()
     assert out == "Answer"
+
+
+def test_nested_same_type_tags_do_not_leak() -> None:
+    """Nested same-type tags use a depth counter so inner close-tag does not end the block."""
+    s = ThinkingStripper()
+    out = s.process("<thinking><thinking>inner</thinking>after</thinking>final")
+    out += s.flush()
+    assert "inner" not in out
+    assert "after" not in out
+    assert out == "final"
+
+
+def test_nested_tags_split_across_chunks() -> None:
+    """Nested same-type tag nesting tracked correctly across chunk boundaries."""
+    s = ThinkingStripper()
+    out = s.process("<thinking><thin")
+    out += s.process("king>inner</thinking>still_inside</thinking>visible")
+    out += s.flush()
+    assert "inner" not in out
+    assert "still_inside" not in out
+    assert out == "visible"

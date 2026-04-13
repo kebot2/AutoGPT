@@ -83,6 +83,7 @@ from ..response_model import (
     StreamStartStep,
     StreamStatus,
     StreamTextDelta,
+    StreamTextEnd,
     StreamToolInputAvailable,
     StreamToolInputStart,
     StreamToolOutputAvailable,
@@ -1743,7 +1744,31 @@ async def _run_stream_attempt(
                 break
 
             # --- Dispatch adapter responses ---
-            for response in state.adapter.convert_message(sdk_msg):
+            adapter_responses = state.adapter.convert_message(sdk_msg)
+            # When StreamFinish is in this batch (ResultMessage), flush any
+            # text buffered by the thinking stripper and inject it as a
+            # StreamTextDelta BEFORE the StreamTextEnd so the Vercel AI SDK
+            # receives the tail inside the still-open text block (correct
+            # protocol order: TextDelta → TextEnd → FinishStep → Finish).
+            if any(isinstance(r, StreamFinish) for r in adapter_responses):
+                tail = acc.thinking_stripper.flush()
+                if tail and not ended_with_stream_error:
+                    acc.assistant_response.content = (
+                        acc.assistant_response.content or ""
+                    ) + tail
+                    tail_delta = StreamTextDelta(
+                        id=state.adapter.text_block_id, delta=tail
+                    )
+                    insert_at = next(
+                        (
+                            i
+                            for i, r in enumerate(adapter_responses)
+                            if isinstance(r, (StreamTextEnd, StreamFinish))
+                        ),
+                        len(adapter_responses),
+                    )
+                    adapter_responses.insert(insert_at, tail_delta)
+            for response in adapter_responses:
                 dispatched = _dispatch_response(
                     response, acc, ctx, state, entries_replaced, ctx.log_prefix
                 )
@@ -1806,16 +1831,6 @@ async def _run_stream_attempt(
                 break
     finally:
         await _safe_close_sdk_client(sdk_client, ctx.log_prefix)
-
-    # --- Flush any text buffered by the thinking stripper ---
-    tail = acc.thinking_stripper.flush()
-    if tail:
-        acc.assistant_response.content = (acc.assistant_response.content or "") + tail
-        # Only yield to the client when the stream succeeded; on error the outer
-        # retry loop rolls back session.messages, so emitting tail would create
-        # a UI-to-session inconsistency (text shown but not persisted).
-        if not ended_with_stream_error:
-            yield StreamTextDelta(id="", delta=tail)
 
     # --- Post-stream processing (only on success) ---
     if state.adapter.has_unresolved_tool_calls:
