@@ -1,7 +1,9 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, TypedDict
+from typing import Any
+
+from typing_extensions import TypedDict
 
 from prisma.models import PlatformCostLog as PrismaLog
 from prisma.models import User as PrismaUser
