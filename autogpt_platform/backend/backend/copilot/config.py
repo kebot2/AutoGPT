@@ -161,13 +161,13 @@ class ChatConfig(BaseSettings):
         "CHAT_CLAUDE_AGENT_MAX_TURNS env var if your workflows need more.",
     )
     claude_agent_max_budget_usd: float = Field(
-        default=5.0,
+        default=15.0,
         ge=0.01,
         le=1000.0,
-        description="Maximum spend in USD per SDK query. The CLI aborts the "
-        "request if this budget is exceeded. "
-        "Changed from $100 to $5 in SDK 0.1.58 upgrade — override via "
-        "CHAT_CLAUDE_AGENT_MAX_BUDGET_USD env var if needed.",
+        description="Maximum spend in USD per SDK query. The CLI attempts "
+        "to wrap up gracefully when this budget is reached. "
+        "Set to $15 to allow most tasks to complete (p50=$5.37, p75=$13.07). "
+        "Override via CHAT_CLAUDE_AGENT_MAX_BUDGET_USD env var.",
     )
     claude_agent_max_thinking_tokens: int = Field(
         default=8192,
