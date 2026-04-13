@@ -47,8 +47,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Max MCP response size in chars — keeps tool output under the SDK's 10 MB JSON buffer.
-_MCP_MAX_CHARS = 500_000
+# Max MCP response size in chars. 100K chars ≈ 25K tokens. The SDK writes oversized results to tool-results/ files.
+_MCP_MAX_CHARS = 100_000
 
 # MCP server naming - the SDK prefixes tool names as "mcp__{server_name}__{tool}"
 MCP_SERVER_NAME = "copilot"
