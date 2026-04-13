@@ -65,6 +65,11 @@ async def test_get_library_agents(mocker):
     )
     mock_library_agent.return_value.count = mocker.AsyncMock(return_value=1)
 
+    mocker.patch(
+        "backend.api.features.library.db._fetch_execution_counts",
+        new=mocker.AsyncMock(return_value={}),
+    )
+
     # Call function
     result = await db.list_library_agents("test-user")
 
