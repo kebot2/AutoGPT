@@ -1,7 +1,7 @@
 "use client";
 
 import { Text } from "@/components/atoms/Text/Text";
-import { CaretCircleRightIcon, ChatCircleDotsIcon } from "@phosphor-icons/react";
+import { EyeIcon, ChatCircleDotsIcon } from "@phosphor-icons/react";
 import Image from "next/image";
 import NextLink from "next/link";
 import { useRouter } from "next/navigation";
@@ -137,8 +137,8 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
               data-testid="library-agent-card-see-runs-link"
               className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-800"
             >
+              <EyeIcon size={14} className="shrink-0" />
               See tasks
-              <CaretCircleRightIcon size={14} className="shrink-0" />
             </button>
             <ContextualActionButton
               status={statusInfo.status}
@@ -154,8 +154,8 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
               }}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-800"
             >
-              Chat
               <ChatCircleDotsIcon size={14} className="shrink-0" />
+              Chat
             </button>
           </div>
         </div>

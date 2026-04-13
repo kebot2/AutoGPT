@@ -50,7 +50,7 @@ export function ContextualActionButton({
         className,
       )}
     >
-      <Icon size={14} className="shrink-0" />
+      <Icon size={12} className="shrink-0" />
       {config.label}
     </button>
   );
@@ -63,6 +63,6 @@ const ACTION_CONFIG: Record<
   error: { label: "View error", icon: EyeIcon },
   listening: { label: "Reconnect", icon: ArrowsClockwiseIcon },
   running: { label: "Watch live", icon: MonitorPlayIcon },
-  idle: { label: "Run", icon: PlayIcon },
-  scheduled: { label: "Run", icon: ArrowCounterClockwiseIcon },
+  idle: { label: "Start", icon: PlayIcon },
+  scheduled: { label: "Start", icon: ArrowCounterClockwiseIcon },
 };

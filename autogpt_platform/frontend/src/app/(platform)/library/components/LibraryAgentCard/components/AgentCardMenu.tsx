@@ -187,21 +187,7 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
           >
             Duplicate agent
           </DropdownMenuItem>
-          {agent.can_access_graph && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link
-                  href={`/build?flowID=${agent.graph_id}`}
-                  target="_blank"
-                  className="flex items-center gap-2"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  Open in builder
-                </Link>
-              </DropdownMenuItem>
-            </>
-          )}
+          {}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {

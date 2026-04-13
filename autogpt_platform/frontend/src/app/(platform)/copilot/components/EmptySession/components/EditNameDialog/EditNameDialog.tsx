@@ -58,7 +58,7 @@ export function EditNameDialog({ currentName }: Props) {
         <button
           type="button"
           onClick={handleOpen}
-          className="ml-1 inline-flex items-center text-zinc-400 transition-colors hover:text-violet-500"
+          className="ml-1 inline-flex items-center text-violet-500 transition-colors hover:text-violet-700"
         >
           <PencilSimpleIcon size={16} />
         </button>
