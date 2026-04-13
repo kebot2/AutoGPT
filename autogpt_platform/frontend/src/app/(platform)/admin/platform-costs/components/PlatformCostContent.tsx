@@ -210,6 +210,7 @@ export function PlatformCostContent({ searchParams }: Props) {
               <Skeleton key={i} className="h-20 rounded-lg" />
             ))}
           </div>
+          <Skeleton className="h-32 rounded-lg" />
           <Skeleton className="h-8 w-48 rounded" />
           <Skeleton className="h-64 rounded-lg" />
         </div>

@@ -62,7 +62,7 @@ function UserTable({ data }: Props) {
                 row.total_cost_microdollars > 0
                   ? formatMicrodollars(
                       row.total_cost_microdollars /
-                        row.cost_bearing_request_count!,
+                        (row.cost_bearing_request_count ?? 1),
                     )
                   : "-"}
               </td>

@@ -328,6 +328,9 @@ class TestGetPlatformCostDashboard:
         assert dashboard.cost_p95_microdollars == 4000
         assert dashboard.cost_p99_microdollars == 5000
         assert len(dashboard.cost_buckets) == 1
+        # total_input/output_tokens come from total_agg_groups (provider_row has 1000/500)
+        assert dashboard.total_input_tokens == 1000
+        assert dashboard.total_output_tokens == 500
         # Token averages must use token_bearing_requests (3) not cost_bearing (0)
         assert dashboard.avg_input_tokens_per_request == pytest.approx(1000 / 3)
         assert dashboard.avg_output_tokens_per_request == pytest.approx(500 / 3)
