@@ -1064,7 +1064,7 @@ class ExecutionProcessor:
     def _resolve_block_cost(
         self,
         node_exec: NodeExecutionEntry,
-    ) -> tuple[Block | None, int, dict]:
+    ) -> tuple[Block | None, int, dict[str, Any]]:
         """Look up the block and compute its base usage cost for an exec.
 
         Shared by :meth:`_charge_usage` and :meth:`charge_extra_iterations`

@@ -25,6 +25,7 @@ from backend.data.model import (
     Credentials,
     CredentialsFieldInfo,
     CredentialsMetaInput,
+    NodeExecutionStats,
     SchemaField,
     is_credentials_field_name,
 )
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from backend.data.execution import ExecutionContext
-    from backend.data.model import ContributorDetails, NodeExecutionStats
+    from backend.data.model import ContributorDetails
 
     from ..data.graph import Link
 
@@ -420,7 +421,7 @@ class BlockWebhookConfig(BlockManualWebhookConfig):
 class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
     _optimized_description: ClassVar[str | None] = None
 
-    def extra_credit_charges(self, execution_stats: "NodeExecutionStats") -> int:
+    def extra_credit_charges(self, execution_stats: NodeExecutionStats) -> int:
         """Return extra credits to charge after this block run completes.
 
         Called by the executor after a block finishes with COMPLETED status.
@@ -468,8 +469,6 @@ class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
             disabled: If the block is disabled, it will not be available for execution.
             static_output: Whether the output links of the block are static by default.
         """
-        from backend.data.model import NodeExecutionStats
-
         self.id = id
         self.input_schema = input_schema
         self.output_schema = output_schema
@@ -487,7 +486,7 @@ class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
         self.is_sensitive_action = is_sensitive_action
         # Read from ClassVar set by initialize_blocks()
         self.optimized_description: str | None = type(self)._optimized_description
-        self.execution_stats: "NodeExecutionStats" = NodeExecutionStats()
+        self.execution_stats: NodeExecutionStats = NodeExecutionStats()
 
         if self.webhook_config:
             if isinstance(self.webhook_config, BlockWebhookConfig):
@@ -567,7 +566,7 @@ class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
                 return data
         raise ValueError(f"{self.name} did not produce any output for {output}")
 
-    def merge_stats(self, stats: "NodeExecutionStats") -> "NodeExecutionStats":
+    def merge_stats(self, stats: NodeExecutionStats) -> NodeExecutionStats:
         self.execution_stats += stats
         return self.execution_stats
 
