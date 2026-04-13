@@ -288,7 +288,8 @@ class TestGetPlatformCostDashboard:
                 [user_row],  # by_user
                 [],  # by_user_tracking_groups (no cost_usd rows for this user)
                 [{"userId": "u1"}],  # distinct users
-                [provider_row],  # total agg
+                [provider_row],  # total agg (filtered)
+                [provider_row],  # total agg (no tracking_type filter)
             ]
         )
         mock_actions.find_many = AsyncMock(return_value=[mock_user])
@@ -364,7 +365,8 @@ class TestGetPlatformCostDashboard:
                     user_tracking_tokens_row,
                 ],  # by_user_tracking
                 [{"userId": "u1"}],  # distinct users
-                [total_row],  # total agg
+                [total_row],  # total agg (filtered)
+                [total_row],  # total agg (no tracking_type filter)
             ]
         )
         mock_actions.find_many = AsyncMock(return_value=[])
@@ -393,6 +395,57 @@ class TestGetPlatformCostDashboard:
         assert dashboard.by_user[0].cost_bearing_request_count == 7
 
     @pytest.mark.asyncio
+    async def test_global_avg_cost_nonzero_when_filtering_by_tokens(self):
+        """When filtering by tracking_type='tokens', avg_cost_microdollars_per_request
+        must still reflect cost_usd rows from total_agg_no_tracking_type_groups,
+        not the filtered total_agg_groups which only has tokens rows."""
+        # filtered total_agg only has tokens rows (zero cost)
+        tokens_row = _make_group_by_row(
+            provider="openai", tracking_type="tokens", cost=0, count=5
+        )
+        # unfiltered total_agg has both rows (cost_usd carries the actual cost)
+        cost_usd_row = _make_group_by_row(
+            provider="openai", tracking_type="cost_usd", cost=10_000, count=4
+        )
+
+        mock_actions = MagicMock()
+        mock_actions.group_by = AsyncMock(
+            side_effect=[
+                [tokens_row],  # by_provider
+                [{"_sum": {}, "_count": {"_all": 5}, "userId": "u1"}],  # by_user
+                [],  # by_user_tracking_groups
+                [{"userId": "u1"}],  # distinct users
+                [tokens_row],  # total agg (filtered — tokens only)
+                [tokens_row, cost_usd_row],  # total agg (no tracking_type filter)
+            ]
+        )
+        mock_actions.find_many = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "backend.data.platform_cost.PrismaLog.prisma",
+                return_value=mock_actions,
+            ),
+            patch(
+                "backend.data.platform_cost.PrismaUser.prisma",
+                return_value=mock_actions,
+            ),
+            patch(
+                "backend.data.platform_cost.query_raw_with_schema",
+                new_callable=AsyncMock,
+                side_effect=[[], []],
+            ),
+        ):
+            dashboard = await get_platform_cost_dashboard(tracking_type="tokens")
+
+        # avg_cost_microdollars_per_request must be non-zero: cost_usd row
+        # (10_000 microdollars, 4 requests) is present in the unfiltered agg.
+        assert dashboard.avg_cost_microdollars_per_request == pytest.approx(10_000 / 4)
+        # avg token stats use token_bearing_requests from unfiltered agg (5)
+        assert dashboard.avg_input_tokens_per_request == pytest.approx(1000 / 5)
+        assert dashboard.avg_output_tokens_per_request == pytest.approx(500 / 5)
+
+    @pytest.mark.asyncio
     async def test_cache_tokens_aggregated_not_hardcoded(self):
         """cache_read_tokens and cache_creation_tokens must be read from the
         DB aggregation, not hardcoded to 0 (regression guard for Sentry report)."""
@@ -415,7 +468,8 @@ class TestGetPlatformCostDashboard:
                 [user_row],  # by_user
                 [],  # by_user_tracking_groups
                 [{"userId": "u2"}],  # distinct users
-                [provider_row],  # total agg
+                [provider_row],  # total agg (filtered)
+                [provider_row],  # total agg (no tracking_type filter)
             ]
         )
         mock_actions.find_many = AsyncMock(return_value=[])
@@ -448,7 +502,7 @@ class TestGetPlatformCostDashboard:
     @pytest.mark.asyncio
     async def test_returns_empty_dashboard(self):
         mock_actions = MagicMock()
-        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], []])
+        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], [], []])
         mock_actions.find_many = AsyncMock(return_value=[])
 
         with (
@@ -481,7 +535,7 @@ class TestGetPlatformCostDashboard:
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
         mock_actions = MagicMock()
-        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], []])
+        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], [], []])
         mock_actions.find_many = AsyncMock(return_value=[])
 
         raw_mock = AsyncMock(side_effect=[[], []])
@@ -503,8 +557,9 @@ class TestGetPlatformCostDashboard:
                 start=start, provider="openai", user_id="u1"
             )
 
-        # group_by called 5 times (by_provider, by_user, by_user_tracking, distinct users, totals)
-        assert mock_actions.group_by.await_count == 5
+        # group_by called 6 times (by_provider, by_user, by_user_tracking, distinct users,
+        # total agg filtered, total agg no-tracking-type)
+        assert mock_actions.group_by.await_count == 6
         # The where dict passed to the first call should include createdAt
         first_call_kwargs = mock_actions.group_by.call_args_list[0][1]
         assert "createdAt" in first_call_kwargs.get("where", {})
@@ -520,7 +575,7 @@ class TestGetPlatformCostDashboard:
         """by_user_tracking_groups must NOT apply the tracking_type filter so that
         cost_usd rows are always included even when the caller filters by 'tokens'."""
         mock_actions = MagicMock()
-        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], []])
+        mock_actions.group_by = AsyncMock(side_effect=[[], [], [], [], [], []])
         mock_actions.find_many = AsyncMock(return_value=[])
 
         with (
@@ -541,7 +596,7 @@ class TestGetPlatformCostDashboard:
             await get_platform_cost_dashboard(tracking_type="tokens")
 
         # Call index 2 is by_user_tracking_groups (0=by_provider, 1=by_user,
-        # 2=by_user_tracking, 3=distinct_users, 4=total_agg).
+        # 2=by_user_tracking, 3=distinct_users, 4=total_agg, 5=total_agg_no_tt).
         tracking_call_where = mock_actions.group_by.call_args_list[2][1]["where"]
         # The main filter applies trackingType; by_user_tracking must NOT.
         assert "trackingType" not in tracking_call_where

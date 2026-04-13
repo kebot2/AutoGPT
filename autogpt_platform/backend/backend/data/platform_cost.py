@@ -333,13 +333,14 @@ async def get_platform_cost_dashboard(
 
     raw_where = " AND ".join(raw_where_clauses)
 
-    # Run all seven aggregation queries in parallel.
+    # Run all eight aggregation queries in parallel.
     (
         by_provider_groups,
         by_user_groups,
         by_user_tracking_groups,
         total_user_groups,
         total_agg_groups,
+        total_agg_no_tracking_type_groups,
         percentile_rows,
         bucket_rows,
     ) = await asyncio.gather(
@@ -373,11 +374,25 @@ async def get_platform_cost_dashboard(
             where=where,
             count=True,
         ),
-        # Total aggregate: group by (provider, trackingType) so we can
-        # distinguish cost-bearing rows for per-request averages.
+        # Total aggregate (filtered): group by (provider, trackingType) so we can
+        # compute grand totals for cost/tokens within the active filter window.
         PrismaLog.prisma().group_by(
             by=["provider", "trackingType"],
             where=where,
+            sum={
+                "costMicrodollars": True,
+                "inputTokens": True,
+                "outputTokens": True,
+            },
+            count=True,
+        ),
+        # Total aggregate (no tracking_type filter): used to compute
+        # cost_bearing_requests and token_bearing_requests denominators so
+        # global avg stats remain meaningful when the caller filters the main
+        # view by a specific tracking_type (e.g. 'tokens').
+        PrismaLog.prisma().group_by(
+            by=["provider", "trackingType"],
+            where=where_no_tracking_type,
             sum={
                 "costMicrodollars": True,
                 "inputTokens": True,
@@ -465,14 +480,37 @@ async def get_platform_cost_dashboard(
         CostBucket(bucket=r["bucket"], count=int(r["count"])) for r in bucket_rows
     ]
 
-    # Cost-bearing request count: only rows where trackingType == "cost_usd".
+    # Avg-stat numerators and denominators are derived from the unfiltered
+    # aggregate so they remain meaningful when the caller filters by a specific
+    # tracking_type.  Example: filtering by 'tokens' excludes cost_usd rows from
+    # total_agg_groups, so avg_cost would always be 0 if we used that; using
+    # total_agg_no_tracking_type_groups gives the correct cost_usd total/count.
+    avg_cost_total = sum(
+        _si(r, "costMicrodollars")
+        for r in total_agg_no_tracking_type_groups
+        if r.get("trackingType") == "cost_usd"
+    )
     cost_bearing_requests = sum(
-        _ca(r) for r in total_agg_groups if r.get("trackingType") == "cost_usd"
+        _ca(r)
+        for r in total_agg_no_tracking_type_groups
+        if r.get("trackingType") == "cost_usd"
+    )
+    avg_input_total = sum(
+        _si(r, "inputTokens")
+        for r in total_agg_no_tracking_type_groups
+        if r.get("trackingType") == "tokens"
+    )
+    avg_output_total = sum(
+        _si(r, "outputTokens")
+        for r in total_agg_no_tracking_type_groups
+        if r.get("trackingType") == "tokens"
     )
     # Token-bearing request count: only rows where trackingType == "tokens".
     # Token averages must use this denominator; cost_usd rows do not carry tokens.
     token_bearing_requests = sum(
-        _ca(r) for r in total_agg_groups if r.get("trackingType") == "tokens"
+        _ca(r)
+        for r in total_agg_no_tracking_type_groups
+        if r.get("trackingType") == "tokens"
     )
 
     # Per-user cost-bearing request count: used for per-user avg cost so the
@@ -522,17 +560,17 @@ async def get_platform_cost_dashboard(
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
         avg_input_tokens_per_request=(
-            total_input_tokens / token_bearing_requests
+            avg_input_total / token_bearing_requests
             if token_bearing_requests > 0
             else 0.0
         ),
         avg_output_tokens_per_request=(
-            total_output_tokens / token_bearing_requests
+            avg_output_total / token_bearing_requests
             if token_bearing_requests > 0
             else 0.0
         ),
         avg_cost_microdollars_per_request=(
-            total_cost / cost_bearing_requests if cost_bearing_requests > 0 else 0.0
+            avg_cost_total / cost_bearing_requests if cost_bearing_requests > 0 else 0.0
         ),
         cost_p50_microdollars=cost_p50,
         cost_p75_microdollars=cost_p75,
