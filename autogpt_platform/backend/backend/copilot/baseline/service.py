@@ -394,6 +394,11 @@ async def _baseline_llm_caller(
 
     round_text = ""
     response = None  # initialized before try so finally block can access it
+    # Snapshot token counts before this call so we can compute the delta used
+    # for fallback cost estimation.  Must be set before the try so the finally
+    # block can always reference them even when the API call raises.
+    prompt_tokens_before = state.turn_prompt_tokens
+    completion_tokens_before = state.turn_completion_tokens
     try:
         client = _get_openai_client()
         typed_messages = cast(list[ChatCompletionMessageParam], messages)
@@ -414,13 +419,6 @@ async def _baseline_llm_caller(
                 stream_options={"include_usage": True},
             )
         tool_calls_by_index: dict[int, dict[str, str]] = {}
-
-        # Snapshot token counts before this call so we can compute the delta
-        # used for fallback cost estimation (state fields are accumulated across
-        # all tool-call turns, so we must not pass the cumulative total to the
-        # per-call cost estimator).
-        prompt_tokens_before = state.turn_prompt_tokens
-        completion_tokens_before = state.turn_completion_tokens
 
         async for chunk in response:
             if chunk.usage:

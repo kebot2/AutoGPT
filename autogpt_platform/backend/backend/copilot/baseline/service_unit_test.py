@@ -1023,7 +1023,9 @@ class TestBaselineCostExtraction:
         mock_client.chat.completions.create = AsyncMock(
             side_effect=[
                 make_stream(1000, 200),  # turn 1
-                make_stream(1100, 300),  # turn 2 (accumulators now hold 1000+1100, 200+300)
+                make_stream(
+                    1100, 300
+                ),  # turn 2 (accumulators now hold 1000+1100, 200+300)
             ]
         )
 
