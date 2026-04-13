@@ -107,6 +107,38 @@ _TRANSCRIPT_UPLOAD_TIMEOUT_S = 5
 # MIME types that can be embedded as vision content blocks (OpenAI format).
 _VISION_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
+# Fallback per-token pricing (USD) for common OpenRouter models.
+# Used only when the ``x-total-cost`` response header is missing.
+# Rates sourced from OpenRouter's pricing page (input / output per 1M tokens).
+_OPENROUTER_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "anthropic/claude-sonnet-4": (3.0 / 1_000_000, 15.0 / 1_000_000),
+    "anthropic/claude-3.5-sonnet": (3.0 / 1_000_000, 15.0 / 1_000_000),
+    "anthropic/claude-3-haiku": (0.25 / 1_000_000, 1.25 / 1_000_000),
+    "anthropic/claude-3-opus": (15.0 / 1_000_000, 75.0 / 1_000_000),
+    "openai/gpt-4o": (2.5 / 1_000_000, 10.0 / 1_000_000),
+    "openai/gpt-4o-mini": (0.15 / 1_000_000, 0.6 / 1_000_000),
+    "openai/gpt-4-turbo": (10.0 / 1_000_000, 30.0 / 1_000_000),
+    "google/gemini-2.0-flash-001": (0.1 / 1_000_000, 0.4 / 1_000_000),
+    "google/gemini-2.5-pro-preview": (1.25 / 1_000_000, 10.0 / 1_000_000),
+}
+
+
+def _estimate_cost_from_tokens(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float | None:
+    """Estimate USD cost from token counts using known model pricing.
+
+    Returns None if the model is not in the pricing table.
+    """
+    pricing = _OPENROUTER_MODEL_PRICING.get(model)
+    if pricing is None:
+        return None
+    input_rate, output_rate = pricing
+    return prompt_tokens * input_rate + completion_tokens * output_rate
+
+
 # Max size for embedding images directly in the user message (20 MiB raw).
 _MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024
 
@@ -343,6 +375,8 @@ class _BaselineStreamState:
     text_started: bool = False
     turn_prompt_tokens: int = 0
     turn_completion_tokens: int = 0
+    turn_cache_read_tokens: int = 0
+    turn_cache_creation_tokens: int = 0
     cost_usd: float | None = None
     thinking_stripper: _ThinkingStripper = field(default_factory=_ThinkingStripper)
     session_messages: list[ChatMessage] = field(default_factory=list)
@@ -391,10 +425,29 @@ async def _baseline_llm_caller(
             )
         tool_calls_by_index: dict[int, dict[str, str]] = {}
 
+        # Snapshot token counts before this call so we can compute the delta
+        # used for fallback cost estimation (state fields are accumulated across
+        # all tool-call turns, so we must not pass the cumulative total to the
+        # per-call cost estimator).
+        prompt_tokens_before = state.turn_prompt_tokens
+        completion_tokens_before = state.turn_completion_tokens
+
         async for chunk in response:
             if chunk.usage:
                 state.turn_prompt_tokens += chunk.usage.prompt_tokens or 0
                 state.turn_completion_tokens += chunk.usage.completion_tokens or 0
+                # Extract cache token details when available (OpenAI /
+                # OpenRouter include these in prompt_tokens_details).
+                ptd = getattr(chunk.usage, "prompt_tokens_details", None)
+                if ptd:
+                    state.turn_cache_read_tokens += (
+                        getattr(ptd, "cached_tokens", 0) or 0
+                    )
+                    # cache_creation_input_tokens is reported by some providers
+                    # (e.g. Anthropic native) but not standard OpenAI streaming.
+                    state.turn_cache_creation_tokens += (
+                        getattr(ptd, "cache_creation_input_tokens", 0) or 0
+                    )
 
             delta = chunk.choices[0].delta if chunk.choices else None
             if not delta:
@@ -449,6 +502,7 @@ async def _baseline_llm_caller(
         # Extract OpenRouter cost from response headers (in finally so we
         # capture cost even when the stream errors mid-way — we already paid).
         # Accumulate across multi-round tool-calling turns.
+        got_header_cost = False
         try:
             # Access undocumented _response attribute — same pattern as
             # extract_openrouter_cost() in blocks/llm.py.
@@ -457,8 +511,33 @@ async def _baseline_llm_caller(
                 cost = float(cost_header)
                 if math.isfinite(cost) and cost >= 0:
                     state.cost_usd = (state.cost_usd or 0.0) + cost
+                    got_header_cost = True
         except (AttributeError, ValueError):
             pass
+
+        # Fallback: estimate cost from token counts when x-total-cost is
+        # missing (e.g. some OpenRouter models don't report it).
+        # Use the delta for this call only — the state accumulators grow across
+        # all tool-call turns, so passing the cumulative total would
+        # compound-overestimate costs on the 2nd+ turn.
+        call_prompt_tokens = state.turn_prompt_tokens - prompt_tokens_before
+        call_completion_tokens = state.turn_completion_tokens - completion_tokens_before
+        if not got_header_cost and (
+            call_prompt_tokens > 0 or call_completion_tokens > 0
+        ):
+            estimated = _estimate_cost_from_tokens(
+                state.model,
+                call_prompt_tokens,
+                call_completion_tokens,
+            )
+            if estimated is not None:
+                state.cost_usd = (state.cost_usd or 0.0) + estimated
+                logger.info(
+                    "[Baseline] x-total-cost header missing; estimated cost "
+                    "from token pricing: $%.6f (model=%s)",
+                    estimated,
+                    state.model,
+                )
 
         # Always persist partial text so the session history stays consistent,
         # even when the stream is interrupted by an exception.
@@ -1034,6 +1113,7 @@ async def stream_chat_completion_baseline(
         prompt_task = _build_cacheable_system_prompt(None)
 
     # Run download + prompt build concurrently — both are independent I/O
+<<<<<<< HEAD
     # on the request critical path.  Use the pre-drain count so pending
     # messages drained at turn start don't spuriously trigger a transcript
     # load on an actual first turn.
@@ -1050,6 +1130,21 @@ async def stream_chat_completion_baseline(
                 ),
                 prompt_task,
             )
+=======
+    # on the request critical path.
+    if user_id and len(session.messages) > 1:
+        (
+            transcript_covers_prefix,
+            (base_system_prompt, understanding),
+        ) = await asyncio.gather(
+            _load_prior_transcript(
+                user_id=user_id,
+                session_id=session_id,
+                session_msg_count=len(session.messages),
+                transcript_builder=transcript_builder,
+            ),
+            prompt_task,
+>>>>>>> c6af52033dc97f673af7a968564d14fbb2949707
         )
     else:
         base_system_prompt, understanding = await prompt_task
@@ -1186,7 +1281,7 @@ async def stream_chat_completion_baseline(
         content_text = context.get("content", "")
         if content_text:
             context_hint = (
-                f"\n[The user shared a URL: {url}\n" f"Content:\n{content_text[:8000]}]"
+                f"\n[The user shared a URL: {url}\nContent:\n{content_text[:8000]}]"
             )
         else:
             context_hint = f"\n[The user shared a URL: {url}]"
@@ -1460,14 +1555,21 @@ async def stream_chat_completion_baseline(
             )
 
         # Persist token usage to session and record for rate limiting.
-        # NOTE: OpenRouter folds cached tokens into prompt_tokens, so we
-        # cannot break out cache_read/cache_creation weights. Users on the
-        # baseline path may be slightly over-counted vs the SDK path.
+        # When prompt_tokens_details.cached_tokens is reported, subtract
+        # them from prompt_tokens to get the uncached count so the cost
+        # breakdown stays accurate.
+        uncached_prompt = state.turn_prompt_tokens
+        if state.turn_cache_read_tokens > 0:
+            uncached_prompt = max(
+                0, state.turn_prompt_tokens - state.turn_cache_read_tokens
+            )
         await persist_and_record_usage(
             session=session,
             user_id=user_id,
-            prompt_tokens=state.turn_prompt_tokens,
+            prompt_tokens=uncached_prompt,
             completion_tokens=state.turn_completion_tokens,
+            cache_read_tokens=state.turn_cache_read_tokens,
+            cache_creation_tokens=state.turn_cache_creation_tokens,
             log_prefix="[Baseline]",
             cost_usd=state.cost_usd,
             model=active_model,

@@ -27,7 +27,13 @@ function UserTable({ data }: Props) {
               Output Tokens
             </th>
             <th scope="col" className="px-4 py-3 text-right">
-              Avg Cost / Req
+Avg Cost / Req
+            </th>
+            <th scope="col" className="px-4 py-3 text-right">
+              Cache Read
+            </th>
+            <th scope="col" className="px-4 py-3 text-right">
+              Cache Write
             </th>
           </tr>
         </thead>
@@ -58,7 +64,7 @@ function UserTable({ data }: Props) {
                 {formatTokens(row.total_output_tokens)}
               </td>
               <td className="px-4 py-3 text-right">
-                {(row.cost_bearing_request_count ?? 0) > 0 &&
+{(row.cost_bearing_request_count ?? 0) > 0 &&
                 row.total_cost_microdollars > 0
                   ? formatMicrodollars(
                       row.total_cost_microdollars /
@@ -66,12 +72,22 @@ function UserTable({ data }: Props) {
                     )
                   : "-"}
               </td>
+              <td className="px-4 py-3 text-right">
+                {(row.total_cache_read_tokens ?? 0) > 0
+                  ? formatTokens(row.total_cache_read_tokens ?? 0)
+                  : "-"}
+              </td>
+              <td className="px-4 py-3 text-right">
+                {(row.total_cache_creation_tokens ?? 0) > 0
+                  ? formatTokens(row.total_cache_creation_tokens ?? 0)
+                  : "-"}
+              </td>
             </tr>
           ))}
           {data.length === 0 && (
             <tr>
               <td
-                colSpan={6}
+                colSpan={8}
                 className="px-4 py-8 text-center text-muted-foreground"
               >
                 No cost data yet
