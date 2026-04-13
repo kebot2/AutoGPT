@@ -1522,12 +1522,10 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
                 customer_id,
             )
             return
-        other_active_ids = {sub["id"] for sub in other_subs_active.data} - {
+        other_active_ids = {sub["id"] for sub in other_subs_active.data} - {new_sub_id}
+        other_trialing_ids = {sub["id"] for sub in other_subs_trialing.data} - {
             new_sub_id
         }
-        other_trialing_ids = {
-            sub["id"] for sub in other_subs_trialing.data
-        } - {new_sub_id}
         still_has_active_sub = bool(other_active_ids or other_trialing_ids)
         if still_has_active_sub:
             logger.info(
