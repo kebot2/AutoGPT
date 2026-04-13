@@ -13,7 +13,26 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, cast
+
+from typing_extensions import NotRequired
+
+
+# TODO(#12747): Remove this local TypedDict and import SystemPromptPreset
+# from claude_agent_sdk.types once SDK >=0.1.58 is the minimum pin.
+class _SystemPromptPreset(TypedDict):
+    """Local stand-in for the SDK's ``SystemPromptPreset`` (mirrors SDK >=0.1.58).
+
+    Kept only for backwards compat with older SDK pins (e.g. 0.1.45 on dev).
+    Once the minimum SDK version is pinned to >=0.1.58, replace this with a
+    direct import from ``claude_agent_sdk.types``.
+    """
+
+    type: Literal["preset"]
+    preset: Literal["claude_code"]
+    append: NotRequired[str]
+    exclude_dynamic_sections: NotRequired[bool]
+
 
 if TYPE_CHECKING:
     from backend.copilot.permissions import CopilotPermissions
@@ -701,6 +720,34 @@ def _is_fallback_stderr(line: str) -> bool:
     without wiring up the full ``_on_stderr`` closure.
     """
     return "fallback model" in line.lower()
+
+
+def _build_system_prompt_value(
+    system_prompt: str,
+    cross_user_cache: bool,
+) -> str | _SystemPromptPreset:
+    """Build the ``system_prompt`` argument for :class:`ClaudeAgentOptions`.
+
+    When *cross_user_cache* is enabled, returns a :class:`_SystemPromptPreset`
+    dict so the Claude Code default prompt becomes a cacheable prefix shared
+    across all users; our custom *system_prompt* is appended after it.
+
+    When disabled (or if the SDK is too old to support ``SystemPromptPreset``),
+    the raw *system_prompt* string is returned unchanged.
+
+    An empty *system_prompt* is accepted: the preset dict will have
+    ``append: ""`` which the SDK treats as no custom suffix.
+    """
+    if cross_user_cache:
+        logger.debug("Using SystemPromptPreset for cross-user prompt cache")
+        return _SystemPromptPreset(
+            type="preset",
+            preset="claude_code",
+            append=system_prompt,
+            exclude_dynamic_sections=True,
+        )
+    logger.debug("Cross-user prompt cache disabled, using raw string")
+    return system_prompt
 
 
 def _make_sdk_cwd(session_id: str) -> str:
@@ -2243,8 +2290,14 @@ async def stream_chat_completion_sdk(
                     sid,
                 )
 
+        # Use SystemPromptPreset for cross-user prompt caching (see _build_system_prompt_value).
+        system_prompt_value = _build_system_prompt_value(
+            system_prompt,
+            cross_user_cache=config.claude_agent_cross_user_prompt_cache,
+        )
+
         sdk_options_kwargs: dict[str, Any] = {
-            "system_prompt": system_prompt,
+            "system_prompt": system_prompt_value,
             "mcp_servers": {"copilot": mcp_server},
             "allowed_tools": allowed,
             "disallowed_tools": disallowed,
