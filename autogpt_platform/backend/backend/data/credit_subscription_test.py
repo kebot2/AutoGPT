@@ -503,6 +503,28 @@ async def test_create_subscription_checkout_no_price_raises():
 
 
 @pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_missing_customer_key_returns_early():
+    """A webhook payload missing 'customer' must not raise KeyError — returns early with a warning."""
+    stripe_sub = {
+        # Omit "customer" entirely — simulates a valid HMAC but malformed payload
+        "status": "active",
+        "id": "sub_xyz",
+        "items": {"data": [{"price": {"id": "price_pro"}}]},
+    }
+
+    with (
+        patch("backend.data.credit.User.prisma") as mock_prisma,
+        patch(
+            "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
+        ) as mock_set,
+    ):
+        # Should return early without querying the DB or writing a tier
+        await sync_subscription_from_stripe(stripe_sub)
+        mock_prisma.assert_not_called()
+        mock_set.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_sync_subscription_from_stripe_unknown_price_id_preserves_current_tier():
     """Unknown price_id should preserve the current tier, not default to FREE (no DB write)."""
     mock_user = _make_user(tier=SubscriptionTier.PRO)
