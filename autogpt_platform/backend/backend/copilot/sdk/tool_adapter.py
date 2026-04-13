@@ -428,7 +428,7 @@ async def _read_file_handler(args: dict[str, Any]) -> dict[str, Any]:
         return _mcp_ok(numbered)
 
     if not is_allowed_local_path(file_path, get_sdk_cwd()):
-        return _mcp_err(f"Path not allowed: {file_path}")
+        return _mcp_err(f"Path not allowed: {os.path.basename(file_path)}")
 
     resolved = os.path.realpath(os.path.expanduser(file_path))
     try:
@@ -452,9 +452,12 @@ async def _read_file_handler(args: dict[str, Any]) -> dict[str, Any]:
         return _mcp_err(f"Error reading file: {e}")
 
 
-_READ_TOOL_NAME = "Read"
+_READ_TOOL_NAME = "read_tool_result"
 _READ_TOOL_DESCRIPTION = (
-    "Read a file from the local filesystem. "
+    "Read an SDK-internal tool-result file or a workspace:// URI. "
+    "Use this tool only for paths under ~/.claude/projects/.../tool-results/ "
+    "or tool-outputs/, and for workspace:// URIs returned by other tools. "
+    "For files in the working directory use read_file instead. "
     "Use offset and limit to read specific line ranges for large files."
 )
 _READ_TOOL_SCHEMA = {

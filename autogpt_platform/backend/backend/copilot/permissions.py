@@ -422,7 +422,7 @@ def apply_tool_permissions(
     permitted_sdk: set[str] = set()
     for s in effective:
         permitted_sdk.update(to_sdk_names(s))
-    # Always include the internal Read tool (used by SDK for large/truncated outputs)
+    # Always include the internal read_tool_result tool (used by SDK for large/truncated outputs)
     permitted_sdk.add(f"{MCP_TOOL_PREFIX}{_READ_TOOL_NAME}")
 
     filtered_allowed = [t for t in base_allowed if t in permitted_sdk]
