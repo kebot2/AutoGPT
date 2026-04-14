@@ -58,6 +58,14 @@ TIER_MULTIPLIERS: dict[SubscriptionTier, int] = {
 
 DEFAULT_TIER = SubscriptionTier.FREE
 
+# Per-tier workspace storage caps in MB.
+TIER_WORKSPACE_STORAGE_MB: dict[SubscriptionTier, int] = {
+    SubscriptionTier.FREE: 250,  # 250 MB
+    SubscriptionTier.PRO: 1024,  # 1 GB
+    SubscriptionTier.BUSINESS: 5 * 1024,  # 5 GB
+    SubscriptionTier.ENTERPRISE: 15 * 1024,  # 15 GB
+}
+
 
 class UsageWindow(BaseModel):
     """Usage within a single time window."""
@@ -445,6 +453,13 @@ async def get_user_tier(user_id: str) -> SubscriptionTier:
 # never need to reach into the private ``_fetch_user_tier``.
 get_user_tier.cache_clear = _fetch_user_tier.cache_clear  # type: ignore[attr-defined]
 get_user_tier.cache_delete = _fetch_user_tier.cache_delete  # type: ignore[attr-defined]
+
+
+async def get_workspace_storage_limit_bytes(user_id: str) -> int:
+    """Return the workspace storage cap in bytes for the user's subscription tier."""
+    tier = await get_user_tier(user_id)
+    mb = TIER_WORKSPACE_STORAGE_MB.get(tier, TIER_WORKSPACE_STORAGE_MB[DEFAULT_TIER])
+    return mb * 1024 * 1024
 
 
 async def set_user_tier(user_id: str, tier: SubscriptionTier) -> None:

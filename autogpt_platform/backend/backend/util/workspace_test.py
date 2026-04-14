@@ -88,6 +88,11 @@ async def test_write_file_no_overwrite_unique_violation_raises_and_cleans_up(
         ),
         patch("backend.util.workspace.workspace_db", return_value=mock_db),
         patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=250 * 1024 * 1024,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=0),
     ):
         with pytest.raises(ValueError, match="File already exists"):
             await manager.write_file(
@@ -115,6 +120,11 @@ async def test_write_file_overwrite_conflict_then_retry_succeeds(
         ),
         patch("backend.util.workspace.workspace_db", return_value=mock_db),
         patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=250 * 1024 * 1024,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=0),
         patch.object(manager, "delete_file", new_callable=AsyncMock) as mock_delete,
     ):
         result = await manager.write_file(
@@ -148,6 +158,11 @@ async def test_write_file_overwrite_exhausted_retries_raises_and_cleans_up(
         ),
         patch("backend.util.workspace.workspace_db", return_value=mock_db),
         patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=250 * 1024 * 1024,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=0),
         patch.object(manager, "delete_file", new_callable=AsyncMock),
     ):
         with pytest.raises(ValueError, match="Unable to overwrite.*concurrent write"):

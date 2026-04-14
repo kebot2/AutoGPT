@@ -12,8 +12,9 @@ from typing import Optional
 
 from prisma.errors import UniqueViolationError
 
+from backend.copilot.rate_limit import get_workspace_storage_limit_bytes
 from backend.data.db_accessors import workspace_db
-from backend.data.workspace import WorkspaceFile
+from backend.data.workspace import WorkspaceFile, get_workspace_total_size
 from backend.util.settings import Config
 from backend.util.virus_scanner import scan_content_safe
 from backend.util.workspace_storage import compute_file_checksum, get_workspace_storage
@@ -183,6 +184,22 @@ class WorkspaceManager:
             raise ValueError(
                 f"File too large: {len(content)} bytes exceeds "
                 f"{Config().max_file_size_mb}MB limit"
+            )
+
+        # Enforce per-user workspace storage quota (tier-based).
+        storage_limit = await get_workspace_storage_limit_bytes(self.user_id)
+        current_usage = await get_workspace_total_size(self.workspace_id)
+        if current_usage + len(content) > storage_limit:
+            used_pct = (current_usage / storage_limit) * 100
+            raise ValueError(
+                f"Storage limit exceeded: {current_usage:,} bytes used "
+                f"of {storage_limit:,} bytes ({used_pct:.1f}%)"
+            )
+        if storage_limit and (current_usage + len(content)) / storage_limit >= 0.8:
+            logger.warning(
+                f"User {self.user_id} workspace storage at "
+                f"{(current_usage + len(content)) / storage_limit * 100:.1f}% "
+                f"({current_usage + len(content)} / {storage_limit} bytes)"
             )
 
         # Scan here — callers must NOT duplicate this scan.
