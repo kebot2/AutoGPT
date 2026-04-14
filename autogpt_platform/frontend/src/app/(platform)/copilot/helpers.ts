@@ -2,7 +2,7 @@ import { getSystemHeaders } from "@/lib/impersonation";
 import { getWebSocketToken } from "@/lib/supabase/actions";
 import type { UIMessage } from "ai";
 
-import { environment } from "@/services/environment";
+import { deleteV2DisconnectSessionStream } from "@/app/api/__generated__/endpoints/chat/chat";
 
 export const ORIGINAL_TITLE = "AutoGPT";
 
@@ -163,14 +163,7 @@ export function shouldSuppressDuplicateSend(
  * eventually clean up on its own.
  */
 export function disconnectSessionStream(sessionId: string): void {
-  getCopilotAuthHeaders()
-    .then((headers) =>
-      fetch(
-        `${environment.getAGPTServerBaseUrl()}/api/chat/sessions/${sessionId}/stream`,
-        { method: "DELETE", headers },
-      ),
-    )
-    .catch(() => {});
+  deleteV2DisconnectSessionStream(sessionId).catch(() => {});
 }
 
 /**
