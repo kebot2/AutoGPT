@@ -33,6 +33,7 @@ from backend.data.model import (
 from backend.data.notifications import NotificationEventModel, RefundRequestData
 from backend.data.user import get_user_by_id, get_user_email_by_id
 from backend.notifications.notifications import queue_notification_async
+from backend.util.cache import cached
 from backend.util.exceptions import InsufficientBalanceError
 from backend.util.feature_flag import Flag, get_feature_flag_value, is_feature_enabled
 from backend.util.json import SafeJson, dumps
@@ -1347,8 +1348,14 @@ async def get_auto_top_up(user_id: str) -> AutoTopUpConfig:
     return AutoTopUpConfig.model_validate(user.top_up_config)
 
 
+@cached(ttl_seconds=60, maxsize=8)
 async def get_subscription_price_id(tier: SubscriptionTier) -> str | None:
-    """Return Stripe Price ID for a tier from LaunchDarkly. None = not configured."""
+    """Return Stripe Price ID for a tier from LaunchDarkly, cached for 60 seconds.
+
+    Price IDs are LaunchDarkly flag values that change only at deploy time.
+    Caching for 60 seconds avoids hitting the LD SDK on every webhook delivery
+    and every GET /credits/subscription page load (called 2x per request).
+    """
     flag_map = {
         SubscriptionTier.PRO: Flag.STRIPE_PRICE_PRO,
         SubscriptionTier.BUSINESS: Flag.STRIPE_PRICE_BUSINESS,
@@ -1439,6 +1446,25 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
     if not user:
         logger.warning(
             "sync_subscription_from_stripe: no user for customer %s", customer_id
+        )
+        return
+    # Cross-check: if the subscription carries a metadata.user_id (set during
+    # Checkout Session creation), verify it matches the user we found via
+    # stripeCustomerId.  A mismatch indicates a customer↔user mapping
+    # inconsistency — updating the wrong user's tier would be a data-corruption
+    # bug, so we log loudly and bail out.  Absence of metadata.user_id (e.g.
+    # subscriptions created outside the Checkout flow) is not an error — we
+    # simply skip the check and proceed with the customer-ID-based lookup.
+    metadata = stripe_subscription.get("metadata") or {}
+    metadata_user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+    if metadata_user_id and metadata_user_id != user.id:
+        logger.error(
+            "sync_subscription_from_stripe: metadata.user_id=%s does not match"
+            " user.id=%s found via stripeCustomerId=%s — refusing to update tier"
+            " to avoid corrupting the wrong user's subscription state",
+            metadata_user_id,
+            user.id,
+            customer_id,
         )
         return
     # ENTERPRISE tiers are admin-managed. Never let a Stripe webhook flip an

@@ -790,3 +790,114 @@ async def test_cancel_stripe_subscription_raises_on_cancel_error():
     ):
         with pytest.raises(stripe_mod.StripeError):
             await cancel_stripe_subscription("user-1")
+
+
+@pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_metadata_user_id_matches():
+    """metadata.user_id matching the DB user is accepted and the tier is updated normally."""
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.FREE)
+    stripe_sub = {
+        "id": "sub_new",
+        "customer": "cus_123",
+        "status": "active",
+        "metadata": {"user_id": "user-1"},
+        "items": {"data": [{"price": {"id": "price_pro_monthly"}}]},
+    }
+
+    async def mock_price_id(tier: SubscriptionTier) -> str | None:
+        return "price_pro_monthly" if tier == SubscriptionTier.PRO else None
+
+    empty_list = MagicMock()
+    empty_list.data = []
+    empty_list.has_more = False
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.get_subscription_price_id",
+            side_effect=mock_price_id,
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            return_value=empty_list,
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
+        ) as mock_set,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        mock_set.assert_awaited_once_with("user-1", SubscriptionTier.PRO)
+
+
+@pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_metadata_user_id_mismatch_blocked():
+    """metadata.user_id mismatching the DB user must block the tier update.
+
+    A customer↔user mapping inconsistency (e.g. a customer ID reassigned or
+    a corrupted DB row) must never silently update the wrong user's tier.
+    """
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.FREE)
+    stripe_sub = {
+        "id": "sub_new",
+        "customer": "cus_123",
+        "status": "active",
+        "metadata": {"user_id": "user-different"},
+        "items": {"data": [{"price": {"id": "price_pro_monthly"}}]},
+    }
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
+        ) as mock_set,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        # Mismatch → must not update any tier
+        mock_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_no_metadata_user_id_skips_check():
+    """Absence of metadata.user_id (e.g. subs created outside Checkout) skips the cross-check."""
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.FREE)
+    stripe_sub = {
+        "id": "sub_new",
+        "customer": "cus_123",
+        "status": "active",
+        "items": {"data": [{"price": {"id": "price_pro_monthly"}}]},
+        # No "metadata" key at all
+    }
+
+    async def mock_price_id(tier: SubscriptionTier) -> str | None:
+        return "price_pro_monthly" if tier == SubscriptionTier.PRO else None
+
+    empty_list = MagicMock()
+    empty_list.data = []
+    empty_list.has_more = False
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.get_subscription_price_id",
+            side_effect=mock_price_id,
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            return_value=empty_list,
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier", new_callable=AsyncMock
+        ) as mock_set,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        # No metadata → cross-check skipped → tier updated normally
+        mock_set.assert_awaited_once_with("user-1", SubscriptionTier.PRO)

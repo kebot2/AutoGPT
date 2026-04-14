@@ -50,6 +50,7 @@ export function SubscriptionTierSection() {
     isPending,
     pendingTier,
     changeTier,
+    handleTierChange,
   } = useSubscriptionTierSection();
   const [confirmDowngradeTo, setConfirmDowngradeTo] = useState<string | null>(
     null,
@@ -101,16 +102,6 @@ export function SubscriptionTierSection() {
         </div>
       </div>
     );
-  }
-
-  function handleTierChange(tierKey: string) {
-    const currentIdx = TIER_ORDER.indexOf(currentTier);
-    const targetIdx = TIER_ORDER.indexOf(tierKey);
-    if (targetIdx < currentIdx) {
-      setConfirmDowngradeTo(tierKey);
-      return;
-    }
-    void changeTier(tierKey);
   }
 
   async function confirmDowngrade() {
@@ -177,7 +168,13 @@ export function SubscriptionTierSection() {
                   className="w-full"
                   variant={isUpgrade ? "default" : "outline"}
                   disabled={isPending}
-                  onClick={() => handleTierChange(tier.key)}
+                  onClick={() =>
+                    handleTierChange(
+                      tier.key,
+                      currentTier,
+                      setConfirmDowngradeTo,
+                    )
+                  }
                 >
                   {isThisPending
                     ? "Updating..."

@@ -10,6 +10,8 @@ import { useToast } from "@/components/molecules/Toast/use-toast";
 
 export type SubscriptionStatus = SubscriptionStatusResponse;
 
+const TIER_ORDER = ["FREE", "PRO", "BUSINESS", "ENTERPRISE"];
+
 export function useSubscriptionTierSection() {
   const searchParams = useSearchParams();
   const subscriptionStatus = searchParams.get("subscription");
@@ -82,6 +84,20 @@ export function useSubscriptionTierSection() {
     }
   }
 
+  function handleTierChange(
+    targetTierKey: string,
+    currentTier: string,
+    onConfirmDowngrade: (tier: string) => void,
+  ) {
+    const currentIdx = TIER_ORDER.indexOf(currentTier);
+    const targetIdx = TIER_ORDER.indexOf(targetTierKey);
+    if (targetIdx < currentIdx) {
+      onConfirmDowngrade(targetTierKey);
+      return;
+    }
+    void changeTier(targetTierKey);
+  }
+
   const pendingTier =
     isPending && variables?.data?.tier ? variables.data.tier : null;
 
@@ -93,5 +109,6 @@ export function useSubscriptionTierSection() {
     isPending,
     pendingTier,
     changeTier,
+    handleTierChange,
   };
 }
