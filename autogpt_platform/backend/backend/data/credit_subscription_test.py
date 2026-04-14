@@ -12,6 +12,7 @@ from prisma.models import User
 from backend.data.credit import (
     cancel_stripe_subscription,
     create_subscription_checkout,
+    handle_subscription_payment_failure,
     set_subscription_tier,
     sync_subscription_from_stripe,
 )
@@ -930,3 +931,60 @@ async def test_sync_subscription_from_stripe_no_metadata_user_id_skips_check():
         await sync_subscription_from_stripe(stripe_sub)
         # No metadata → cross-check skipped → tier updated normally
         mock_set.assert_awaited_once_with("user-1", SubscriptionTier.PRO)
+
+
+@pytest.mark.asyncio
+async def test_handle_subscription_payment_failure_balance_covers_pays_invoice():
+    """When balance covers the invoice, Stripe Invoice.pay is called to stop retries."""
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.PRO)
+    invoice = {
+        "id": "in_abc123",
+        "customer": "cus_123",
+        "subscription": "sub_abc123",
+        "amount_due": 2000,
+    }
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.UserCredit._add_transaction",
+            new_callable=AsyncMock,
+        ),
+        patch("backend.data.credit.stripe.Invoice.pay") as mock_pay,
+    ):
+        await handle_subscription_payment_failure(invoice)
+        mock_pay.assert_called_once_with("in_abc123")
+
+
+@pytest.mark.asyncio
+async def test_handle_subscription_payment_failure_invoice_pay_error_does_not_raise():
+    """Failure to mark the invoice as paid is logged but does not propagate."""
+    import stripe as stripe_mod
+
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.PRO)
+    invoice = {
+        "id": "in_abc123",
+        "customer": "cus_123",
+        "subscription": "sub_abc123",
+        "amount_due": 2000,
+    }
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.UserCredit._add_transaction",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "backend.data.credit.stripe.Invoice.pay",
+            side_effect=stripe_mod.StripeError("network error"),
+        ),
+    ):
+        # Must not raise — the pay failure is only logged as a warning
+        await handle_subscription_payment_failure(invoice)

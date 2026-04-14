@@ -1666,9 +1666,8 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
 
     Tries to cover the invoice amount from the user's credit balance.
 
-    - Balance sufficient  → deduct from balance, leave Stripe sub intact so the
-      user keeps their tier. Stripe will not retry the failed invoice; the sub
-      continues to the next billing cycle normally.
+    - Balance sufficient  → deduct from balance, then pay the Stripe invoice so
+      Stripe stops retrying it. The sub stays intact and the user keeps their tier.
     - Balance insufficient → cancel Stripe sub immediately, downgrade to FREE.
       Cancelling here avoids further Stripe retries on an invoice we cannot cover.
     """
@@ -1699,6 +1698,7 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
 
     amount_due: int = invoice.get("amount_due", 0)
     sub_id: str = invoice.get("subscription", "")
+    invoice_id: str = invoice.get("id", "")
 
     if amount_due <= 0:
         logger.info(
@@ -1724,14 +1724,25 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
                 }
             ),
         )
-        # Balance covered the invoice — leave the Stripe subscription intact.
-        # Cancelling it would fire customer.subscription.deleted which would
-        # downgrade the user to FREE despite us having just covered the cost.
+        # Balance covered the invoice. Pay the Stripe invoice so Stripe's dunning
+        # system stops retrying it — without this call Stripe would retry automatically
+        # and re-trigger this webhook, causing double-deductions each retry cycle.
+        if invoice_id:
+            try:
+                await run_in_threadpool(stripe.Invoice.pay, invoice_id)
+            except stripe.StripeError:
+                logger.warning(
+                    "handle_subscription_payment_failure: balance deducted for user"
+                    " %s but failed to mark invoice %s as paid; Stripe may retry",
+                    user.id,
+                    invoice_id,
+                )
         logger.info(
             "handle_subscription_payment_failure: deducted %d cents from balance"
-            " for user %s; Stripe sub %s left intact, tier preserved",
+            " for user %s; Stripe invoice %s paid, sub %s intact, tier preserved",
             amount_due,
             user.id,
+            invoice_id,
             sub_id,
         )
     except InsufficientBalanceError:
