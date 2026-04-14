@@ -1619,10 +1619,12 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
     """Handle a failed Stripe subscription payment.
 
     Tries to cover the invoice amount from the user's credit balance.
-    Either way the Stripe subscription is cancelled so Stripe stops retrying.
 
-    - Balance sufficient  → deduct, cancel Stripe sub, keep tier.
-    - Balance insufficient → cancel Stripe sub, downgrade to FREE immediately.
+    - Balance sufficient  → deduct from balance, leave Stripe sub intact so the
+      user keeps their tier. Stripe will not retry the failed invoice; the sub
+      continues to the next billing cycle normally.
+    - Balance insufficient → cancel Stripe sub immediately, downgrade to FREE.
+      Cancelling here avoids further Stripe retries on an invoice we cannot cover.
     """
     customer_id = invoice.get("customer")
     if not customer_id:
@@ -1676,14 +1678,18 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
                 }
             ),
         )
+        # Balance covered the invoice — leave the Stripe subscription intact.
+        # Cancelling it would fire customer.subscription.deleted which would
+        # downgrade the user to FREE despite us having just covered the cost.
         logger.info(
             "handle_subscription_payment_failure: deducted %d cents from balance"
-            " for user %s; cancelling Stripe sub %s to prevent further retries",
+            " for user %s; Stripe sub %s left intact, tier preserved",
             amount_due,
             user.id,
             sub_id,
         )
     except InsufficientBalanceError:
+        # Balance insufficient — cancel immediately and downgrade to FREE.
         logger.info(
             "handle_subscription_payment_failure: insufficient balance for user %s;"
             " downgrading to FREE and cancelling Stripe sub %s",
@@ -1691,20 +1697,16 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
             sub_id,
         )
         await set_subscription_tier(user.id, SubscriptionTier.FREE)
-
-    # Cancel the Stripe subscription regardless — if balance covered it we don't
-    # want Stripe to retry next month; if balance was insufficient the user is
-    # already downgraded and the sub must go.
-    try:
-        await _cancel_customer_subscriptions(customer_id)
-    except stripe.StripeError:
-        logger.warning(
-            "handle_subscription_payment_failure: failed to cancel Stripe sub %s"
-            " for user %s (customer %s); Stripe may continue retrying",
-            sub_id,
-            user.id,
-            customer_id,
-        )
+        try:
+            await _cancel_customer_subscriptions(customer_id)
+        except stripe.StripeError:
+            logger.warning(
+                "handle_subscription_payment_failure: failed to cancel Stripe sub %s"
+                " for user %s (customer %s); Stripe may continue retrying",
+                sub_id,
+                user.id,
+                customer_id,
+            )
 
 
 async def admin_get_user_history(
