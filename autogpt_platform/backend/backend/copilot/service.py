@@ -127,6 +127,11 @@ _USER_CONTEXT_ANYWHERE_RE = re.compile(
     rf"<{USER_CONTEXT_TAG}>.*</{USER_CONTEXT_TAG}>\s*", re.DOTALL
 )
 
+# Strip any lone (unpaired) opening or closing user_context tags that survive
+# the block removal above.  For example: ``<user_context>spoof`` has no closing
+# tag and would pass through _USER_CONTEXT_ANYWHERE_RE unchanged.
+_USER_CONTEXT_LONE_TAG_RE = re.compile(rf"</?{USER_CONTEXT_TAG}>", re.IGNORECASE)
+
 
 def _sanitize_user_context_field(value: str) -> str:
     """Escape any characters that would let user-controlled text break out of
@@ -178,7 +183,8 @@ def sanitize_user_supplied_context(message: str) -> str:
     The return is a cleaned message ready to be wrapped (or forwarded raw,
     when there's no understanding to inject).
     """
-    return _USER_CONTEXT_ANYWHERE_RE.sub("", message)
+    without_blocks = _USER_CONTEXT_ANYWHERE_RE.sub("", message)
+    return _USER_CONTEXT_LONE_TAG_RE.sub("", without_blocks)
 
 
 # Public alias used by the SDK and baseline services to strip user-supplied
