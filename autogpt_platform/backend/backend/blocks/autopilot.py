@@ -413,7 +413,10 @@ class AutoPilotBlock(Block):
             raise
         except Exception as exc:
             yield "session_id", sid
-            yield "error", str(exc)
+            # Recovery enqueue must happen BEFORE yielding "error": the block
+            # framework (_base.execute) raises BlockExecutionError immediately
+            # when it sees ("error", ...) and stops consuming the generator,
+            # so any code after that yield is dead code in production.
             if not _is_deliberate_block(exc):
                 effective_prompt = input_data.prompt
                 if input_data.system_context:
@@ -428,12 +431,18 @@ class AutoPilotBlock(Block):
                         effective_prompt,
                         input_data.dry_run or execution_context.dry_run,
                     )
+                except asyncio.CancelledError:
+                    # Task cancelled during recovery — still yield the error
+                    # so the session_id + error pair is visible before re-raising.
+                    yield "error", str(exc)
+                    raise
                 except Exception:
                     logger.warning(
                         "AutoPilot session %s: recovery enqueue raised unexpectedly",
                         sid[:12],
                         exc_info=True,
                     )
+            yield "error", str(exc)
 
 
 # ---------------------------------------------------------------------------

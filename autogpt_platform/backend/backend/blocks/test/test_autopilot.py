@@ -408,3 +408,28 @@ class TestRecoveryEnqueue:
         mock_enqueue.assert_awaited_once()
         positional = mock_enqueue.call_args_list[0][0]
         assert positional[2] == "[System Context: Be concise.]\n\ndo work"
+
+    @pytest.mark.asyncio
+    async def test_recovery_cancelled_error_still_yields_error(self, block):
+        """CancelledError during _enqueue_for_recovery still yields the error output."""
+        block.execute_copilot = AsyncMock(side_effect=RuntimeError("e2b stall"))
+        block.create_session = AsyncMock(return_value="sess-cancel")
+
+        async def _cancelled_enqueue(*args, **kwargs):
+            raise asyncio.CancelledError
+
+        outputs = {}
+        with patch(
+            "backend.blocks.autopilot._enqueue_for_recovery",
+            side_effect=_cancelled_enqueue,
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                async for name, value in block.run(
+                    block.Input(prompt="do work", max_recursion_depth=3),
+                    execution_context=_make_context(),
+                ):
+                    outputs[name] = value
+
+        # error must be yielded even when recovery raises CancelledError
+        assert outputs.get("error") == "e2b stall"
+        assert outputs.get("session_id") == "sess-cancel"
