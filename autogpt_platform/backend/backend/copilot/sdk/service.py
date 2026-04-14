@@ -17,25 +17,6 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-
-# TODO(#12747): Remove this local TypedDict and import SystemPromptPreset
-# from claude_agent_sdk.types once SDK >=0.1.58 is the minimum pin.
-class _SystemPromptPreset(TypedDict):
-    """Local stand-in for the SDK's ``SystemPromptPreset`` (mirrors SDK >=0.1.58).
-
-    Kept only for backwards compat with older SDK pins (e.g. 0.1.45 on dev).
-    Once the minimum SDK version is pinned to >=0.1.58, replace this with a
-    direct import from ``claude_agent_sdk.types``.
-    """
-
-    type: Literal["preset"]
-    preset: Literal["claude_code"]
-    append: str  # always provided by _build_system_prompt_value
-    # NOTE: exclude_dynamic_sections requires claude-agent-sdk >= 0.1.58.
-    # This PR cannot be merged before PR #12747 (SDK upgrade) lands.
-    exclude_dynamic_sections: NotRequired[bool]  # SDK >= 0.1.58 (PR #12747)
-
-
 if TYPE_CHECKING:
     from backend.copilot.permissions import CopilotPermissions
 
@@ -133,6 +114,24 @@ from .tool_adapter import (
 
 logger = logging.getLogger(__name__)
 config = ChatConfig()
+
+
+# TODO(#12747): Remove this local TypedDict and import SystemPromptPreset
+# from claude_agent_sdk.types once SDK >=0.1.58 is the minimum pin.
+class _SystemPromptPreset(TypedDict):
+    """Local stand-in for the SDK's ``SystemPromptPreset`` (mirrors SDK >=0.1.58).
+
+    Kept only for backwards compat with older SDK pins (e.g. 0.1.45 on dev).
+    Once the minimum SDK version is pinned to >=0.1.58, replace this with a
+    direct import from ``claude_agent_sdk.types``.
+    """
+
+    type: Literal["preset"]
+    preset: Literal["claude_code"]
+    append: str  # always provided by _build_system_prompt_value
+    # NOTE: exclude_dynamic_sections requires claude-agent-sdk >= 0.1.58.
+    # This PR cannot be merged before PR #12747 (SDK upgrade) lands.
+    exclude_dynamic_sections: NotRequired[bool]  # SDK >= 0.1.58 (PR #12747)
 
 
 # On context-size errors the SDK query is retried with progressively
