@@ -148,6 +148,14 @@ export function useCopilotStream({
     reconnectTimerRef.current = setTimeout(() => {
       isReconnectScheduledRef.current = false;
       setIsReconnectScheduled(false);
+      // Strip the stale in-progress assistant message before resuming —
+      // the backend replays from "0-0", so keeping it would duplicate parts.
+      setMessages((prev) => {
+        if (prev.length > 0 && prev[prev.length - 1].role === "assistant") {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
       resumeStreamRef.current();
     }, delay);
   }
@@ -428,6 +436,11 @@ export function useCopilotStream({
     prevStreamSessionRef.current = sessionId;
 
     if (prevSid && prevSid !== sessionId) {
+      // Mark BEFORE stopping so the old stream's async onError (which fires
+      // after the abort) sees the flag and short-circuits the reconnect path.
+      // Without this, the AbortError can queue a reconnect against the new
+      // session's `sessionId` (captured in the fresh onError closure).
+      isUserStoppingRef.current = true;
       sdkStopRef.current();
       disconnectSessionStream(prevSid);
     }
@@ -439,7 +452,11 @@ export function useCopilotStream({
     setIsReconnectScheduled(false);
     setRateLimitMessage(null);
     hasShownDisconnectToast.current = false;
-    isUserStoppingRef.current = false;
+    // Reset for the new session. Safe because the async onError from the
+    // aborted stream has already been gated by the `true` set above.
+    if (!(prevSid && prevSid !== sessionId)) {
+      isUserStoppingRef.current = false;
+    }
     lastSubmittedMsgRef.current = null;
     setReconnectExhausted(false);
     setIsSyncing(false);
