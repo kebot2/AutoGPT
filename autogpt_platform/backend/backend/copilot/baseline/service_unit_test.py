@@ -819,7 +819,6 @@ class TestBaselineCostExtraction:
         # response was never assigned so cost extraction must not raise
         assert state.cost_usd is None
 
-
     async def test_cost_estimated_from_tokens_when_header_missing(self):
         """cost_usd is estimated from token counts when x-total-cost is absent."""
         from backend.copilot.baseline.service import (
@@ -1025,6 +1024,7 @@ class TestBaselineCostExtraction:
         # Accumulators hold all tokens across both turns
         assert state.turn_prompt_tokens == 2100
         assert state.turn_completion_tokens == 500
+
 
 class TestMidLoopPendingFlushOrdering:
     """Regression test for the mid-loop pending drain ordering invariant.

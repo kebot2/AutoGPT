@@ -37,7 +37,6 @@ class TestUsdToMicrodollars:
     def test_positive_value(self):
         assert usd_to_microdollars(0.001) == 1000
 
-
     def test_large_value(self):
         assert usd_to_microdollars(1.0) == 1_000_000
 
