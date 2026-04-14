@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from backend.copilot.model import ChatMessage, ChatSession, append_message_if
+from backend.data.redis_client import get_redis_async
 
 from .base import BaseTool
 from .models import (
@@ -29,9 +30,14 @@ AUTO_APPROVE_CLIENT_SECONDS = 60
 AUTO_APPROVE_SERVER_SECONDS = AUTO_APPROVE_CLIENT_SECONDS
 AUTO_APPROVE_MESSAGE = "Approved. Please build the agent."
 
-# Pending auto-approve tasks keyed by session_id. The dict allows
-# cancel_auto_approve() to look up and cancel the task for a specific
-# session when the user clicks "Modify" in the frontend.
+# Redis key prefix for cross-process cancel signalling. The cancel
+# endpoint (AgentServer process) SETs the key; _run_auto_approve
+# (CoPilotExecutor process) checks it before firing.
+_CANCEL_KEY_PREFIX = "copilot:cancel_auto_approve:"
+_CANCEL_KEY_TTL_SECONDS = AUTO_APPROVE_SERVER_SECONDS + 30
+
+# In-process dict for best-effort cancel when both the cancel call and
+# the asyncio task happen to live in the same process (single-worker).
 _pending_auto_approvals: dict[str, asyncio.Task] = {}
 
 
@@ -77,6 +83,15 @@ async def _run_auto_approve(
     try:
         await asyncio.sleep(AUTO_APPROVE_SERVER_SECONDS)
 
+        # Check the cross-process cancel flag set by cancel_auto_approve().
+        redis = await get_redis_async()
+        if await redis.get(f"{_CANCEL_KEY_PREFIX}{session_id}"):
+            logger.info(
+                "decompose_goal auto-approve skipped (cancelled) for session %s",
+                session_id,
+            )
+            return
+
         approval = ChatMessage(role="user", content=AUTO_APPROVE_MESSAGE)
         result = await append_message_if(
             session_id=session_id,
@@ -117,19 +132,35 @@ async def _run_auto_approve(
         )
 
 
-def cancel_auto_approve(session_id: str) -> bool:
+async def cancel_auto_approve(session_id: str) -> bool:
     """Cancel the pending auto-approve task for a session.
 
     Called by the ``/sessions/{session_id}/cancel-auto-approve`` endpoint
-    when the user clicks "Modify" in the build-plan UI. Returns True if a
-    pending task was found and cancelled, False otherwise.
+    when the user clicks "Modify" in the build-plan UI.
+
+    Uses **two** cancellation channels:
+    1. **Redis flag** (cross-process) — the executor checks this before
+       firing. Works even when the cancel endpoint runs in the AgentServer
+       process and the asyncio task lives in the CoPilotExecutor process.
+    2. **In-process task cancel** (best-effort) — if both happen to share
+       the same process, cancels the asyncio task directly.
     """
+    redis = await get_redis_async()
+    await redis.set(
+        f"{_CANCEL_KEY_PREFIX}{session_id}",
+        "1",
+        ex=_CANCEL_KEY_TTL_SECONDS,
+    )
+    logger.info(
+        "decompose_goal auto-approve cancel flag set for session %s", session_id
+    )
+
+    # Best-effort in-process cancel (no-op if the task is in another process).
     task = _pending_auto_approvals.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
-        logger.info("decompose_goal auto-approve cancelled for session %s", session_id)
-        return True
-    return False
+
+    return True
 
 
 def _schedule_auto_approve(
@@ -145,8 +176,11 @@ def _schedule_auto_approve(
     if not session_id:
         return
     # Cancel any existing pending approval for this session (e.g. if the
-    # LLM called decompose_goal twice in one turn).
-    cancel_auto_approve(session_id)
+    # LLM called decompose_goal twice in one turn). Best-effort in-process
+    # cancel only — skip the async Redis call here to keep scheduling fast.
+    old_task = _pending_auto_approvals.pop(session_id, None)
+    if old_task is not None and not old_task.done():
+        old_task.cancel()
     baseline_index = len(session.messages)
     task = asyncio.create_task(_run_auto_approve(session_id, user_id, baseline_index))
     _pending_auto_approvals[session_id] = task

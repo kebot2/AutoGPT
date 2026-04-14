@@ -381,6 +381,24 @@ def test_predicate_handles_messages_with_none_sequence():
 # ---------------------------------------------------------------------------
 
 
+class _FakeRedisNoCancelFlag:
+    """Stub Redis that reports no cancel flag and ignores writes."""
+
+    async def get(self, key):
+        return None
+
+    async def set(self, key, value, ex=None):
+        pass
+
+
+def _stub_redis():
+    """Patch get_redis_async to return a fake Redis (no real connection)."""
+    return patch(
+        "backend.copilot.tools.decompose_goal.get_redis_async",
+        new=AsyncMock(return_value=_FakeRedisNoCancelFlag()),
+    )
+
+
 @pytest.mark.asyncio
 async def test_auto_approve_fires_when_user_idle():
     """When no user message is appended after the baseline sequence, the
@@ -397,6 +415,7 @@ async def test_auto_approve_fires_when_user_idle():
     fake_create_session = AsyncMock()
 
     with (
+        _stub_redis(),
         patch(
             "backend.copilot.tools.decompose_goal.append_message_if",
             new=fake_append_message_if,
@@ -440,6 +459,7 @@ async def test_auto_approve_skips_when_user_already_acted():
     fake_create_session = AsyncMock()
 
     with (
+        _stub_redis(),
         patch(
             "backend.copilot.tools.decompose_goal.append_message_if",
             new=fake_append_message_if,
@@ -477,6 +497,7 @@ async def test_auto_approve_swallows_unexpected_errors():
         raise RuntimeError("kaboom")
 
     with (
+        _stub_redis(),
         patch(
             "backend.copilot.tools.decompose_goal.append_message_if",
             new=boom,
@@ -538,11 +559,25 @@ def test_schedule_auto_approve_no_op_without_session_id():
 
 
 @pytest.mark.asyncio
-async def test_cancel_auto_approve_cancels_pending_task(monkeypatch):
-    """Calling cancel_auto_approve should cancel the pending task and return True."""
+async def test_cancel_auto_approve_sets_redis_flag_and_cancels_task(monkeypatch):
+    """cancel_auto_approve should set a Redis cancel flag AND cancel the
+    in-process task. Returns True always (Redis flag is authoritative)."""
     monkeypatch.setattr(decompose_goal_module, "AUTO_APPROVE_SERVER_SECONDS", 999)
     fake_run = AsyncMock()
     monkeypatch.setattr(decompose_goal_module, "_run_auto_approve", fake_run)
+
+    captured_redis_calls: list[tuple] = []
+
+    class FakeRedis:
+        async def set(self, key, value, ex=None):
+            captured_redis_calls.append(("set", key, value, ex))
+
+        async def get(self, key):
+            return None
+
+    monkeypatch.setattr(
+        decompose_goal_module, "get_redis_async", AsyncMock(return_value=FakeRedis())
+    )
 
     session = make_session(_USER_ID)
     _REAL_SCHEDULE_AUTO_APPROVE(
@@ -552,11 +587,27 @@ async def test_cancel_auto_approve_cancels_pending_task(monkeypatch):
     )
 
     assert "session-cancel-test" in decompose_goal_module._pending_auto_approvals
-    result = cancel_auto_approve("session-cancel-test")
+    result = await cancel_auto_approve("session-cancel-test")
     assert result is True
     assert "session-cancel-test" not in decompose_goal_module._pending_auto_approvals
+    assert len(captured_redis_calls) == 1
+    assert captured_redis_calls[0][0] == "set"
+    assert "session-cancel-test" in captured_redis_calls[0][1]
 
 
-def test_cancel_auto_approve_returns_false_for_unknown_session():
-    """Cancelling a session with no pending task should return False."""
-    assert cancel_auto_approve("nonexistent-session") is False
+@pytest.mark.asyncio
+async def test_cancel_auto_approve_returns_true_even_without_in_process_task(
+    monkeypatch,
+):
+    """Even if no in-process task exists (e.g. task is in another process),
+    cancel_auto_approve should still set the Redis flag and return True."""
+
+    class FakeRedis:
+        async def set(self, key, value, ex=None):
+            pass
+
+    monkeypatch.setattr(
+        decompose_goal_module, "get_redis_async", AsyncMock(return_value=FakeRedis())
+    )
+    result = await cancel_auto_approve("nonexistent-session")
+    assert result is True
