@@ -60,7 +60,14 @@ const DECOMPOSITION: TaskDecompositionOutput = {
 function makePart(
   state: string,
   output?: unknown,
-): { type: string; toolCallId: string; toolName: string; state: string; input?: unknown; output?: unknown } {
+): {
+  type: string;
+  toolCallId: string;
+  toolName: string;
+  state: string;
+  input?: unknown;
+  output?: unknown;
+} {
   return {
     type: "tool-decompose_goal",
     toolCallId: "call_1",
@@ -93,9 +100,7 @@ describe("DecomposeGoalTool", () => {
         isLastMessage
       />,
     );
-    expect(
-      screen.getByText(/Failed to analyze the goal/i),
-    ).toBeDefined();
+    expect(screen.getByText(/Failed to analyze the goal/i)).toBeDefined();
     expect(screen.getByText("Try again")).toBeDefined();
   });
 
@@ -124,9 +129,7 @@ describe("DecomposeGoalTool", () => {
         isLastMessage
       />,
     );
-    expect(
-      screen.getByText("Please provide at least one step."),
-    ).toBeDefined();
+    expect(screen.getByText("Please provide at least one step.")).toBeDefined();
   });
 
   it("renders the build plan accordion with steps", () => {
@@ -173,9 +176,7 @@ describe("DecomposeGoalTool", () => {
       />,
     );
     expect(screen.queryByText("Modify")).toBeNull();
-    expect(
-      screen.getByText(/Review the plan above and approve/),
-    ).toBeDefined();
+    expect(screen.getByText(/Review the plan above and approve/)).toBeDefined();
   });
 
   it("hides action buttons when requires_approval is false", () => {
@@ -294,7 +295,11 @@ describe("DecomposeGoalTool", () => {
     });
 
     expect(
-      (screen.getAllByPlaceholderText("Step description")[0] as HTMLTextAreaElement).value,
+      (
+        screen.getAllByPlaceholderText(
+          "Step description",
+        )[0] as HTMLTextAreaElement
+      ).value,
     ).toBe("Fetch RSS feed");
   });
 

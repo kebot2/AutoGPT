@@ -181,9 +181,7 @@ describe("buildRenderSegments", () => {
   });
 
   it("does not collapse a single generic tool part", () => {
-    const parts = [
-      toolPart("generic_a", "output-available"),
-    ];
+    const parts = [toolPart("generic_a", "output-available")];
     const segments = buildRenderSegments(parts);
     expect(segments).toHaveLength(1);
     expect(segments[0].kind).toBe("part");
@@ -233,11 +231,9 @@ describe("splitReasoningAndResponse", () => {
   });
 
   it("pins interactive tool parts to response section", () => {
-    const interactiveTool = toolPart(
-      "decompose_goal",
-      "output-available",
-      { type: "task_decomposition" },
-    );
+    const interactiveTool = toolPart("decompose_goal", "output-available", {
+      type: "task_decomposition",
+    });
     const parts = [
       textPart("Thinking..."),
       interactiveTool,
