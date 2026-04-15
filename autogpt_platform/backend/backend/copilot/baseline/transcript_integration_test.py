@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from backend.copilot.baseline.service import (
+    _append_gap_to_builder,
     _load_prior_transcript,
     _record_turn_to_transcript,
     _resolve_baseline_model,
@@ -654,3 +655,101 @@ class TestTranscriptLifecycle:
                 is False
             )
             upload_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _append_gap_to_builder
+# ---------------------------------------------------------------------------
+
+
+class TestAppendGapToBuilder:
+    """``_append_gap_to_builder`` converts ChatMessage objects to TranscriptBuilder entries."""
+
+    def test_user_message_appended(self):
+        builder = TranscriptBuilder()
+        msgs = [ChatMessage(role="user", content="hello")]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 1
+        assert builder.last_entry_type == "user"
+
+    def test_assistant_text_message_appended(self):
+        builder = TranscriptBuilder()
+        msgs = [
+            ChatMessage(role="user", content="q"),
+            ChatMessage(role="assistant", content="answer"),
+        ]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 2
+        assert builder.last_entry_type == "assistant"
+        assert "answer" in builder.to_jsonl()
+
+    def test_assistant_with_tool_calls_appended(self):
+        """Assistant tool_calls are recorded as tool_use blocks in the transcript."""
+        builder = TranscriptBuilder()
+        tool_call = {
+            "id": "tc-1",
+            "type": "function",
+            "function": {"name": "my_tool", "arguments": '{"key":"val"}'},
+        }
+        msgs = [ChatMessage(role="assistant", content=None, tool_calls=[tool_call])]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 1
+        jsonl = builder.to_jsonl()
+        assert "tool_use" in jsonl
+        assert "my_tool" in jsonl
+        assert "tc-1" in jsonl
+
+    def test_assistant_invalid_json_args_uses_empty_dict(self):
+        """Malformed JSON in tool_call arguments falls back to {}."""
+        builder = TranscriptBuilder()
+        tool_call = {
+            "id": "tc-bad",
+            "type": "function",
+            "function": {"name": "bad_tool", "arguments": "not-json"},
+        }
+        msgs = [ChatMessage(role="assistant", content=None, tool_calls=[tool_call])]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 1
+        jsonl = builder.to_jsonl()
+        assert '"input":{}' in jsonl
+
+    def test_assistant_empty_content_and_no_tools_uses_fallback(self):
+        """Assistant with no content and no tool_calls gets a fallback empty text block."""
+        builder = TranscriptBuilder()
+        msgs = [ChatMessage(role="assistant", content=None)]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 1
+        jsonl = builder.to_jsonl()
+        assert "text" in jsonl
+
+    def test_tool_role_with_tool_call_id_appended(self):
+        """Tool result messages are appended when tool_call_id is set."""
+        builder = TranscriptBuilder()
+        # Need a preceding assistant tool_use entry
+        builder.append_user("use tool")
+        builder.append_assistant(
+            content_blocks=[
+                {"type": "tool_use", "id": "tc-1", "name": "my_tool", "input": {}}
+            ]
+        )
+        msgs = [ChatMessage(role="tool", tool_call_id="tc-1", content="result")]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 3
+        assert "tool_result" in builder.to_jsonl()
+
+    def test_tool_role_without_tool_call_id_skipped(self):
+        """Tool messages without tool_call_id are silently skipped."""
+        builder = TranscriptBuilder()
+        msgs = [ChatMessage(role="tool", tool_call_id=None, content="orphan")]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 0
+
+    def test_tool_call_missing_function_key_uses_unknown_name(self):
+        """A tool_call dict with no 'function' key uses 'unknown' as the tool name."""
+        builder = TranscriptBuilder()
+        # Tool call dict exists but 'function' sub-dict is missing entirely
+        msgs = [ChatMessage(role="assistant", content=None, tool_calls=[{"id": "tc-x"}])]
+        _append_gap_to_builder(msgs, builder)
+        assert builder.entry_count == 1
+        jsonl = builder.to_jsonl()
+        assert "unknown" in jsonl

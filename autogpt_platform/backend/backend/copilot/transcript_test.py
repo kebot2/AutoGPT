@@ -830,6 +830,41 @@ class TestUploadCliSession:
         # delete should be called once for the meta rollback
         mock_storage.delete.assert_called_once()
 
+    def test_baseline_mode_stored_in_meta(self):
+        """upload_transcript with mode='baseline' stores mode in companion meta.json."""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import upload_transcript
+
+        mock_storage = AsyncMock()
+        content = b'{"type":"assistant"}\n'
+
+        with patch(
+            "backend.copilot.transcript.get_workspace_storage",
+            new_callable=AsyncMock,
+            return_value=mock_storage,
+        ):
+            asyncio.run(
+                upload_transcript(
+                    user_id="user-1",
+                    session_id="12345678-0000-0000-0000-000000000098",
+                    content=content,
+                    message_count=4,
+                    mode="baseline",
+                )
+            )
+
+        meta_call = next(
+            c
+            for c in mock_storage.store.call_args_list
+            if c.kwargs.get("filename", "").endswith(".meta.json")
+        )
+        meta_content = json.loads(meta_call.kwargs["content"])
+        assert meta_content["mode"] == "baseline"
+        assert meta_content["message_count"] == 4
+
 
 class TestRestoreCliSession:
     def test_returns_none_when_file_not_found_in_storage(self):
@@ -949,6 +984,127 @@ class TestRestoreCliSession:
             )
 
         assert result is None
+
+    def test_baseline_mode_in_meta_returned(self):
+        """When meta.json contains mode='baseline', result.mode is 'baseline'."""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import download_transcript
+
+        content = b'{"type":"assistant"}\n'
+        meta_bytes = json.dumps(
+            {"message_count": 3, "mode": "baseline", "uploaded_at": 0.0}
+        ).encode()
+
+        mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [content, meta_bytes]
+
+        with patch(
+            "backend.copilot.transcript.get_workspace_storage",
+            new_callable=AsyncMock,
+            return_value=mock_storage,
+        ):
+            result = asyncio.run(
+                download_transcript(
+                    user_id="user-1",
+                    session_id="12345678-0000-0000-0000-000000000020",
+                )
+            )
+
+        assert isinstance(result, TranscriptDownload)
+        assert result.mode == "baseline"
+        assert result.message_count == 3
+
+    def test_invalid_mode_in_meta_defaults_to_sdk(self):
+        """Unknown mode value in meta.json falls back to 'sdk'."""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import download_transcript
+
+        content = b'{"type":"assistant"}\n'
+        meta_bytes = json.dumps(
+            {"message_count": 2, "mode": "unknown_mode"}
+        ).encode()
+
+        mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [content, meta_bytes]
+
+        with patch(
+            "backend.copilot.transcript.get_workspace_storage",
+            new_callable=AsyncMock,
+            return_value=mock_storage,
+        ):
+            result = asyncio.run(
+                download_transcript(
+                    user_id="user-1",
+                    session_id="12345678-0000-0000-0000-000000000021",
+                )
+            )
+
+        assert isinstance(result, TranscriptDownload)
+        assert result.mode == "sdk"
+
+    def test_invalid_utf8_meta_uses_defaults(self):
+        """Meta bytes that fail UTF-8 decode fall back to message_count=0, mode='sdk'."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import download_transcript
+
+        content = b'{"type":"assistant"}\n'
+        bad_meta = b"\xff\xfe"
+
+        mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [content, bad_meta]
+
+        with patch(
+            "backend.copilot.transcript.get_workspace_storage",
+            new_callable=AsyncMock,
+            return_value=mock_storage,
+        ):
+            result = asyncio.run(
+                download_transcript(
+                    user_id="user-1",
+                    session_id="12345678-0000-0000-0000-000000000022",
+                )
+            )
+
+        assert isinstance(result, TranscriptDownload)
+        assert result.message_count == 0
+        assert result.mode == "sdk"
+
+    def test_meta_fetch_exception_uses_defaults(self):
+        """Non-FileNotFoundError on meta fetch still returns content with defaults."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import download_transcript
+
+        content = b'{"type":"assistant"}\n'
+
+        mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [content, RuntimeError("meta unavailable")]
+
+        with patch(
+            "backend.copilot.transcript.get_workspace_storage",
+            new_callable=AsyncMock,
+            return_value=mock_storage,
+        ):
+            result = asyncio.run(
+                download_transcript(
+                    user_id="user-1",
+                    session_id="12345678-0000-0000-0000-000000000023",
+                )
+            )
+
+        assert isinstance(result, TranscriptDownload)
+        assert result.content == content
+        assert result.message_count == 0
+        assert result.mode == "sdk"
 
 
 # ---------------------------------------------------------------------------
