@@ -13,6 +13,7 @@ import { ChangeEvent, useEffect, useState } from "react";
 import { AttachmentMenu } from "./components/AttachmentMenu";
 import { DryRunToggleButton } from "./components/DryRunToggleButton";
 import { FileChips } from "./components/FileChips";
+import { ModelToggleButton } from "./components/ModelToggleButton";
 import { ModeToggleButton } from "./components/ModeToggleButton";
 import { RecordingButton } from "./components/RecordingButton";
 import { RecordingIndicator } from "./components/RecordingIndicator";
@@ -50,8 +51,14 @@ export function ChatInput({
   onDroppedFilesConsumed,
   hasSession = false,
 }: Props) {
-  const { copilotMode, setCopilotMode, isDryRun, setIsDryRun } =
-    useCopilotUIStore();
+  const {
+    copilotMode,
+    setCopilotMode,
+    copilotModel,
+    setCopilotLlmModel,
+    isDryRun,
+    setIsDryRun,
+  } = useCopilotUIStore();
   const showModeToggle = useGetFlag(Flag.CHAT_MODE_OPTION);
   const showDryRunToggle = showModeToggle;
   const [files, setFiles] = useState<File[]>([]);
@@ -69,6 +76,21 @@ export function ChatInput({
         next === "fast"
           ? "Optimized for speed — ideal for simpler tasks."
           : "Responses may take longer.",
+    });
+  }
+
+  function handleToggleModel() {
+    const next = copilotModel === "advanced" ? "standard" : "advanced";
+    setCopilotLlmModel(next);
+    toast({
+      title:
+        next === "advanced"
+          ? "Switched to Advanced model"
+          : "Switched to Standard model",
+      description:
+        next === "advanced"
+          ? "Using the highest-capability model."
+          : "Using the balanced standard model.",
     });
   }
 
@@ -200,6 +222,12 @@ export function ChatInput({
               <ModeToggleButton
                 mode={copilotMode}
                 onToggle={handleToggleMode}
+              />
+            )}
+            {showModeToggle && !isStreaming && (
+              <ModelToggleButton
+                model={copilotModel}
+                onToggle={handleToggleModel}
               />
             )}
             {showDryRunToggle && (!hasSession || isDryRun) && (

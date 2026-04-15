@@ -43,6 +43,7 @@ export function useCopilotPage() {
     isDrawerOpen,
     setDrawerOpen,
     copilotMode,
+    copilotModel,
     isDryRun,
   } = useCopilotUIStore();
 
@@ -79,6 +80,7 @@ export function useCopilotPage() {
     hasActiveStream,
     refetchSession,
     copilotMode: isModeToggleEnabled ? copilotMode : undefined,
+    copilotModel: isModeToggleEnabled ? copilotModel : undefined,
   });
 
   const { olderMessages, hasMore, isLoadingMore, loadMore } =

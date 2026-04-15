@@ -52,6 +52,9 @@ export const DEFAULT_PANEL_WIDTH = 600;
 /** Autopilot response mode. */
 export type CopilotMode = "extended_thinking" | "fast";
 
+/** Per-request model tier. 'standard' = current default; 'advanced' = highest-capability. */
+export type CopilotLlmModel = "standard" | "advanced";
+
 const isClient = typeof window !== "undefined";
 
 function getPersistedWidth(): number {
@@ -130,6 +133,10 @@ interface CopilotUIState {
   /** Autopilot mode: 'extended_thinking' (default) or 'fast'. */
   copilotMode: CopilotMode;
   setCopilotMode: (mode: CopilotMode) => void;
+
+  /** Model tier: 'standard' (default) or 'advanced' (highest-capability). */
+  copilotModel: CopilotLlmModel;
+  setCopilotLlmModel: (model: CopilotLlmModel) => void;
 
   /** Developer dry-run mode: sessions created with dry_run=true. */
   isDryRun: boolean;
@@ -280,6 +287,15 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
     set({ copilotMode: mode });
   },
 
+  copilotModel: (() => {
+    const saved = isClient ? storage.get(Key.COPILOT_MODEL) : null;
+    return saved === "advanced" ? "advanced" : "standard";
+  })(),
+  setCopilotLlmModel: (model) => {
+    storage.set(Key.COPILOT_MODEL, model);
+    set({ copilotModel: model });
+  },
+
   isDryRun: isClient && storage.get(Key.COPILOT_DRY_RUN) === "true",
   setIsDryRun: (enabled) => {
     if (enabled) {
@@ -299,6 +315,7 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
     storage.clean(Key.COPILOT_ARTIFACT_PANEL_WIDTH);
     storage.clean(Key.COPILOT_COMPLETED_SESSIONS);
     storage.clean(Key.COPILOT_DRY_RUN);
+    storage.clean(Key.COPILOT_MODEL);
     set({
       completedSessionIDs: new Set<string>(),
       isNotificationsEnabled: false,
@@ -312,6 +329,7 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
         history: [],
       },
       copilotMode: "extended_thinking",
+      copilotModel: "standard",
       isDryRun: false,
     });
     if (isClient) {

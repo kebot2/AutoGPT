@@ -19,6 +19,7 @@ from .service import (
     _is_prompt_too_long,
     _is_tool_only_message,
     _iter_sdk_messages,
+    _normalize_model_name,
     _reduce_context,
     _resolve_user_model_override,
 )
@@ -427,3 +428,44 @@ class TestResolveUserModelOverride:
         with patch("backend.copilot.sdk.service.get_feature_flag_value", new=ld_mock):
             await _resolve_user_model_override("user-abc")
         ld_mock.assert_called_once_with("copilot-model", "user-abc", default=None)
+
+
+# ---------------------------------------------------------------------------
+# _normalize_model_name — used by per-request model override
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeModelName:
+    """Unit tests for the model-name normalisation helper.
+
+    The per-request model toggle calls _normalize_model_name with either
+    ``"anthropic/claude-opus-4-6"`` (for 'advanced') or ``config.model`` (for
+    'standard').  These tests verify the OpenRouter/provider-prefix stripping
+    that keeps the value compatible with the Claude CLI.
+    """
+
+    def test_strips_anthropic_prefix(self):
+        assert _normalize_model_name("anthropic/claude-opus-4-6") == "claude-opus-4-6"
+
+    def test_strips_openai_prefix(self):
+        assert _normalize_model_name("openai/gpt-4o") == "gpt-4o"
+
+    def test_strips_google_prefix(self):
+        assert _normalize_model_name("google/gemini-2.5-flash") == "gemini-2.5-flash"
+
+    def test_already_normalized_unchanged(self):
+        assert (
+            _normalize_model_name("claude-sonnet-4-20250514")
+            == "claude-sonnet-4-20250514"
+        )
+
+    def test_empty_string_unchanged(self):
+        assert _normalize_model_name("") == ""
+
+    def test_opus_model_roundtrip(self):
+        """The exact string used for the 'opus' toggle strips correctly."""
+        assert _normalize_model_name("anthropic/claude-opus-4-6") == "claude-opus-4-6"
+
+    def test_sonnet_openrouter_model(self):
+        """Sonnet model as stored in config (OpenRouter-prefixed) strips cleanly."""
+        assert _normalize_model_name("anthropic/claude-sonnet-4") == "claude-sonnet-4"
