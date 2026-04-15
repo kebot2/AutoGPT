@@ -10,13 +10,13 @@ Scenario table
 | C | True       | stale                | 2 msgs  | 50_000        | gap compressed to budget, prepended        |
 | D | False      | 0                    | N/A     | None          | full session compressed, prepended         |
 | E | False      | 0                    | N/A     | 50_000        | full session compressed to budget          |
-| F | False      | 2 (partial)          | 2 msgs  | None          | ONLY gap prepended (efficient path)        |
-| G | False      | 2 (partial)          | 2 msgs  | 50_000        | gap compressed to budget                   |
-| H | False      | covers all           | empty   | None          | falls through → full session compressed    |
+| F | False      | 2 (partial)          | 2 msgs  | None          | full session compressed (not just gap;     |
+|   |            |                      |         |               | CLI has zero context without --resume)     |
+| G | False      | 2 (partial)          | 2 msgs  | 50_000        | full session compressed to budget          |
+| H | False      | covers all           | empty   | None          | full session compressed                    |
 |   |            |                      |         |               | (NOT bare message — the bug that was fixed)|
 | I | False      | covers all           | empty   | 50_000        | full session compressed to tight budget    |
-| J | False      | 2 (partial)          | yields  | None          | gap yields empty context → full fallback   |
-|   |            |                      | empty   |               |                                            |
+| J | False      | 2 (partial)          | n/a     | None          | exactly ONE compression call (full prior)  |
 
 Compression unit tests
 =======================
