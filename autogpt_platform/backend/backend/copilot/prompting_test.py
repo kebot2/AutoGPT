@@ -16,18 +16,13 @@ class TestGetSdkSupplementStaticPlaceholder:
         importlib.reload(prompting)
 
     def test_local_mode_uses_placeholder_not_uuid(self):
-        result = prompting.get_sdk_supplement(
-            use_e2b=False, cwd="/tmp/copilot-real-uuid"
-        )
+        result = prompting.get_sdk_supplement(use_e2b=False)
         assert "/tmp/copilot-<session-id>" in result
-        assert "real-uuid" not in result
 
     def test_local_mode_is_idempotent(self):
-        first = prompting.get_sdk_supplement(use_e2b=False, cwd="/tmp/a")
-        second = prompting.get_sdk_supplement(use_e2b=False, cwd="/tmp/b")
-        assert (
-            first == second
-        ), "Supplement must be identical regardless of cwd argument"
+        first = prompting.get_sdk_supplement(use_e2b=False)
+        second = prompting.get_sdk_supplement(use_e2b=False)
+        assert first == second, "Supplement must be identical across calls"
 
     def test_e2b_mode_uses_home_user(self):
         result = prompting.get_sdk_supplement(use_e2b=True)

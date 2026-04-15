@@ -334,7 +334,7 @@ def _generate_tool_documentation() -> str:
 _LOCAL_STORAGE_SUPPLEMENT: str | None = None
 
 
-def get_sdk_supplement(use_e2b: bool, cwd: str = "") -> str:
+def get_sdk_supplement(use_e2b: bool) -> str:
     """Get the supplement for SDK mode (Claude Agent SDK).
 
     SDK mode does NOT include tool documentation because Claude automatically
@@ -352,12 +352,10 @@ def get_sdk_supplement(use_e2b: bool, cwd: str = "") -> str:
 
     Args:
         use_e2b: Whether E2B cloud sandbox is being used
-        cwd: Unused — kept for call-site compatibility.
 
     Returns:
         The supplement string to append to the system prompt
     """
-    del cwd  # intentionally unused — see docstring
     if use_e2b:
         return _get_cloud_sandbox_supplement()
     global _LOCAL_STORAGE_SUPPLEMENT

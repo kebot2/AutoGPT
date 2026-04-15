@@ -165,8 +165,8 @@ class TestPromptSupplement:
         from backend.copilot.prompting import get_sdk_supplement
 
         # Test both local and E2B modes
-        local_supplement = get_sdk_supplement(use_e2b=False, cwd="/tmp/test")
-        e2b_supplement = get_sdk_supplement(use_e2b=True, cwd="")
+        local_supplement = get_sdk_supplement(use_e2b=False)
+        e2b_supplement = get_sdk_supplement(use_e2b=True)
 
         # Should NOT have tool list section
         assert "## AVAILABLE TOOLS" not in local_supplement
@@ -237,9 +237,9 @@ class TestPromptSupplement:
         for tool_name, tool in TOOL_REGISTRY.items():
             if not tool.is_available:
                 continue
-            assert (
-                f"`{tool_name}`" in docs
-            ), f"Tool '{tool_name}' missing from baseline supplement"
+            assert f"`{tool_name}`" in docs, (
+                f"Tool '{tool_name}' missing from baseline supplement"
+            )
 
     def test_pause_task_scheduled_before_transcript_upload(self):
         """Pause is scheduled as a background task before transcript upload begins.

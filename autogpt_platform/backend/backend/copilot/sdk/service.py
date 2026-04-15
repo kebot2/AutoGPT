@@ -419,7 +419,7 @@ async def _reduce_context(
     # Subsequent retry or compaction failed: drop transcript entirely.
     # Return retry_target so the caller compresses DB messages to that budget.
     logger.warning(
-        "%s Dropping transcript, rebuilding from DB messages" " (target_tokens=%d)",
+        "%s Dropping transcript, rebuilding from DB messages (target_tokens=%d)",
         log_prefix,
         retry_target,
     )
@@ -1161,7 +1161,7 @@ async def _build_query_message(
         history_context = _format_conversation_context(compressed)
         if history_context:
             logger.info(
-                "[SDK] [%s] Fallback context built: compressed=%s," " context_bytes=%d",
+                "[SDK] [%s] Fallback context built: compressed=%s, context_bytes=%d",
                 session_id[:8],
                 was_compressed,
                 len(history_context),
@@ -2358,7 +2358,7 @@ async def stream_chat_completion_sdk(
         graphiti_supplement = get_graphiti_supplement() if graphiti_enabled else ""
         system_prompt = (
             base_system_prompt
-            + get_sdk_supplement(use_e2b=use_e2b, cwd=sdk_cwd)
+            + get_sdk_supplement(use_e2b=use_e2b)
             + graphiti_supplement
         )
 
