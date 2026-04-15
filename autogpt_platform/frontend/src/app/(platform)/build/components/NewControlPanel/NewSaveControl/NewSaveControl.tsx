@@ -1,29 +1,37 @@
-import React from "react";
+import { Card, CardContent, CardFooter } from "@/components/__legacy__/ui/card";
+import { Form, FormField } from "@/components/__legacy__/ui/form";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/__legacy__/ui/popover";
-import { Card, CardContent, CardFooter } from "@/components/__legacy__/ui/card";
+import { Button } from "@/components/atoms/Button/Button";
+import { Input } from "@/components/atoms/Input/Input";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/atoms/Tooltip/BaseTooltip";
-import { useNewSaveControl } from "./useNewSaveControl";
-import { Form, FormField } from "@/components/__legacy__/ui/form";
-import { ControlPanelButton } from "../ControlPanelButton";
-import { useControlPanelStore } from "../../../stores/controlPanelStore";
 import { FloppyDiskIcon } from "@phosphor-icons/react";
-import { Input } from "@/components/atoms/Input/Input";
-import { Button } from "@/components/atoms/Button/Button";
+import { useControlPanelStore } from "../../../stores/controlPanelStore";
+import { ControlPanelButton } from "../ControlPanelButton";
+import { useNewSaveControl } from "./useNewSaveControl";
 
 export const NewSaveControl = () => {
-  const { form, onSubmit, isLoading, graphVersion } = useNewSaveControl();
-  const { saveControlOpen, setSaveControlOpen } = useControlPanelStore();
+  const { form, isSaving, graphVersion, handleSave } = useNewSaveControl();
+  const { saveControlOpen, setSaveControlOpen, forceOpenSave } =
+    useControlPanelStore();
+
   return (
-    <Popover onOpenChange={setSaveControlOpen}>
-      <Tooltip delayDuration={500}>
+    <Popover
+      onOpenChange={(open) => {
+        if (!forceOpenSave || open) {
+          setSaveControlOpen(open);
+        }
+      }}
+      open={forceOpenSave ? true : saveControlOpen}
+    >
+      <Tooltip delayDuration={100}>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <ControlPanelButton
@@ -32,8 +40,7 @@ export const NewSaveControl = () => {
               selected={saveControlOpen}
               className="rounded-none"
             >
-              {/* Need to find phosphor icon alternative for this lucide icon */}
-              <FloppyDiskIcon className="h-6 w-6" />
+              <FloppyDiskIcon className="size-5" />
             </ControlPanelButton>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -48,7 +55,7 @@ export const NewSaveControl = () => {
       >
         <Card className="border-none dark:bg-slate-900">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)}>
+            <form onSubmit={form.handleSubmit(handleSave)}>
               <CardContent className="p-0">
                 <div className="space-y-3">
                   <FormField
@@ -95,6 +102,7 @@ export const NewSaveControl = () => {
                       value={graphVersion || "-"}
                       disabled
                       data-testid="save-control-version-output"
+                      data-tutorial-id="save-control-version-output"
                       label="Version"
                       wrapperClassName="!mb-0"
                     />
@@ -110,7 +118,8 @@ export const NewSaveControl = () => {
                   className="w-full dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-800"
                   data-id="save-control-save-agent"
                   data-testid="save-control-save-agent-button"
-                  disabled={isLoading}
+                  disabled={isSaving}
+                  loading={isSaving}
                 >
                   Save Agent
                 </Button>

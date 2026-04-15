@@ -1,31 +1,40 @@
-import { useTurnstile } from "@/hooks/useTurnstile";
+import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useSupabase } from "@/lib/supabase/hooks/useSupabase";
+import { environment } from "@/services/environment";
 import { loginFormSchema, LoginProvider } from "@/types/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import z from "zod";
-import { useToast } from "@/components/molecules/Toast/use-toast";
-import { environment } from "@/services/environment";
+import { login as loginAction } from "./actions";
 
 export function useLoginPage() {
-  const { supabase, user, isUserLoading } = useSupabase();
+  const { supabase, user, isUserLoading, isLoggedIn } = useSupabase();
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [captchaKey, setCaptchaKey] = useState(0);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [showNotAllowedModal, setShowNotAllowedModal] = useState(false);
   const isCloudEnv = environment.isCloud();
-  const isVercelPreview = process.env.NEXT_PUBLIC_VERCEL_ENV === "preview";
 
-  const turnstile = useTurnstile({
-    action: "login",
-    autoVerify: false,
-    resetOnError: true,
-  });
+  // Get redirect destination from 'next' query parameter.
+  // Only allow relative paths to prevent open redirect attacks
+  // (e.g., /login?next=https://phishing.site).
+  const rawNext = searchParams.get("next");
+  const nextUrl =
+    rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : null;
+
+  useEffect(() => {
+    if (isLoggedIn && !isLoggingIn) {
+      router.push(nextUrl || "/");
+    }
+  }, [isLoggedIn, isLoggingIn, nextUrl, router]);
 
   const form = useForm<z.infer<typeof loginFormSchema>>({
     resolver: zodResolver(loginFormSchema),
@@ -35,53 +44,33 @@ export function useLoginPage() {
     },
   });
 
-  const resetCaptcha = useCallback(() => {
-    setCaptchaKey((k) => k + 1);
-    turnstile.reset();
-  }, [turnstile]);
-
-  useEffect(() => {
-    if (user) router.push("/");
-  }, [user]);
-
   async function handleProviderLogin(provider: LoginProvider) {
     setIsGoogleLoading(true);
-
-    if (isCloudEnv && !turnstile.verified && !isVercelPreview) {
-      toast({
-        title: "Please complete the CAPTCHA challenge.",
-        variant: "info",
-      });
-
-      setIsGoogleLoading(false);
-      resetCaptcha();
-      return;
-    }
+    setIsLoggingIn(true);
 
     try {
+      // Include next URL in OAuth flow if present
+      const callbackUrl = nextUrl
+        ? `/auth/callback?next=${encodeURIComponent(nextUrl)}`
+        : `/auth/callback`;
+      const fullCallbackUrl = `${window.location.origin}${callbackUrl}`;
+
       const response = await fetch("/api/auth/provider", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({ provider, redirectTo: fullCallbackUrl }),
       });
 
       if (!response.ok) {
         const { error } = await response.json();
-        if (error === "not_allowed") {
-          setShowNotAllowedModal(true);
-        } else {
-          setFeedback(error || "Failed to start OAuth flow");
-        }
-        resetCaptcha();
-        setIsGoogleLoading(false);
-        return;
+        throw new Error(error || "Failed to start OAuth flow");
       }
 
       const { url } = await response.json();
       if (url) window.location.href = url as string;
     } catch (error) {
-      resetCaptcha();
       setIsGoogleLoading(false);
+      setIsLoggingIn(false);
       setFeedback(
         error instanceof Error ? error.message : "Failed to start OAuth flow",
       );
@@ -90,16 +79,7 @@ export function useLoginPage() {
 
   async function handleLogin(data: z.infer<typeof loginFormSchema>) {
     setIsLoading(true);
-    if (isCloudEnv && !turnstile.verified && !isVercelPreview) {
-      toast({
-        title: "Please complete the CAPTCHA challenge.",
-        variant: "info",
-      });
-
-      setIsLoading(false);
-      resetCaptcha();
-      return;
-    }
+    setIsLoggingIn(true);
 
     if (data.email.includes("@agpt.co")) {
       toast({
@@ -108,41 +88,22 @@ export function useLoginPage() {
       });
 
       setIsLoading(false);
-      resetCaptcha();
+      setIsLoggingIn(false);
       return;
     }
 
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: data.email,
-          password: data.password,
-          turnstileToken: turnstile.token,
-        }),
-      });
+      const result = await loginAction(data.email, data.password);
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        toast({
-          title: result?.error || "Login failed",
-          variant: "destructive",
-        });
-        setIsLoading(false);
-        resetCaptcha();
-        turnstile.reset();
-        return;
+      if (!result.success) {
+        throw new Error(result.error || "Login failed");
       }
 
-      await supabase?.auth.refreshSession();
-      setIsLoading(false);
-      setFeedback(null);
-
-      const next =
-        (result?.next as string) || (result?.onboarding ? "/onboarding" : "/");
-      if (next) router.push(next);
+      // Use full page navigation to ensure middleware processes the new auth cookies.
+      // router.replace() does a soft navigation where the cookie store may not
+      // immediately reflect cookies set by the server action, causing a blank page.
+      // This matches the OAuth flow which also uses window.location.href.
+      window.location.href = nextUrl || result.next || "/";
     } catch (error) {
       toast({
         title:
@@ -151,22 +112,20 @@ export function useLoginPage() {
             : "Unexpected error during login",
         variant: "destructive",
       });
+
       setIsLoading(false);
-      resetCaptcha();
-      turnstile.reset();
+      setIsLoggingIn(false);
     }
   }
 
   return {
     form,
     feedback,
-    turnstile,
-    captchaKey,
-    isLoggedIn: !!user,
+    user,
     isLoading,
+    isGoogleLoading,
     isCloudEnv,
     isUserLoading,
-    isGoogleLoading,
     showNotAllowedModal,
     isSupabaseAvailable: !!supabase,
     handleSubmit: form.handleSubmit(handleLogin),

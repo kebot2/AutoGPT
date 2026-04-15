@@ -60,12 +60,47 @@ function getEnvironmentStr() {
   return `app:${getAppEnv().toLowerCase()}-behave:${getBehaveAs().toLowerCase()}`;
 }
 
-function isProd() {
+function getPreviewStealingDev() {
+  const branch = process.env.NEXT_PUBLIC_PREVIEW_STEALING_DEV || "";
+  const appEnv = getAppEnv();
+
+  if (
+    !branch ||
+    branch === "dev" ||
+    branch === "refs/heads/dev" ||
+    appEnv !== AppEnv.DEV
+  ) {
+    return null;
+  }
+
+  return branch;
+}
+
+function getPostHogCredentials() {
+  return {
+    key: process.env.NEXT_PUBLIC_POSTHOG_KEY,
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+  };
+}
+
+function getLaunchDarklyClientId() {
+  return process.env.NEXT_PUBLIC_LAUNCHDARKLY_CLIENT_ID;
+}
+
+function isProductionBuild() {
   return process.env.NODE_ENV === "production";
 }
 
-function isDev() {
+function isDevelopmentBuild() {
   return process.env.NODE_ENV === "development";
+}
+
+function isDev() {
+  return isCloud() && getAppEnv() === AppEnv.DEV;
+}
+
+function isProd() {
+  return isCloud() && getAppEnv() === AppEnv.PROD;
 }
 
 function isCloud() {
@@ -84,12 +119,22 @@ function isClientSide() {
   return typeof window !== "undefined";
 }
 
-function isCAPTCHAEnabled() {
-  return process.env.NEXT_PUBLIC_TURNSTILE === "enabled";
+function isVercelPreview() {
+  return process.env.VERCEL_ENV === "preview";
 }
 
 function areFeatureFlagsEnabled() {
-  return process.env.NEXT_PUBLIC_LAUNCHDARKLY_ENABLED === "enabled";
+  return (
+    process.env.NEXT_PUBLIC_LAUNCHDARKLY_ENABLED === "true" &&
+    Boolean(process.env.NEXT_PUBLIC_LAUNCHDARKLY_CLIENT_ID)
+  );
+}
+
+function isPostHogEnabled() {
+  const inCloud = isCloud();
+  const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+  const host = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+  return inCloud && key && host;
 }
 
 export const environment = {
@@ -103,13 +148,19 @@ export const environment = {
   getAGPTWsServerUrl,
   getSupabaseUrl,
   getSupabaseAnonKey,
+  getPreviewStealingDev,
+  getPostHogCredentials,
+  getLaunchDarklyClientId,
   // Assertions
   isServerSide,
   isClientSide,
-  isProd,
+  isProductionBuild,
+  isDevelopmentBuild,
   isDev,
+  isProd,
   isCloud,
   isLocal,
-  isCAPTCHAEnabled,
+  isVercelPreview,
+  isPostHogEnabled,
   areFeatureFlagsEnabled,
 };

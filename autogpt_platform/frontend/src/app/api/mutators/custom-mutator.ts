@@ -4,8 +4,9 @@ import {
   getServerAuthToken,
 } from "@/lib/autogpt-server-api/helpers";
 
-import { transformDates } from "./date-transformer";
+import { getSystemHeaders } from "@/lib/impersonation";
 import { environment } from "@/services/environment";
+import { transformDates } from "./date-transformer";
 
 const FRONTEND_BASE_URL =
   process.env.NEXT_PUBLIC_FRONTEND_BASE_URL || "http://localhost:3000";
@@ -37,11 +38,9 @@ export const customMutator = async <
   T extends { data: any; status: number; headers: Headers },
 >(
   url: string,
-  options: RequestInit & {
-    params?: any;
-  } = {},
+  options: RequestInit,
 ): Promise<T> => {
-  const { params, ...requestOptions } = options;
+  const requestOptions = options;
   const method = (requestOptions.method || "GET") as
     | "GET"
     | "POST"
@@ -52,6 +51,10 @@ export const customMutator = async <
   let headers: Record<string, string> = {
     ...((requestOptions.headers as Record<string, string>) || {}),
   };
+
+  if (environment.isClientSide()) {
+    Object.assign(headers, getSystemHeaders());
+  }
 
   const isFormData = data instanceof FormData;
   const contentType = isFormData ? "multipart/form-data" : "application/json";
@@ -67,14 +70,11 @@ export const customMutator = async <
     headers["Content-Type"] = "application/json";
   }
 
-  const queryString = params
-    ? "?" + new URLSearchParams(params).toString()
-    : "";
-
   const baseUrl = getBaseUrl();
 
   // The caching in React Query in our system depends on the url, so the base_url could be different for the server and client sides.
-  const fullUrl = `${baseUrl}${url}${queryString}`;
+  // here url also contains encoded query params
+  const fullUrl = `${baseUrl}${url}`;
 
   if (environment.isServerSide()) {
     try {
@@ -93,23 +93,52 @@ export const customMutator = async <
     body: data,
   });
 
+  // Check if response is a redirect (3xx) and redirect is allowed
+  const allowRedirect = requestOptions.redirect !== "error";
+  const isRedirect = response.status >= 300 && response.status < 400;
+
+  // For redirect responses, return early without trying to parse body
+  if (allowRedirect && isRedirect) {
+    return {
+      status: response.status,
+      data: null,
+      headers: response.headers,
+    } as T;
+  }
+
   if (!response.ok) {
-    const response_data = await getBody<any>(response);
+    let responseData: any = null;
+    try {
+      responseData = await getBody<any>(response);
+    } catch (error) {
+      console.warn("Failed to parse error response body:", error);
+      responseData = { error: "Failed to parse response" };
+    }
+
     const errorMessage =
-      response_data?.detail || response_data?.message || response.statusText;
+      responseData?.detail ||
+      responseData?.message ||
+      response.statusText ||
+      `HTTP ${response.status}`;
 
     console.error(
       `Request failed ${environment.isServerSide() ? "on server" : "on client"}`,
-      { status: response.status, url: fullUrl, data: response_data },
+      {
+        status: response.status,
+        method,
+        url: fullUrl.replace(baseUrl, ""), // Show relative URL for cleaner logs
+        errorMessage,
+        responseData: responseData || "No response data",
+      },
     );
 
-    throw new ApiError(errorMessage, response.status, response_data);
+    throw new ApiError(errorMessage, response.status, responseData);
   }
 
-  const response_data = await getBody<T["data"]>(response);
+  const responseData = await getBody<T["data"]>(response);
 
   // Transform ISO date strings to Date objects in the response data
-  const transformedData = transformDates(response_data);
+  const transformedData = transformDates(responseData);
 
   return {
     status: response.status,

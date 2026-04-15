@@ -1,30 +1,45 @@
-import React from "react";
+import { useControlPanelStore } from "@/app/(platform)/build/stores/controlPanelStore";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/__legacy__/ui/popover";
-import { BlockMenuContent } from "../BlockMenuContent/BlockMenuContent";
-import { ControlPanelButton } from "../../ControlPanelButton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/atoms/Tooltip/BaseTooltip";
 import { LegoIcon } from "@phosphor-icons/react";
-import { useControlPanelStore } from "@/app/(platform)/build/stores/controlPanelStore";
+import { ControlPanelButton } from "../../ControlPanelButton";
+import { BlockMenuContent } from "../BlockMenuContent/BlockMenuContent";
 
 export const BlockMenu = () => {
-  const { blockMenuOpen, setBlockMenuOpen } = useControlPanelStore();
+  const { blockMenuOpen, setBlockMenuOpen, forceOpenBlockMenu } =
+    useControlPanelStore();
   return (
-    // pinBlocksPopover ? true : open
-    <Popover onOpenChange={setBlockMenuOpen}>
-      <PopoverTrigger className="hover:cursor-pointer">
-        <ControlPanelButton
-          data-id="blocks-control-popover-trigger"
-          data-testid="blocks-control-blocks-button"
-          selected={blockMenuOpen}
-          className="rounded-none"
-        >
-          {/* Need to find phosphor icon alternative for this lucide icon */}
-          <LegoIcon className="h-6 w-6" />
-        </ControlPanelButton>
-      </PopoverTrigger>
+    <Popover
+      onOpenChange={(open) => {
+        if (!forceOpenBlockMenu || open) {
+          setBlockMenuOpen(open);
+        }
+      }}
+      open={forceOpenBlockMenu ? true : blockMenuOpen}
+    >
+      <Tooltip delayDuration={100}>
+        <TooltipTrigger asChild>
+          <PopoverTrigger className="hover:cursor-pointer">
+            <ControlPanelButton
+              data-id="blocks-control-popover-trigger"
+              data-testid="blocks-control-blocks-button"
+              selected={blockMenuOpen}
+              className="rounded-none"
+            >
+              <LegoIcon className="size-5" />
+            </ControlPanelButton>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right">Blocks</TooltipContent>
+      </Tooltip>
 
       <PopoverContent
         side="right"

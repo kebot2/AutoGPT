@@ -1,37 +1,59 @@
-import BackendAPI from "@/lib/autogpt-server-api";
-import { redirect } from "next/navigation";
-import { finishOnboarding } from "./6-congrats/actions";
-import { shouldShowOnboarding } from "@/app/api/helpers";
+"use client";
 
-// Force dynamic rendering to avoid static generation issues with cookies
-export const dynamic = "force-dynamic";
+import { CaretLeft } from "@phosphor-icons/react";
+import { ProgressBar } from "./components/ProgressBar";
+import { StepIndicator } from "./components/StepIndicator";
+import { PainPointsStep } from "./steps/PainPointsStep";
+import { PreparingStep } from "./steps/PreparingStep";
+import { RoleStep } from "./steps/RoleStep";
+import { WelcomeStep } from "./steps/WelcomeStep";
+import { useOnboardingWizardStore } from "./store";
+import { useOnboardingPage } from "./useOnboardingPage";
 
-export default async function OnboardingPage() {
-  const api = new BackendAPI();
-  const isOnboardingEnabled = await shouldShowOnboarding();
+export default function OnboardingPage() {
+  const { currentStep, isLoading, handlePreparingComplete } =
+    useOnboardingPage();
+  const prevStep = useOnboardingWizardStore((s) => s.prevStep);
 
-  if (!isOnboardingEnabled) {
-    redirect("/marketplace");
-  }
+  if (isLoading) return null;
 
-  const onboarding = await api.getUserOnboarding();
+  const totalSteps = 4;
+  const showDots = currentStep <= 3;
+  const showBack = currentStep > 1 && currentStep <= 3;
 
-  // CONGRATS is the last step in intro onboarding
-  if (onboarding.completedSteps.includes("GET_RESULTS"))
-    redirect("/marketplace");
-  else if (onboarding.completedSteps.includes("CONGRATS")) finishOnboarding();
-  else if (onboarding.completedSteps.includes("AGENT_INPUT"))
-    redirect("/onboarding/5-run");
-  else if (onboarding.completedSteps.includes("AGENT_NEW_RUN"))
-    redirect("/onboarding/5-run");
-  else if (onboarding.completedSteps.includes("AGENT_CHOICE"))
-    redirect("/onboarding/5-run");
-  else if (onboarding.completedSteps.includes("INTEGRATIONS"))
-    redirect("/onboarding/4-agent");
-  else if (onboarding.completedSteps.includes("USAGE_REASON"))
-    redirect("/onboarding/3-services");
-  else if (onboarding.completedSteps.includes("WELCOME"))
-    redirect("/onboarding/2-reason");
+  const showProgressBar = currentStep <= 3;
 
-  redirect("/onboarding/1-welcome");
+  return (
+    <div className="flex min-h-screen w-full flex-col items-center">
+      {showProgressBar && (
+        <ProgressBar currentStep={currentStep} totalSteps={totalSteps} />
+      )}
+
+      {showBack && (
+        <button
+          type="button"
+          onClick={prevStep}
+          className="text-md absolute left-6 top-6 flex items-center gap-1 text-zinc-500 transition-colors duration-200 hover:text-zinc-900"
+        >
+          <CaretLeft size={16} />
+          Back
+        </button>
+      )}
+
+      <div className="flex flex-1 items-center py-16">
+        {currentStep === 1 && <WelcomeStep />}
+        {currentStep === 2 && <RoleStep />}
+        {currentStep === 3 && <PainPointsStep />}
+        {currentStep === 4 && (
+          <PreparingStep onComplete={handlePreparingComplete} />
+        )}
+      </div>
+
+      {showDots && (
+        <div className="pb-8">
+          <StepIndicator totalSteps={3} currentStep={currentStep} />
+        </div>
+      )}
+    </div>
+  );
 }

@@ -1,13 +1,15 @@
 import { Button } from "@/components/__legacy__/ui/button";
 import { Skeleton } from "@/components/__legacy__/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { Plus } from "lucide-react";
 import Image from "next/image";
 import React, { ButtonHTMLAttributes } from "react";
 import { highlightText } from "./helpers";
 import { formatTimeAgo } from "@/lib/utils/time";
+import { CircleNotchIcon } from "@phosphor-icons/react";
+import { PlusIcon } from "@phosphor-icons/react/dist/ssr";
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
+  isLoading?: boolean;
   title?: string;
   edited_time?: Date;
   version?: number;
@@ -20,6 +22,7 @@ interface UGCAgentBlockComponent extends React.FC<Props> {
 }
 
 export const UGCAgentBlock: UGCAgentBlockComponent = ({
+  isLoading,
   title,
   image_url,
   edited_time = new Date(),
@@ -78,6 +81,14 @@ export const UGCAgentBlock: UGCAgentBlockComponent = ({
           >
             Version {version}
           </span>
+
+          <span
+            className={cn(
+              "rounded-[0.75rem] bg-zinc-200 px-[0.5rem] font-sans text-xs leading-[1.25rem] text-zinc-500",
+            )}
+          >
+            Your Agent
+          </span>
         </div>
       </div>
       <div
@@ -85,7 +96,11 @@ export const UGCAgentBlock: UGCAgentBlockComponent = ({
           "flex h-7 w-7 items-center justify-center rounded-[0.5rem] bg-zinc-700 group-disabled:bg-zinc-400",
         )}
       >
-        <Plus className="h-5 w-5 text-zinc-50" strokeWidth={2} />
+        {isLoading ? (
+          <CircleNotchIcon className="h-5 w-5 animate-spin text-zinc-50" />
+        ) : (
+          <PlusIcon className="h-5 w-5 text-zinc-50" strokeWidth={2} />
+        )}
       </div>
     </Button>
   );

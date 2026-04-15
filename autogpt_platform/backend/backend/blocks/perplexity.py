@@ -4,9 +4,16 @@ from enum import Enum
 from typing import Any, Literal
 
 import openai
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
+from backend.data.block import BlockInput
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
@@ -15,6 +22,7 @@ from backend.data.model import (
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
+from backend.util.clients import OPENROUTER_BASE_URL
 from backend.util.logging import TruncatedLogger
 
 logger = TruncatedLogger(logging.getLogger(__name__), "[Perplexity-Block]")
@@ -26,6 +34,20 @@ class PerplexityModel(str, Enum):
     SONAR = "perplexity/sonar"
     SONAR_PRO = "perplexity/sonar-pro"
     SONAR_DEEP_RESEARCH = "perplexity/sonar-deep-research"
+
+
+def _sanitize_perplexity_model(value: Any) -> PerplexityModel:
+    """Return a valid PerplexityModel, falling back to SONAR for invalid values."""
+    if isinstance(value, PerplexityModel):
+        return value
+    try:
+        return PerplexityModel(value)
+    except ValueError:
+        logger.warning(
+            f"Invalid PerplexityModel '{value}', "
+            f"falling back to {PerplexityModel.SONAR.value}"
+        )
+        return PerplexityModel.SONAR
 
 
 PerplexityCredentials = CredentialsMetaInput[
@@ -54,7 +76,7 @@ def PerplexityCredentialsField() -> PerplexityCredentials:
 
 
 class PerplexityBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         prompt: str = SchemaField(
             description="The query to send to the Perplexity model.",
             placeholder="Enter your query here...",
@@ -66,6 +88,25 @@ class PerplexityBlock(Block):
             advanced=False,
         )
         credentials: PerplexityCredentials = PerplexityCredentialsField()
+
+        @field_validator("model", mode="before")
+        @classmethod
+        def fallback_invalid_model(cls, v: Any) -> PerplexityModel:
+            """Fall back to SONAR if the model value is not a valid
+            PerplexityModel (e.g. an OpenAI model ID set by the agent
+            generator)."""
+            return _sanitize_perplexity_model(v)
+
+        @classmethod
+        def validate_data(cls, data: BlockInput) -> str | None:
+            """Sanitize the model field before JSON schema validation so that
+            invalid values are replaced with the default instead of raising a
+            BlockInputError."""
+            model_value = data.get("model")
+            if model_value is not None:
+                data["model"] = _sanitize_perplexity_model(model_value).value
+            return super().validate_data(data)
+
         system_prompt: str = SchemaField(
             title="System Prompt",
             default="",
@@ -78,14 +119,13 @@ class PerplexityBlock(Block):
             description="The maximum number of tokens to generate.",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         response: str = SchemaField(
             description="The response from the Perplexity model."
         )
         annotations: list[dict[str, Any]] = SchemaField(
             description="List of URL citations and annotations from the response."
         )
-        error: str = SchemaField(description="Error message if the API call failed.")
 
     def __init__(self):
         super().__init__(
@@ -131,7 +171,7 @@ class PerplexityBlock(Block):
     ) -> dict[str, Any]:
         """Call Perplexity via OpenRouter and extract annotations."""
         client = openai.AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=OPENROUTER_BASE_URL,
             api_key=credentials.api_key.get_secret_value(),
         )
 

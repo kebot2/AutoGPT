@@ -4,9 +4,12 @@ import concurrent.futures
 import inspect
 import logging
 import os
+import signal
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from functools import update_wrapper
 from typing import (
     Any,
@@ -25,7 +28,9 @@ from typing import (
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, responses
+from prisma.errors import DataError, UniqueViolationError
 from pydantic import BaseModel, TypeAdapter, create_model
+from sentry_sdk.api import capture_exception as _sentry_capture_exception
 
 import backend.util.exceptions as exceptions
 from backend.monitoring.instrumentation import instrument_fastapi
@@ -111,19 +116,70 @@ class BaseAppService(AppProcess, ABC):
         return target_host
 
     def run_service(self) -> None:
-        while True:
-            time.sleep(10)
+        # HACK: run the main event loop outside the main thread to disable Uvicorn's
+        # internal signal handlers, since there is no config option for this :(
+        shared_asyncio_thread = threading.Thread(
+            target=self._run_shared_event_loop,
+            daemon=True,
+            name=f"{self.service_name}-shared-event-loop",
+        )
+        shared_asyncio_thread.start()
+        shared_asyncio_thread.join()
+
+    def _run_shared_event_loop(self) -> None:
+        try:
+            self.shared_event_loop.run_forever()
+        finally:
+            logger.info(f"[{self.service_name}] 🛑 Shared event loop stopped")
+            self.shared_event_loop.close()  # ensure held resources are released
 
     def run_and_wait(self, coro: Coroutine[Any, Any, T]) -> T:
         return asyncio.run_coroutine_threadsafe(coro, self.shared_event_loop).result()
 
     def run(self):
-        self.shared_event_loop = asyncio.get_event_loop()
+        self.shared_event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.shared_event_loop)
+
+    def cleanup(self):
+        """
+        **💡 Overriding `AppService.lifespan` may be a more convenient option.**
+
+        Implement this method on a subclass to do post-execution cleanup,
+        e.g. disconnecting from a database or terminating child processes.
+
+        **Note:** if you override this method in a subclass, it must call
+        `super().cleanup()` *at the end*!
+        """
+        # Stop the shared event loop to allow resource clean-up
+        self.shared_event_loop.call_soon_threadsafe(self.shared_event_loop.stop)
+
+        super().cleanup()
+
+
+class RemoteCallExtras(BaseModel):
+    """Structured extras that can ride alongside a ``RemoteCallError``.
+
+    Each field here must be JSON-safe and explicitly typed — ``Any`` is
+    deliberately avoided so non-serializable payloads fail at model
+    validation time instead of inside FastAPI's JSON encoder. Add new
+    fields here (rather than re-typing to ``Any``) when a new exception
+    type needs to preserve structured state across RPC.
+    """
+
+    # GraphValidationError.node_errors — dict[node_id, dict[field, error_msg]]
+    node_errors: Optional[dict[str, dict[str, str]]] = None
 
 
 class RemoteCallError(BaseModel):
     type: str = "RemoteCallError"
     args: Optional[Tuple[Any, ...]] = None
+    # Optional extras for exception types that carry structured attributes
+    # beyond ``exc.args``. When set, the client-side handler uses these to
+    # reconstruct the exception with the original attributes.
+    # Currently used by ``GraphValidationError.node_errors`` so the
+    # copilot's credential-race fallback can distinguish credential
+    # failures from other graph validation errors over RPC.
+    extras: Optional[RemoteCallExtras] = None
 
 
 class UnhealthyServiceError(ValueError):
@@ -160,12 +216,14 @@ EXCEPTION_MAPPING = {
     e.__name__: e
     for e in [
         ValueError,
+        DataError,
         RuntimeError,
         TimeoutError,
         ConnectionError,
         UnhealthyServiceError,
         HTTPClientError,
         HTTPServerError,
+        UniqueViolationError,
         *[
             ErrorType
             for _, ErrorType in inspect.getmembers(exceptions)
@@ -179,6 +237,7 @@ EXCEPTION_MAPPING = {
 
 class AppService(BaseAppService, ABC):
     fastapi_app: FastAPI
+    http_server: uvicorn.Server | None = None
     log_level: str = "info"
 
     def set_log_level(self, log_level: str):
@@ -190,16 +249,40 @@ class AppService(BaseAppService, ABC):
     def _handle_internal_http_error(status_code: int = 500, log_error: bool = True):
         def handler(request: Request, exc: Exception):
             if log_error:
-                if status_code == 500:
-                    log = logger.exception
+                if status_code >= 500:
+                    logger.error(
+                        f"{request.method} {request.url.path} failed: {exc}",
+                        exc_info=exc,
+                    )
                 else:
-                    log = logger.error
-                log(f"{request.method} {request.url.path} failed: {exc}")
+                    logger.warning(
+                        f"{request.method} {request.url.path} failed: {exc}",
+                        exc_info=exc,
+                    )
+            extras: Optional[RemoteCallExtras] = None
+            if isinstance(exc, exceptions.GraphValidationError):
+                # ``exc.args`` only preserves the top-level message; the
+                # structured ``node_errors`` mapping needs to ride along
+                # in ``extras`` so the client can rebuild the original
+                # exception state (used by the copilot credential-race
+                # fallback to distinguish credential failures from other
+                # validation errors).
+                # Normalise to plain ``dict[str, dict[str, str]]`` so
+                # Pydantic validation enforces the JSON-safe shape —
+                # any non-serializable sneak-in fails here instead of
+                # inside the JSON encoder.
+                extras = RemoteCallExtras(
+                    node_errors={
+                        node_id: dict(errors)
+                        for node_id, errors in exc.node_errors.items()
+                    },
+                )
             return responses.JSONResponse(
                 status_code=status_code,
                 content=RemoteCallError(
                     type=str(exc.__class__.__name__),
                     args=exc.args or (str(exc),),
+                    extras=extras,
                 ).model_dump(),
             )
 
@@ -256,13 +339,13 @@ class AppService(BaseAppService, ABC):
 
             return sync_endpoint
 
-    @conn_retry("FastAPI server", "Starting FastAPI server")
+    @conn_retry("FastAPI server", "Running FastAPI server")
     def __start_fastapi(self):
         logger.info(
             f"[{self.service_name}] Starting RPC server at http://{api_host}:{self.get_port()}"
         )
 
-        server = uvicorn.Server(
+        self.http_server = uvicorn.Server(
             uvicorn.Config(
                 self.fastapi_app,
                 host=api_host,
@@ -271,18 +354,76 @@ class AppService(BaseAppService, ABC):
                 log_level=self.log_level,
             )
         )
-        self.shared_event_loop.run_until_complete(server.serve())
+        self.run_and_wait(self.http_server.serve())
+
+        # Perform clean-up when the server exits
+        if not self._cleaned_up:
+            self._cleaned_up = True
+            logger.info(f"[{self.service_name}] 🧹 Running cleanup")
+            self.cleanup()
+            logger.info(f"[{self.service_name}] ✅ Cleanup done")
+
+    def _self_terminate(self, signum: int, frame):
+        """Pass SIGTERM to Uvicorn so it can shut down gracefully"""
+        signame = signal.Signals(signum).name
+        if not self._shutting_down:
+            self._shutting_down = True
+            if self.http_server:
+                logger.info(
+                    f"[{self.service_name}] 🛑 Received {signame} ({signum}) - "
+                    "Entering RPC server graceful shutdown"
+                )
+                self.http_server.handle_exit(signum, frame)  # stop accepting requests
+
+                # NOTE: Actually stopping the process is triggered by:
+                # 1. The call to self.cleanup() at the end of __start_fastapi() 👆🏼
+                # 2. BaseAppService.cleanup() stopping the shared event loop
+            else:
+                logger.warning(
+                    f"[{self.service_name}] {signame} received before HTTP server init."
+                    " Terminating..."
+                )
+                sys.exit(0)
+
+        else:
+            # Expedite shutdown on second SIGTERM
+            logger.info(
+                f"[{self.service_name}] 🛑🛑 Received {signame} ({signum}), "
+                "but shutdown is already underway. Terminating..."
+            )
+            sys.exit(0)
+
+    @asynccontextmanager
+    async def lifespan(self, app: FastAPI):
+        """
+        The FastAPI/Uvicorn server's lifespan manager, used for setup and shutdown.
+
+        You can extend and use this in a subclass like:
+        ```
+        @asynccontextmanager
+        async def lifespan(self, app: FastAPI):
+            async with super().lifespan(app):
+                await db.connect()
+                yield
+                await db.disconnect()
+        ```
+        """
+        # Startup - this runs before Uvicorn starts accepting connections
+
+        yield
+
+        # Shutdown - this runs when FastAPI/Uvicorn shuts down
+        logger.info(f"[{self.service_name}] ✅ FastAPI has finished")
 
     async def health_check(self) -> str:
-        """
-        A method to check the health of the process.
-        """
+        """A method to check the health of the process."""
         return "OK"
 
     def run(self):
         sentry_init()
         super().run()
-        self.fastapi_app = FastAPI()
+
+        self.fastapi_app = FastAPI(lifespan=self.lifespan)
 
         # Add Prometheus instrumentation to all services
         try:
@@ -321,11 +462,21 @@ class AppService(BaseAppService, ABC):
             ValueError, self._handle_internal_http_error(400)
         )
         self.fastapi_app.add_exception_handler(
+            DataError, self._handle_internal_http_error(400)
+        )
+        self.fastapi_app.add_exception_handler(
+            UniqueViolationError, self._handle_internal_http_error(400)
+        )
+        self.fastapi_app.add_exception_handler(
             Exception, self._handle_internal_http_error(500)
         )
 
         # Start the FastAPI server in a separate thread.
-        api_thread = threading.Thread(target=self.__start_fastapi, daemon=True)
+        api_thread = threading.Thread(
+            target=self.__start_fastapi,
+            daemon=True,
+            name=f"{self.service_name}-http-server",
+        )
         api_thread.start()
 
         # Run the main service loop (blocking).
@@ -377,6 +528,8 @@ def get_service_client(
             exclude_exceptions=(
                 # Don't retry these specific exceptions that won't be fixed by retrying
                 ValueError,  # Invalid input/parameters
+                DataError,  # Prisma data integrity errors (foreign key, unique constraints)
+                UniqueViolationError,  # Unique constraint violations
                 KeyError,  # Missing required data
                 TypeError,  # Wrong data types
                 AttributeError,  # Missing attributes
@@ -457,7 +610,6 @@ def get_service_client(
                 self._connection_failure_count >= 3
                 and current_time - self._last_client_reset > 30
             ):
-
                 logger.warning(
                     f"Connection failures detected ({self._connection_failure_count}), recreating HTTP clients"
                 )
@@ -493,6 +645,34 @@ def get_service_client(
                 if error_response and error_response.type in EXCEPTION_MAPPING:
                     exception_class = EXCEPTION_MAPPING[error_response.type]
                     args = error_response.args or [str(e)]
+
+                    # Prisma DataError subclasses expect a dict `data` arg,
+                    # but RPC serialization only preserves the string message
+                    # from exc.args.  Wrap it in the expected structure so
+                    # the constructor doesn't crash on `.get()`.
+                    if issubclass(exception_class, DataError):
+                        msg = str(args[0]) if args else str(e)
+                        raise exception_class({"user_facing_error": {"message": msg}})
+
+                    # GraphValidationError carries a structured ``node_errors``
+                    # attribute that ``exc.args`` alone doesn't preserve.
+                    # If the server included it in ``extras``, thread it
+                    # back into the reconstructed exception.
+                    #
+                    # Identity check (``is``) is deliberate here — unlike the
+                    # DataError path above which uses ``issubclass`` to catch
+                    # all subclasses, GraphValidationError subclasses should
+                    # fall through to the generic ``raise exception_class(*args)``
+                    # below rather than silently losing their custom attributes.
+                    if exception_class is exceptions.GraphValidationError:
+                        msg = str(args[0]) if args else str(e)
+                        node_errors = (
+                            error_response.extras.node_errors
+                            if error_response.extras
+                            else None
+                        )
+                        raise exception_class(msg, node_errors=node_errors)
+
                     raise exception_class(*args)
 
                 # Otherwise categorize by HTTP status code
@@ -589,8 +769,19 @@ def get_service_client(
             return kwargs
 
         def _get_return(self, expected_return: TypeAdapter | None, result: Any) -> Any:
+            """Validate and coerce the RPC result to the expected return type.
+
+            Falls back to the raw result with a warning and Sentry capture if validation fails.
+            """
             if expected_return:
-                return expected_return.validate_python(result)
+                try:
+                    return expected_return.validate_python(result)
+                except Exception as e:
+                    logger.warning(
+                        f"RPC return type validation failed for {type(e).__name__}: {e}"
+                    )
+                    _sentry_capture_exception(e)
+                    return result
             return result
 
         def __getattr__(self, name: str) -> Callable[..., Any]:

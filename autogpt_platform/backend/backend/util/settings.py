@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from enum import Enum
 from typing import Any, Dict, Generic, List, Set, Tuple, Type, TypeVar
 
@@ -71,6 +72,11 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Maximum number of workers to use for graph execution.",
     )
 
+    requeue_by_republishing: bool = Field(
+        default=True,
+        description="Send rate-limited messages to back of queue by republishing instead of front requeue to prevent blocking other users.",
+    )
+
     # FastAPI Thread Pool Configuration
     # IMPORTANT: FastAPI automatically offloads ALL sync functions to a thread pool:
     # - Sync endpoint functions (def instead of async def)
@@ -82,6 +88,10 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         ge=40,
         le=500,
         description="Thread pool size for FastAPI sync operations. All sync endpoints and dependencies automatically use this pool. Higher values support more concurrent sync operations but use more memory.",
+    )
+    ollama_host: str = Field(
+        default="localhost:11434",
+        description="Default Ollama host; exempted from SSRF checks.",
     )
     pyro_host: str = Field(
         default="localhost",
@@ -179,6 +189,12 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Number of top blocks with most errors to show when no blocks exceed threshold (0 to disable).",
     )
 
+    # Execution Accuracy Monitoring
+    execution_accuracy_check_interval_hours: int = Field(
+        default=24,
+        description="Interval in hours between execution accuracy alert checks.",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="allow",
@@ -199,14 +215,21 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="The port for execution manager daemon to run on",
     )
 
+    num_copilot_workers: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Number of concurrent CoPilot executor workers",
+    )
+
+    copilot_executor_port: int = Field(
+        default=8008,
+        description="The port for CoPilot executor daemon to run on",
+    )
+
     execution_scheduler_port: int = Field(
         default=8003,
         description="The port for execution scheduler daemon to run on",
-    )
-
-    agent_server_port: int = Field(
-        default=8004,
-        description="The port for agent server daemon to run on",
     )
 
     database_api_port: int = Field(
@@ -251,8 +274,14 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="The name of the Google Cloud Storage bucket for media files",
     )
 
+    workspace_storage_dir: str = Field(
+        default="",
+        description="Local directory for workspace file storage when GCS is not configured. "
+        "If empty, defaults to {app_data}/workspaces. Used for self-hosted deployments.",
+    )
+
     reddit_user_agent: str = Field(
-        default="AutoGPT:1.0 (by /u/autogpt)",
+        default="web:AutoGPT:v0.6.0 (by /u/autogpt)",
         description="The user agent for the Reddit API",
     )
 
@@ -350,11 +379,32 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Hours between cloud storage cleanup runs (1-24 hours)",
     )
 
+    oauth_token_cleanup_interval_hours: int = Field(
+        default=6,
+        ge=1,
+        le=24,
+        description="Hours between OAuth token cleanup runs (1-24 hours)",
+    )
+
     upload_file_size_limit_mb: int = Field(
         default=256,
         ge=1,
         le=1024,
         description="Maximum file size in MB for file uploads (1-1024 MB)",
+    )
+
+    max_file_size_mb: int = Field(
+        default=100,
+        ge=1,
+        le=1024,
+        description="Maximum file size in MB for workspace files (1-1024 MB)",
+    )
+
+    max_workspace_storage_mb: int = Field(
+        default=500,
+        ge=1,
+        le=10240,
+        description="Maximum total workspace storage per user in MB.",
     )
 
     # AutoMod configuration
@@ -412,6 +462,11 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Name of the event bus",
     )
 
+    notification_event_bus_name: str = Field(
+        default="notification_event",
+        description="Name of the websocket notification event bus",
+    )
+
     trust_endpoints_for_requests: List[str] = Field(
         default_factory=list,
         description="A whitelist of trusted internal endpoints for the backend to make requests to.",
@@ -422,34 +477,68 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Maximum message size limit for communication with the message bus",
     )
 
-    backend_cors_allow_origins: List[str] = Field(default=["http://localhost:3000"])
+    backend_cors_allow_origins: List[str] = Field(
+        default=["http://localhost:3000"],
+        description="Allowed Origins for CORS. Supports exact URLs (http/https) or entries prefixed with "
+        '"regex:" to match via regular expression.',
+    )
+
+    external_oauth_callback_origins: List[str] = Field(
+        default=["http://localhost:3000"],
+        description="Allowed callback URL origins for external OAuth flows. "
+        "External apps (like Autopilot) must have their callback URLs start with one of these origins.",
+    )
 
     @field_validator("backend_cors_allow_origins")
     @classmethod
     def validate_cors_allow_origins(cls, v: List[str]) -> List[str]:
-        out = []
-        port = None
-        has_localhost = False
-        has_127_0_0_1 = False
-        for url in v:
-            url = url.strip()
-            if url.startswith(("http://", "https://")):
-                if "localhost" in url:
-                    port = url.split(":")[2]
-                    has_localhost = True
-                if "127.0.0.1" in url:
-                    port = url.split(":")[2]
-                    has_127_0_0_1 = True
-                out.append(url)
-            else:
-                raise ValueError(f"Invalid URL: {url}")
+        validated: List[str] = []
+        localhost_ports: set[str] = set()
+        ip127_ports: set[str] = set()
 
-        if has_127_0_0_1 and not has_localhost:
-            out.append(f"http://localhost:{port}")
-        if has_localhost and not has_127_0_0_1:
-            out.append(f"http://127.0.0.1:{port}")
+        for raw_origin in v:
+            origin = raw_origin.strip()
+            if origin.startswith("regex:"):
+                pattern = origin[len("regex:") :]
+                if not pattern:
+                    raise ValueError("Invalid regex pattern: pattern cannot be empty")
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex pattern '{pattern}': {exc}"
+                    ) from exc
+                validated.append(origin)
+                continue
 
-        return out
+            if origin.startswith(("http://", "https://")):
+                if "localhost" in origin:
+                    try:
+                        port = origin.split(":")[2]
+                        localhost_ports.add(port)
+                    except IndexError as exc:
+                        raise ValueError(
+                            "localhost origins must include an explicit port, e.g. http://localhost:3000"
+                        ) from exc
+                if "127.0.0.1" in origin:
+                    try:
+                        port = origin.split(":")[2]
+                        ip127_ports.add(port)
+                    except IndexError as exc:
+                        raise ValueError(
+                            "127.0.0.1 origins must include an explicit port, e.g. http://127.0.0.1:3000"
+                        ) from exc
+                validated.append(origin)
+                continue
+
+            raise ValueError(f"Invalid URL or regex origin: {origin}")
+
+        for port in ip127_ports - localhost_ports:
+            validated.append(f"http://localhost:{port}")
+        for port in localhost_ports - ip127_ports:
+            validated.append(f"http://127.0.0.1:{port}")
+
+        return validated
 
     @classmethod
     def settings_customise_sources(
@@ -498,16 +587,6 @@ class Secrets(UpdateTrackingModel["Secrets"], BaseSettings):
         description="The secret key to use for the unsubscribe user by token",
     )
 
-    # Cloudflare Turnstile credentials
-    turnstile_secret_key: str = Field(
-        default="",
-        description="Cloudflare Turnstile backend secret key",
-    )
-    turnstile_verify_url: str = Field(
-        default="https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        description="Cloudflare Turnstile verify URL",
-    )
-
     # OAuth server credentials for integrations
     # --8<-- [start:OAuthServerCredentialsExample]
     github_client_id: str = Field(default="", description="GitHub OAuth client ID")
@@ -542,6 +621,12 @@ class Secrets(UpdateTrackingModel["Secrets"], BaseSettings):
     open_router_api_key: str = Field(default="", description="Open Router API Key")
     llama_api_key: str = Field(default="", description="Llama API Key")
     v0_api_key: str = Field(default="", description="v0 by Vercel API key")
+    webshare_proxy_username: str = Field(
+        default="", description="Webshare Proxy Username"
+    )
+    webshare_proxy_password: str = Field(
+        default="", description="Webshare Proxy Password"
+    )
 
     reddit_client_id: str = Field(default="", description="Reddit client ID")
     reddit_client_secret: str = Field(default="", description="Reddit client secret")
@@ -576,7 +661,19 @@ class Secrets(UpdateTrackingModel["Secrets"], BaseSettings):
     e2b_api_key: str = Field(default="", description="E2B API key")
     nvidia_api_key: str = Field(default="", description="Nvidia API key")
     mem0_api_key: str = Field(default="", description="Mem0 API key")
+    elevenlabs_api_key: str = Field(default="", description="ElevenLabs API key")
 
+    copilot_linear_api_key: str = Field(
+        default="", description="Linear API key for system-level operations"
+    )
+    linear_feature_request_project_id: str = Field(
+        default="",
+        description="Linear project ID where feature requests are tracked",
+    )
+    linear_feature_request_team_id: str = Field(
+        default="",
+        description="Linear team ID used when creating feature request issues",
+    )
     linear_client_id: str = Field(default="", description="Linear client ID")
     linear_client_secret: str = Field(default="", description="Linear client secret")
 
@@ -587,6 +684,15 @@ class Secrets(UpdateTrackingModel["Secrets"], BaseSettings):
     stripe_webhook_secret: str = Field(default="", description="Stripe Webhook Secret")
 
     screenshotone_api_key: str = Field(default="", description="ScreenshotOne API Key")
+
+    tally_api_key: str = Field(
+        default="",
+        description="Tally API key for form submission lookup on signup",
+    )
+    tally_form_id: str = Field(
+        default="npGe0q",
+        description="Tally form ID for signup business understanding form",
+    )
 
     apollo_api_key: str = Field(default="", description="Apollo API Key")
     smartlead_api_key: str = Field(default="", description="SmartLead API Key")
@@ -602,8 +708,27 @@ class Secrets(UpdateTrackingModel["Secrets"], BaseSettings):
         description="The LaunchDarkly SDK key for feature flag management",
     )
 
+    agentmail_api_key: str = Field(default="", description="AgentMail API Key")
+
     ayrshare_api_key: str = Field(default="", description="Ayrshare API Key")
     ayrshare_jwt_key: str = Field(default="", description="Ayrshare private Key")
+
+    # Langfuse prompt management
+    langfuse_public_key: str = Field(default="", description="Langfuse public key")
+    langfuse_secret_key: str = Field(default="", description="Langfuse secret key")
+    langfuse_host: str = Field(
+        default="https://cloud.langfuse.com", description="Langfuse host URL"
+    )
+    langfuse_tracing_environment: str = Field(
+        default="local", description="Tracing environment tag (local/dev/production)"
+    )
+
+    # PostHog analytics
+    posthog_api_key: str = Field(default="", description="PostHog API key")
+    posthog_host: str = Field(
+        default="https://eu.i.posthog.com", description="PostHog host URL"
+    )
+
     # Add more secret fields as needed
     model_config = SettingsConfigDict(
         env_file=".env",
