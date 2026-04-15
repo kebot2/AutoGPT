@@ -838,3 +838,53 @@ def test_stream_chat_dedup_key_released_after_stream_finish(
     assert '"finish"' in body
     # The dedup key must be released so intentional re-sends are allowed.
     mock_redis.delete.assert_called_once()
+
+
+def test_stream_chat_dedup_key_released_even_when_redis_delete_raises(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """The route must not crash when the dedup Redis delete fails on the
+    subscriber_queue-is-None early-finish path (except Exception: pass)."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    mocker.patch(
+        "backend.api.features.chat.routes._validate_and_get_session",
+        return_value=None,
+    )
+    mocker.patch(
+        "backend.api.features.chat.routes.append_and_save_message",
+        return_value=None,
+    )
+    mocker.patch(
+        "backend.api.features.chat.routes.enqueue_copilot_turn",
+        return_value=None,
+    )
+    mocker.patch(
+        "backend.api.features.chat.routes.track_user_message",
+        return_value=None,
+    )
+    mock_registry = mocker.MagicMock()
+    mock_registry.create_session = _AsyncMock(return_value=None)
+    mock_registry.subscribe_to_session = _AsyncMock(return_value=None)
+    mocker.patch(
+        "backend.api.features.chat.routes.stream_registry",
+        mock_registry,
+    )
+    mock_redis = mocker.AsyncMock()
+    mock_redis.set = _AsyncMock(return_value=True)
+    # Make the delete raise so the except-pass branch is exercised.
+    mock_redis.delete = _AsyncMock(side_effect=RuntimeError("redis gone"))
+    mocker.patch(
+        "backend.api.features.chat.routes.get_redis_async",
+        new_callable=_AsyncMock,
+        return_value=mock_redis,
+    )
+
+    # Should not raise even though delete fails.
+    response = client.post(
+        "/sessions/sess-finish-err/stream",
+        json={"message": "hello", "is_user_message": True},
+    )
+
+    assert response.status_code == 200
+    assert '"finish"' in response.text
