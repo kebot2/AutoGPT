@@ -64,6 +64,11 @@ def _get_langfuse():
 # (which writes the tag). Keeping both in sync prevents drift.
 USER_CONTEXT_TAG = "user_context"
 
+# Tag name for the Graphiti warm-context block prepended on first turn.
+# Like USER_CONTEXT_TAG, this is server-injected — user-supplied occurrences
+# must be stripped before the message reaches the LLM.
+MEMORY_CONTEXT_TAG = "memory_context"
+
 # Static system prompt for token caching — identical for all users.
 # User-specific context is injected into the first user message instead,
 # so the system prompt never changes and can be cached across all sessions.
@@ -132,6 +137,14 @@ _USER_CONTEXT_ANYWHERE_RE = re.compile(
 # tag and would pass through _USER_CONTEXT_ANYWHERE_RE unchanged.
 _USER_CONTEXT_LONE_TAG_RE = re.compile(rf"</?{USER_CONTEXT_TAG}>", re.IGNORECASE)
 
+# Same treatment for <memory_context> — a server-only tag injected from Graphiti
+# warm context. User-supplied occurrences must be stripped before the message
+# reaches the LLM, using the same greedy/lone-tag approach as user_context.
+_MEMORY_CONTEXT_ANYWHERE_RE = re.compile(
+    rf"<{MEMORY_CONTEXT_TAG}>.*</{MEMORY_CONTEXT_TAG}>\s*", re.DOTALL
+)
+_MEMORY_CONTEXT_LONE_TAG_RE = re.compile(rf"</?{MEMORY_CONTEXT_TAG}>", re.IGNORECASE)
+
 
 def _sanitize_user_context_field(value: str) -> str:
     """Escape any characters that would let user-controlled text break out of
@@ -170,21 +183,26 @@ def strip_user_context_prefix(content: str) -> str:
 
 
 def sanitize_user_supplied_context(message: str) -> str:
-    """Strip *any* `<user_context>...</user_context>` block from user-supplied
-    input — anywhere in the string, not just at the start.
+    """Strip server-only XML tags from user-supplied input.
 
-    This is the defence against context-spoofing: a user can type a literal
-    ``<user_context>`` tag in their message in an attempt to suppress or
-    impersonate the trusted personalisation prefix. The inject path must call
-    this **unconditionally** — including when ``understanding`` is ``None``
-    and no server-side prefix would otherwise be added — otherwise new users
-    (who have no understanding yet) can smuggle a tag through to the LLM.
+    Removes any ``<user_context>`` and ``<memory_context>`` blocks — both are
+    server-injected tags that must not appear verbatim in user messages. A user
+    who types these tags literally could spoof the trusted personalisation or
+    memory prefix the LLM relies on.
+
+    The inject path must call this **unconditionally** — including when
+    ``understanding`` is ``None`` — otherwise new users can smuggle a tag
+    through to the LLM.
 
     The return is a cleaned message ready to be wrapped (or forwarded raw,
-    when there's no understanding to inject).
+    when there's no context to inject).
     """
-    without_blocks = _USER_CONTEXT_ANYWHERE_RE.sub("", message)
-    return _USER_CONTEXT_LONE_TAG_RE.sub("", without_blocks)
+    # Strip <user_context> blocks and lone tags
+    without_user_ctx = _USER_CONTEXT_ANYWHERE_RE.sub("", message)
+    without_user_ctx = _USER_CONTEXT_LONE_TAG_RE.sub("", without_user_ctx)
+    # Strip <memory_context> blocks and lone tags
+    without_mem_ctx = _MEMORY_CONTEXT_ANYWHERE_RE.sub("", without_user_ctx)
+    return _MEMORY_CONTEXT_LONE_TAG_RE.sub("", without_mem_ctx)
 
 
 # Public alias used by the SDK and baseline services to strip user-supplied
