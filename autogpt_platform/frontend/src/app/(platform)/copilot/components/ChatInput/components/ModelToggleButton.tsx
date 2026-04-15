@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Star } from "@phosphor-icons/react";
+import { Cpu } from "@phosphor-icons/react";
 import type { CopilotLlmModel } from "../../../store";
 
 interface Props {
@@ -31,7 +31,7 @@ export function ModelToggleButton({ model, onToggle }: Props) {
           : "Standard model — click to switch to Advanced"
       }
     >
-      <Star size={14} />
+      <Cpu size={14} />
       {isAdvanced && "Advanced"}
     </button>
   );
