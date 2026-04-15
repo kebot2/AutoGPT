@@ -18,8 +18,6 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# Matches the guide's "4-8 steps max" constraint.
-MAX_STEPS = 8
 DEFAULT_ACTION = "add_block"
 VALID_ACTIONS = {"add_block", "connect_blocks", "configure", "add_input", "add_output"}
 
@@ -272,13 +270,6 @@ class DecomposeGoalTool(BaseTool):
             return ErrorResponse(
                 message="Please provide at least one step in the plan.",
                 error="missing_steps",
-                session_id=session_id,
-            )
-
-        if len(steps) > MAX_STEPS:
-            return ErrorResponse(
-                message=f"Too many steps ({len(steps)}). Keep the plan to {MAX_STEPS} steps max.",
-                error="too_many_steps",
                 session_id=session_id,
             )
 

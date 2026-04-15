@@ -37,7 +37,7 @@ Before running the workflow below, ALWAYS decompose the goal first:
 4. Only after approval, continue with "Workflow for Creating/Editing Agents".
 
 For simple goals (1-2 blocks), keep steps brief (2-3 steps).
-For complex goals, decompose into 4-8 steps max.
+For complex goals, use as many steps as needed.
 
 ### Workflow for Creating/Editing Agents
 

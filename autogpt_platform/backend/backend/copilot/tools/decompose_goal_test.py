@@ -13,7 +13,6 @@ from ._test_data import make_session
 from .decompose_goal import (
     AUTO_APPROVE_CLIENT_SECONDS,
     DEFAULT_ACTION,
-    MAX_STEPS,
     DecomposeGoalTool,
     _no_user_action_since,
     cancel_auto_approve,
@@ -188,38 +187,6 @@ async def test_empty_steps_returns_error(tool: DecomposeGoalTool, session):
     )
     assert isinstance(result, ErrorResponse)
     assert result.error == "missing_steps"
-
-
-@pytest.mark.asyncio
-async def test_too_many_steps_returns_error(tool: DecomposeGoalTool, session):
-    many_steps = [
-        {"description": f"Step {i}", "action": "add_block"}
-        for i in range(MAX_STEPS + 1)
-    ]
-    result = await tool._execute(
-        user_id=_USER_ID,
-        session=session,
-        goal="Over-engineered agent",
-        steps=many_steps,
-    )
-    assert isinstance(result, ErrorResponse)
-    assert result.error == "too_many_steps"
-
-
-@pytest.mark.asyncio
-async def test_exactly_max_steps_succeeds(tool: DecomposeGoalTool, session):
-    """Exactly MAX_STEPS steps should succeed."""
-    max_steps = [
-        {"description": f"Step {i}", "action": "add_block"} for i in range(MAX_STEPS)
-    ]
-    result = await tool._execute(
-        user_id=_USER_ID,
-        session=session,
-        goal="Complex agent",
-        steps=max_steps,
-    )
-    assert isinstance(result, TaskDecompositionResponse)
-    assert len(result.steps) == MAX_STEPS
 
 
 # ---------------------------------------------------------------------------
