@@ -3,6 +3,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import Link from "next/link";
 import { formatCents } from "../RateLimitResetDialog/RateLimitResetDialog";
 import { useResetRateLimit } from "../../hooks/useResetRateLimit";
+import { useWorkspaceStorage } from "./useWorkspaceStorage";
 
 export function formatResetTime(
   resetsAt: Date | string,
@@ -73,6 +74,57 @@ function UsageBar({
   );
 }
 
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function StorageBar({
+  usedBytes,
+  limitBytes,
+  fileCount,
+}: {
+  usedBytes: number;
+  limitBytes: number;
+  fileCount: number;
+}) {
+  if (limitBytes <= 0) return null;
+
+  const rawPercent = (usedBytes / limitBytes) * 100;
+  const percent = Math.min(100, Math.round(rawPercent));
+  const isHigh = percent >= 80;
+  const percentLabel =
+    usedBytes > 0 && percent === 0 ? "<1% used" : `${percent}% used`;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-medium text-neutral-700">
+          File storage
+        </span>
+        <span className="text-[11px] tabular-nums text-neutral-500">
+          {percentLabel}
+        </span>
+      </div>
+      <div className="text-[10px] text-neutral-400">
+        {formatBytes(usedBytes)} of {formatBytes(limitBytes)} &middot;{" "}
+        {fileCount} {fileCount === 1 ? "file" : "files"}
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
+        <div
+          className={`h-full rounded-full transition-[width] duration-300 ease-out ${
+            isHigh ? "bg-orange-500" : "bg-blue-500"
+          }`}
+          style={{ width: `${Math.max(usedBytes > 0 ? 1 : 0, percent)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ResetButton({
   cost,
   onCreditChange,
@@ -94,6 +146,19 @@ function ResetButton({
         ? "Resetting..."
         : `Reset daily limit for ${formatCents(cost)}`}
     </Button>
+  );
+}
+
+function WorkspaceStorageSection() {
+  const { data: storage } = useWorkspaceStorage();
+  if (!storage || storage.limit_bytes <= 0) return null;
+
+  return (
+    <StorageBar
+      usedBytes={storage.used_bytes}
+      limitBytes={storage.limit_bytes}
+      fileCount={storage.file_count}
+    />
   );
 }
 
@@ -154,6 +219,7 @@ export function UsagePanelContent({
           resetsAt={usage.weekly.resets_at}
         />
       )}
+      <WorkspaceStorageSection />
       {isDailyExhausted &&
         !isWeeklyExhausted &&
         resetCost > 0 &&
