@@ -495,6 +495,7 @@ async def get_session(
     # initial prompt is always visible.  Active sessions keep the legacy
     # newest-first behavior to preserve streaming context.
     from_start = is_initial_load and active_session is None
+    forward_paginated = from_start or after_sequence is not None
 
     page = await get_chat_messages_paginated(
         session_id,
@@ -512,9 +513,14 @@ async def get_session(
     ]
 
     logger.info(
-        f"[GET_SESSION] session={session_id}, active={active_session is not None}, "
-        f"from_start={from_start}, forward_paginated={from_start or after_sequence is not None}, "
-        f"msg_count={len(messages)}, last_role={messages[-1].get('role') if messages else 'none'}"
+        "[GET_SESSION] session=%s, active=%s, from_start=%s, forward_paginated=%s, "
+        "msg_count=%d, last_role=%s",
+        session_id,
+        active_session is not None,
+        from_start,
+        forward_paginated,
+        len(messages),
+        messages[-1].get("role") if messages else "none",
     )
 
     active_stream_info = None
@@ -536,7 +542,7 @@ async def get_session(
             has_more_messages=page.has_more,
             oldest_sequence=page.oldest_sequence,
             newest_sequence=page.newest_sequence,
-            forward_paginated=after_sequence is not None,
+            forward_paginated=forward_paginated,
             total_prompt_tokens=0,
             total_completion_tokens=0,
         )
@@ -554,7 +560,7 @@ async def get_session(
         has_more_messages=page.has_more,
         oldest_sequence=page.oldest_sequence,
         newest_sequence=page.newest_sequence,
-        forward_paginated=from_start,
+        forward_paginated=forward_paginated,
         total_prompt_tokens=total_prompt,
         total_completion_tokens=total_completion,
         metadata=page.session.metadata,
