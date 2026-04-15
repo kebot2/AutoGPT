@@ -9,8 +9,8 @@ Cross-mode transcript flow
 
 Both ``baseline/service.py`` (fast mode) and ``sdk/service.py`` (extended_thinking
 mode) read and write the same CLI session store via
-``backend.copilot.transcript.upload_cli_session`` /
-``restore_cli_session``.
+``backend.copilot.transcript.upload_transcript`` /
+``download_transcript``.
 
 Fast → SDK switch
 -----------------

@@ -742,8 +742,11 @@ def _append_gap_to_builder(
                             "input": input_data,
                         }
                     )
-            if content_blocks:
-                builder.append_assistant(content_blocks=content_blocks)
+            if not content_blocks:
+                # Fallback: ensure every assistant gap message produces an entry
+                # so the builder's entry count matches the gap length.
+                content_blocks.append({"type": "text", "text": ""})
+            builder.append_assistant(content_blocks=content_blocks)
         elif msg.role == "tool" and msg.tool_call_id:
             builder.append_tool_result(
                 tool_use_id=msg.tool_call_id,
