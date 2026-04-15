@@ -543,17 +543,6 @@ async def get_session(
         _strip_injected_context(message.model_dump()) for message in page.messages
     ]
 
-    logger.debug(
-        "[GET_SESSION] session=%s, active=%s, from_start=%s, forward_paginated=%s, "
-        "msg_count=%d, last_role=%s",
-        session_id,
-        active_session is not None,
-        from_start,
-        forward_paginated,
-        len(messages),
-        messages[-1].get("role") if messages else "none",
-    )
-
     active_stream_info = None
     if active_session and last_message_id is not None:
         active_stream_info = ActiveStreamInfo(
