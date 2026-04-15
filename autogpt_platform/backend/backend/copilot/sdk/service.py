@@ -2059,6 +2059,48 @@ async def _run_stream_attempt(
         )
 
 
+async def _seed_transcript(
+    session: ChatSession,
+    transcript_builder: TranscriptBuilder,
+    transcript_covers_prefix: bool,
+    transcript_msg_count: int,
+    log_prefix: str,
+) -> tuple[str, bool, int]:
+    """Seed the transcript builder from compressed DB messages.
+
+    Called when ``use_resume=False`` and no prior transcript exists in storage
+    so that ``upload_transcript`` saves a compact version for future turns.
+    This ensures the next turn can use the full-session compression path with
+    the benefit of an already-compressed baseline, and a restored CLI session
+    on the next pod gets a usable compact base even for sessions that started
+    on old pods.
+
+    Returns ``(transcript_content, transcript_covers_prefix, transcript_msg_count)``
+    updated values — unchanged if seeding is not possible.
+    """
+    if len(session.messages) <= 1:
+        return "", transcript_covers_prefix, transcript_msg_count
+
+    _prior = session.messages[:-1]
+    _comp, _ = await _compress_messages(_prior, _SEED_TARGET_TOKENS)
+    if not _comp:
+        return "", transcript_covers_prefix, transcript_msg_count
+
+    _seeded = _session_messages_to_transcript(_comp)
+    if not _seeded or not validate_transcript(_seeded):
+        return "", transcript_covers_prefix, transcript_msg_count
+
+    transcript_builder.load_previous(_seeded, log_prefix=log_prefix)
+    logger.info(
+        "%s Seeded transcript from %d compressed DB messages"
+        " for next-turn upload (seed_target_tokens=%d)",
+        log_prefix,
+        len(_comp),
+        _SEED_TARGET_TOKENS,
+    )
+    return _seeded, True, len(_prior)
+
+
 async def stream_chat_completion_sdk(
     session_id: str,
     message: str | None = None,
@@ -2581,34 +2623,19 @@ async def stream_chat_completion_sdk(
 
         # When running without --resume and no prior transcript in storage,
         # seed the transcript builder from compressed DB messages so that
-        # upload_transcript saves a compact version for future turns.  This
-        # ensures (a) the next turn can use the transcript-aware gap path
-        # (inject only new messages) instead of re-compressing the full DB
-        # history, and (b) a restored CLI session on the next pod gets a
-        # usable compact base even for sessions that started on old pods.
-        # Seeding only makes sense when transcripts will actually be uploaded.
-        if (
-            not use_resume
-            and not transcript_content
-            and not skip_transcript_upload
-            and len(session.messages) > 1
-        ):
-            _prior = session.messages[:-1]
-            _comp, _ = await _compress_messages(_prior, _SEED_TARGET_TOKENS)
-            if _comp:
-                _seeded = _session_messages_to_transcript(_comp)
-                if _seeded and validate_transcript(_seeded):
-                    transcript_content = _seeded
-                    transcript_builder.load_previous(_seeded, log_prefix=log_prefix)
-                    transcript_covers_prefix = True
-                    transcript_msg_count = len(_prior)
-                    logger.info(
-                        "%s Seeded transcript from %d compressed DB messages"
-                        " for next-turn upload (seed_target_tokens=%d)",
-                        log_prefix,
-                        len(_comp),
-                        _SEED_TARGET_TOKENS,
-                    )
+        # upload_transcript saves a compact version for future turns.
+        if not use_resume and not transcript_content and not skip_transcript_upload:
+            (
+                transcript_content,
+                transcript_covers_prefix,
+                transcript_msg_count,
+            ) = await _seed_transcript(
+                session,
+                transcript_builder,
+                transcript_covers_prefix,
+                transcript_msg_count,
+                log_prefix,
+            )
 
         tried_compaction = False
 
