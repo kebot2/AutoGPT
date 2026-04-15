@@ -17,6 +17,7 @@ from .conftest import build_test_transcript as _build_transcript
 from .service import (
     _RETRY_TARGET_TOKENS,
     ReducedContext,
+    _apply_token_usage,
     _is_prompt_too_long,
     _is_tool_only_message,
     _iter_sdk_messages,
@@ -367,13 +368,6 @@ class TestTokenUsageNullSafety:
     when the key existed with a null value, causing 'int += None' TypeError.
     """
 
-    def _apply_usage(self, usage: dict, acc: _TokenUsage) -> None:
-        """Mirror the production accumulation in sdk/service.py."""
-        acc.prompt_tokens += usage.get("input_tokens") or 0
-        acc.cache_read_tokens += usage.get("cache_read_input_tokens") or 0
-        acc.cache_creation_tokens += usage.get("cache_creation_input_tokens") or 0
-        acc.completion_tokens += usage.get("output_tokens") or 0
-
     def test_null_cache_tokens_do_not_crash(self):
         """OpenRouter initial event: cache keys present with null value."""
         usage = {
@@ -383,7 +377,7 @@ class TestTokenUsageNullSafety:
             "cache_creation_input_tokens": None,
         }
         acc = _TokenUsage()
-        self._apply_usage(usage, acc)  # must not raise TypeError
+        _apply_token_usage(acc, usage)  # must not raise TypeError
         assert acc.prompt_tokens == 0
         assert acc.cache_read_tokens == 0
         assert acc.cache_creation_tokens == 0
@@ -398,7 +392,7 @@ class TestTokenUsageNullSafety:
             "cache_creation_input_tokens": 512,
         }
         acc = _TokenUsage()
-        self._apply_usage(usage, acc)
+        _apply_token_usage(acc, usage)
         assert acc.prompt_tokens == 10
         assert acc.cache_read_tokens == 16600
         assert acc.cache_creation_tokens == 512
@@ -408,7 +402,7 @@ class TestTokenUsageNullSafety:
         """Minimal usage dict without cache keys defaults correctly."""
         usage = {"input_tokens": 5, "output_tokens": 20}
         acc = _TokenUsage()
-        self._apply_usage(usage, acc)
+        _apply_token_usage(acc, usage)
         assert acc.prompt_tokens == 5
         assert acc.cache_read_tokens == 0
         assert acc.cache_creation_tokens == 0
@@ -429,9 +423,28 @@ class TestTokenUsageNullSafety:
             "cache_creation_input_tokens": 512,
         }
         acc = _TokenUsage()
-        self._apply_usage(null_event, acc)
-        self._apply_usage(real_event, acc)
+        _apply_token_usage(acc, null_event)
+        _apply_token_usage(acc, real_event)
         assert acc.prompt_tokens == 10
         assert acc.cache_read_tokens == 16600
         assert acc.cache_creation_tokens == 512
         assert acc.completion_tokens == 349
+
+    @pytest.mark.parametrize(
+        "key,null_field,real_value,acc_attr",
+        [
+            ("cache_read_input_tokens", None, 16600, "cache_read_tokens"),
+            ("cache_creation_input_tokens", None, 512, "cache_creation_tokens"),
+            ("input_tokens", None, 10, "prompt_tokens"),
+            ("output_tokens", None, 349, "completion_tokens"),
+        ],
+    )
+    def test_null_then_real_per_field(
+        self, key: str, null_field: None, real_value: int, acc_attr: str
+    ) -> None:
+        """Each token field handles null → real transition independently."""
+        acc = _TokenUsage()
+        _apply_token_usage(acc, {key: null_field})
+        assert getattr(acc, acc_attr) == 0
+        _apply_token_usage(acc, {key: real_value})
+        assert getattr(acc, acc_attr) == real_value

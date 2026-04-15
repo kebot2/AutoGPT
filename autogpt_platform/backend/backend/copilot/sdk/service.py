@@ -298,6 +298,21 @@ class _TokenUsage:
         self.cost_usd = None
 
 
+def _apply_token_usage(acc: _TokenUsage, usage: dict) -> None:
+    """Accumulate token counts from a ResultMessage usage dict into *acc*.
+
+    Uses ``or 0`` instead of ``.get(key, 0)`` because OpenRouter may include
+    cache token keys with a ``null`` value (rather than omitting them) during
+    the initial streaming event before real counts are available.  Plain
+    ``.get(key, 0)`` returns ``None`` when the key exists but is ``null``,
+    causing ``int += None`` TypeError.
+    """
+    acc.prompt_tokens += usage.get("input_tokens") or 0
+    acc.cache_read_tokens += usage.get("cache_read_input_tokens") or 0
+    acc.cache_creation_tokens += usage.get("cache_creation_input_tokens") or 0
+    acc.completion_tokens += usage.get("output_tokens") or 0
+
+
 @dataclass
 class _RetryState:
     """Mutable state passed to `_run_stream_attempt` instead of closures.
@@ -1888,21 +1903,7 @@ async def _run_stream_attempt(
                 #   cache_read_input_tokens = served from cache
                 #   cache_creation_input_tokens = written to cache
                 if sdk_msg.usage:
-                    # Use `or 0` instead of a default in .get() because
-                    # OpenRouter may include the key with a null value (e.g.
-                    # {"cache_read_input_tokens": null}) for models that don't
-                    # yet report cache tokens, making .get("key", 0) return
-                    # None rather than the fallback 0.
-                    state.usage.prompt_tokens += sdk_msg.usage.get("input_tokens") or 0
-                    state.usage.cache_read_tokens += (
-                        sdk_msg.usage.get("cache_read_input_tokens") or 0
-                    )
-                    state.usage.cache_creation_tokens += (
-                        sdk_msg.usage.get("cache_creation_input_tokens") or 0
-                    )
-                    state.usage.completion_tokens += (
-                        sdk_msg.usage.get("output_tokens") or 0
-                    )
+                    _apply_token_usage(state.usage, sdk_msg.usage)
                     logger.info(
                         "%s Token usage: uncached=%d, cache_read=%d, "
                         "cache_create=%d, output=%d",
