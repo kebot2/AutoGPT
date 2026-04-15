@@ -111,6 +111,11 @@ def test_get_subscription_status_pro(
         "backend.api.features.v1._get_stripe_price_amount",
         side_effect=mock_stripe_price_amount,
     )
+    mocker.patch(
+        "backend.api.features.v1.get_proration_credit_cents",
+        new_callable=AsyncMock,
+        return_value=500,
+    )
 
     response = client.get("/credits/subscription")
 
@@ -121,6 +126,7 @@ def test_get_subscription_status_pro(
     assert data["tier_costs"]["PRO"] == 1999
     assert data["tier_costs"]["BUSINESS"] == 0
     assert data["tier_costs"]["FREE"] == 0
+    assert data["proration_credit_cents"] == 500
 
 
 def test_get_subscription_status_defaults_to_free(
@@ -141,6 +147,11 @@ def test_get_subscription_status_defaults_to_free(
         new_callable=AsyncMock,
         return_value=None,
     )
+    mocker.patch(
+        "backend.api.features.v1.get_proration_credit_cents",
+        new_callable=AsyncMock,
+        return_value=0,
+    )
 
     response = client.get("/credits/subscription")
 
@@ -154,6 +165,7 @@ def test_get_subscription_status_defaults_to_free(
         "BUSINESS": 0,
         "ENTERPRISE": 0,
     }
+    assert data["proration_credit_cents"] == 0
 
 
 def test_get_subscription_status_stripe_error_falls_back_to_zero(
@@ -186,6 +198,11 @@ def test_get_subscription_status_stripe_error_falls_back_to_zero(
     mocker.patch(
         "backend.api.features.v1._get_stripe_price_amount",
         side_effect=mock_stripe_price_amount_none,
+    )
+    mocker.patch(
+        "backend.api.features.v1.get_proration_credit_cents",
+        new_callable=AsyncMock,
+        return_value=0,
     )
 
     response = client.get("/credits/subscription")
