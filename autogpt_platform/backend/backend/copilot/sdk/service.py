@@ -94,11 +94,10 @@ from ..transcript import (
     _run_compression,
     cleanup_stale_project_dirs,
     compact_transcript,
-    download_transcript,
     read_compacted_entries,
     restore_cli_session,
+    strip_for_upload,
     upload_cli_session,
-    upload_transcript,
     validate_transcript,
 )
 from ..transcript_builder import TranscriptBuilder
@@ -2427,28 +2426,9 @@ async def stream_chat_completion_sdk(
 
             return sandbox
 
-        async def _fetch_transcript():
-            """Download transcript for --resume if applicable."""
-            if not (
-                config.claude_agent_use_resume and user_id and len(session.messages) > 1
-            ):
-                return None
-            try:
-                return await download_transcript(
-                    user_id, session_id, log_prefix=log_prefix
-                )
-            except Exception as transcript_err:
-                logger.warning(
-                    "%s Transcript download failed, continuing without --resume: %s",
-                    log_prefix,
-                    transcript_err,
-                )
-                return None
-
-        e2b_sandbox, (base_system_prompt, understanding), dl = await asyncio.gather(
+        e2b_sandbox, (base_system_prompt, understanding) = await asyncio.gather(
             _setup_e2b(),
             _build_system_prompt(user_id if not has_history else None),
-            _fetch_transcript(),
         )
 
         use_e2b = e2b_sandbox is not None
@@ -2473,95 +2453,83 @@ async def stream_chat_completion_sdk(
 
             warm_ctx = await fetch_warm_context(user_id, message or "") or ""
 
-        # Process transcript download result and restore CLI native session.
-        # The CLI native session file (uploaded after each turn) is the
-        # source of truth for --resume.  Our custom JSONL (TranscriptEntry)
-        # is loaded into the builder for future upload_transcript calls.
+        # Restore CLI session — single GCS round-trip covers both --resume and builder state.
+        # message_count watermark lives in the companion .meta.json alongside the session file.
         transcript_msg_count = 0
-        if dl:
-            is_valid = validate_transcript(dl.content)
-            dl_lines = dl.content.strip().split("\n") if dl.content else []
-            logger.info(
-                "%s Downloaded transcript: %dB, %d lines, msg_count=%d, valid=%s",
-                log_prefix,
-                len(dl.content),
-                len(dl_lines),
-                dl.message_count,
-                is_valid,
-            )
-            if is_valid:
-                # Load previous FULL context into builder for state tracking.
-                transcript_content = dl.content
-                transcript_builder.load_previous(dl.content, log_prefix=log_prefix)
-                # Restore CLI's native session file so --resume session_id works.
-                # Falls back gracefully if not available (first turn or upload missed).
-                # user_id is guaranteed non-None here: _fetch_transcript only sets dl
-                # when `config.claude_agent_use_resume and user_id` is truthy.
-                cli_restored = user_id is not None and await restore_cli_session(
+        if config.claude_agent_use_resume and user_id and len(session.messages) > 1:
+            try:
+                cli_restore = await restore_cli_session(
                     user_id, session_id, sdk_cwd, log_prefix=log_prefix
                 )
-                if cli_restored:
-                    use_resume = True
-                    resume_file = session_id  # CLI --resume expects UUID, not file path
-                    transcript_msg_count = dl.message_count
-                    logger.info(
-                        "%s Using --resume %s (%dB transcript, msg_count=%d)",
+            except Exception as restore_err:
+                logger.warning(
+                    "%s CLI session restore failed, continuing without --resume: %s",
+                    log_prefix,
+                    restore_err,
+                )
+                cli_restore = None
+
+            raw_str = ""
+            if cli_restore is not None:
+                try:
+                    raw_str = cli_restore.content.decode("utf-8")
+                except UnicodeDecodeError:
+                    logger.warning(
+                        "%s CLI session content is not valid UTF-8, skipping",
                         log_prefix,
-                        session_id[:8],
-                        len(dl.content),
-                        transcript_msg_count,
+                    )
+                    cli_restore = None
+
+            if cli_restore is not None:
+                stripped = strip_for_upload(raw_str)
+                is_valid = validate_transcript(stripped)
+                logger.info(
+                    "%s Restored CLI session: %dB raw, %d lines stripped, msg_count=%d, valid=%s",
+                    log_prefix,
+                    len(cli_restore.content),
+                    len(stripped.strip().split("\n")) if stripped.strip() else 0,
+                    cli_restore.message_count,
+                    is_valid,
+                )
+                if is_valid:
+                    transcript_content = stripped
+                    transcript_builder.load_previous(stripped, log_prefix=log_prefix)
+                    use_resume = True
+                    resume_file = session_id
+                    transcript_msg_count = cli_restore.message_count
+                else:
+                    logger.warning(
+                        "%s CLI session content invalid after strip — running without --resume",
+                        log_prefix,
+                    )
+                    transcript_covers_prefix = False
+            elif (
+                config.claude_agent_use_resume and user_id and len(session.messages) > 1
+            ):
+                # No CLI session in GCS — reconstruct from DB messages as last-resort fallback.
+                prior = session.messages[:-1]
+                reconstructed = _session_messages_to_transcript(prior)
+                if reconstructed:
+                    transcript_content = reconstructed
+                    transcript_builder.load_previous(
+                        reconstructed, log_prefix=log_prefix
+                    )
+                    transcript_msg_count = len(prior)
+                    transcript_covers_prefix = True
+                    logger.info(
+                        "%s Reconstructed transcript from %d session messages "
+                        "(no CLI session — running without --resume this turn)",
+                        log_prefix,
+                        len(prior),
                     )
                 else:
-                    # Builder loaded but CLI native session not available.
-                    # --resume will not be used this turn; upload after turn
-                    # will seed the native session for the next turn.
-                    #
-                    # Still record transcript_msg_count so _build_query_message
-                    # can use the transcript-aware gap path (inject only new
-                    # messages since the transcript end) instead of compressing
-                    # the full DB history.  This avoids prompt-too-long on
-                    # large sessions where the CLI session is temporarily
-                    # unavailable (e.g. mixed-version rolling deployment).
-                    transcript_msg_count = dl.message_count
-                    logger.info(
-                        "%s CLI session not restored — running without"
-                        " --resume this turn (transcript_msg_count=%d for"
-                        " gap-aware fallback)",
+                    logger.warning(
+                        "%s No session available and reconstruction produced empty output "
+                        "(%d messages in session)",
                         log_prefix,
-                        transcript_msg_count,
+                        len(session.messages),
                     )
-            else:
-                logger.warning("%s Transcript downloaded but invalid", log_prefix)
-                transcript_covers_prefix = False
-        elif config.claude_agent_use_resume and user_id and len(session.messages) > 1:
-            # No transcript in storage — reconstruct from DB messages as a
-            # last-resort fallback (e.g., first turn after a crash or transition).
-            # This path loses tool call IDs and structural fidelity but prevents
-            # a completely context-free response for established sessions.
-            prior = session.messages[:-1]
-            reconstructed = _session_messages_to_transcript(prior)
-            if reconstructed:
-                # Populate builder only; no --resume since there is no CLI
-                # native session to restore.  The transcript builder state is
-                # still useful for the upload that seeds future native sessions.
-                transcript_content = reconstructed
-                transcript_builder.load_previous(reconstructed, log_prefix=log_prefix)
-                transcript_msg_count = len(prior)
-                transcript_covers_prefix = True
-                logger.info(
-                    "%s Reconstructed transcript from %d session messages "
-                    "(no CLI native session — running without --resume this turn)",
-                    log_prefix,
-                    len(prior),
-                )
-            else:
-                logger.warning(
-                    "%s No transcript available and reconstruction produced empty"
-                    " output (%d messages in session)",
-                    log_prefix,
-                    len(session.messages),
-                )
-                transcript_covers_prefix = False
+                    transcript_covers_prefix = False
 
         yield StreamStart(messageId=message_id, sessionId=session_id)
 
@@ -3366,79 +3334,16 @@ async def stream_chat_completion_sdk(
             _background_tasks.add(_ingest_task)
             _ingest_task.add_done_callback(_background_tasks.discard)
 
-        # --- Upload transcript for next-turn --resume ---
-        # TranscriptBuilder is the single source of truth.  It mirrors the
-        # CLI's active context: on compaction, replace_entries() syncs it
-        # with the compacted session file.  No CLI file read needed here.
-        if skip_transcript_upload:
-            logger.warning(
-                "%s Skipping transcript upload — transcript was dropped "
-                "during prompt-too-long recovery",
-                log_prefix,
-            )
-        elif (
-            config.claude_agent_use_resume
-            and user_id
-            and session is not None
-            and state is not None
-        ):
-            try:
-                transcript_upload_content = state.transcript_builder.to_jsonl()
-                entry_count = state.transcript_builder.entry_count
-
-                if not transcript_upload_content:
-                    logger.warning(
-                        "%s No transcript to upload (builder empty)", log_prefix
-                    )
-                elif not validate_transcript(transcript_upload_content):
-                    logger.warning(
-                        "%s Transcript invalid, skipping upload (entries=%d)",
-                        log_prefix,
-                        entry_count,
-                    )
-                elif not transcript_covers_prefix:
-                    logger.warning(
-                        "%s Skipping transcript upload — builder does not "
-                        "cover full session prefix (entries=%d, session=%d)",
-                        log_prefix,
-                        entry_count,
-                        len(session.messages),
-                    )
-                else:
-                    logger.info(
-                        "%s Uploading transcript (entries=%d, bytes=%d)",
-                        log_prefix,
-                        entry_count,
-                        len(transcript_upload_content),
-                    )
-                    await asyncio.shield(
-                        upload_transcript(
-                            user_id=user_id,
-                            session_id=session_id,
-                            content=transcript_upload_content,
-                            message_count=len(session.messages),
-                            log_prefix=log_prefix,
-                        )
-                    )
-            except Exception as upload_err:
-                logger.error(
-                    "%s Transcript upload failed in finally: %s",
-                    log_prefix,
-                    upload_err,
-                    exc_info=True,
-                )
-
         # --- Upload CLI native session file for cross-pod --resume ---
         # The CLI writes its native session JSONL after each turn completes.
-        # Uploading it here enables --resume on any pod (no pod affinity needed).
-        # Runs after upload_transcript so both are available for the next turn.
-        # asyncio.shield: same pattern as upload_transcript above — if the
-        # outer finally-block coroutine is cancelled while awaiting shield,
-        # the CancelledError propagates (BaseException, not caught by
-        # `except Exception`) letting the caller handle cancellation, while
-        # the shielded inner coroutine continues running to completion so the
-        # upload is not lost.  This is intentional and matches the pattern
-        # used for upload_transcript immediately above.
+        # The companion .meta.json carries the message_count watermark so the
+        # next turn can restore both --resume context and gap-fill state in a
+        # single GCS round-trip (no separate chat-transcripts fetch needed).
+        # asyncio.shield: if the outer finally-block coroutine is cancelled
+        # while awaiting shield, the CancelledError propagates (BaseException,
+        # not caught by `except Exception`) letting the caller handle
+        # cancellation, while the shielded inner coroutine continues running
+        # to completion so the upload is not lost.
         #
         # NOTE: upload is attempted regardless of state.use_resume — even when
         # this turn ran without --resume (restore failed or first T2+ on a new
@@ -3476,6 +3381,7 @@ async def stream_chat_completion_sdk(
                         user_id=user_id,
                         session_id=session_id,
                         sdk_cwd=sdk_cwd,
+                        message_count=len(session.messages),
                         log_prefix=log_prefix,
                     )
                 )

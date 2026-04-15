@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.copilot.transcript import (
+    CliSessionRestore,
     _flatten_assistant_content,
     _flatten_tool_result_content,
     _messages_to_transcript,
@@ -996,16 +997,15 @@ def _make_sdk_patches(
             dict(new_callable=AsyncMock, return_value=("system prompt", None)),
         ),
         (
-            f"{_SVC}.download_transcript",
+            f"{_SVC}.restore_cli_session",
             dict(
                 new_callable=AsyncMock,
-                return_value=MagicMock(content=original_transcript, message_count=2),
+                return_value=CliSessionRestore(
+                    content=original_transcript.encode("utf-8"), message_count=2
+                ),
             ),
         ),
-        (
-            f"{_SVC}.restore_cli_session",
-            dict(new_callable=AsyncMock, return_value=True),
-        ),
+        (f"{_SVC}.strip_for_upload", dict(return_value=original_transcript)),
         (f"{_SVC}.upload_cli_session", dict(new_callable=AsyncMock)),
         (f"{_SVC}.validate_transcript", dict(return_value=True)),
         (
@@ -1037,7 +1037,6 @@ def _make_sdk_patches(
                 claude_agent_fallback_model=None,
             ),
         ),
-        (f"{_SVC}.upload_transcript", dict(new_callable=AsyncMock)),
         (f"{_SVC}.get_user_tier", dict(new_callable=AsyncMock, return_value=None)),
     ]
 
@@ -1914,12 +1913,12 @@ class TestStreamChatCompletionRetryIntegration:
             compacted_transcript=None,
             client_side_effect=_client_factory,
         )
-        # Override restore_cli_session to return False (CLI native session unavailable)
+        # Override restore_cli_session to return None (CLI native session unavailable)
         patches = [
             (
                 (
                     f"{_SVC}.restore_cli_session",
-                    dict(new_callable=AsyncMock, return_value=False),
+                    dict(new_callable=AsyncMock, return_value=None),
                 )
                 if p[0] == f"{_SVC}.restore_cli_session"
                 else p

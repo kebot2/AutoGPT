@@ -53,6 +53,14 @@ class TranscriptDownload:
     uploaded_at: float = 0.0  # epoch timestamp of upload
 
 
+@dataclass
+class CliSessionRestore:
+    """Result of restoring the CLI native session file."""
+
+    content: bytes  # raw bytes written to disk (for builder seeding)
+    message_count: int = 0  # watermark from companion .meta.json
+
+
 # Workspace storage constants — deterministic path from session_id.
 TRANSCRIPT_STORAGE_PREFIX = "chat-transcripts"
 # Storage prefix for the CLI's native session JSONL files (for cross-pod --resume).
@@ -689,13 +697,26 @@ def _cli_session_storage_path_parts(
     )
 
 
+def _cli_session_meta_path_parts(user_id: str, session_id: str) -> tuple[str, str, str]:
+    """Return (workspace_id, file_id, filename) for the CLI session meta file."""
+    return (
+        _CLI_SESSION_STORAGE_PREFIX,
+        _sanitize_id(user_id),
+        f"{_sanitize_id(session_id)}.meta.json",
+    )
+
+
 async def upload_cli_session(
     user_id: str,
     session_id: str,
     sdk_cwd: str,
+    message_count: int = 0,
     log_prefix: str = "[Transcript]",
 ) -> None:
     """Upload the CLI's native session JSONL file to remote storage.
+
+    Also uploads a companion .meta.json with the message_count watermark so
+    restore_cli_session can return it without a separate chat-transcripts fetch.
 
     Called after each turn so the next turn can restore the file on any pod
     (eliminating the pod-affinity requirement for --resume).
@@ -730,17 +751,32 @@ async def upload_cli_session(
 
     storage = await get_workspace_storage()
     wid, fid, fname = _cli_session_storage_path_parts(user_id, session_id)
-    try:
-        await storage.store(
-            workspace_id=wid, file_id=fid, filename=fname, content=content
+    mwid, mfid, mfname = _cli_session_meta_path_parts(user_id, session_id)
+    meta = {"message_count": message_count, "uploaded_at": time.time()}
+    meta_encoded = json.dumps(meta).encode("utf-8")
+
+    session_result, meta_result = await asyncio.gather(
+        storage.store(workspace_id=wid, file_id=fid, filename=fname, content=content),
+        storage.store(
+            workspace_id=mwid, file_id=mfid, filename=mfname, content=meta_encoded
+        ),
+        return_exceptions=True,
+    )
+    if isinstance(session_result, BaseException):
+        logger.warning(
+            "%s Failed to upload CLI session file: %s", log_prefix, session_result
         )
-        logger.info(
-            "%s Uploaded CLI session file (%dB) for cross-pod --resume",
-            log_prefix,
-            len(content),
+        return
+    if isinstance(meta_result, BaseException):
+        logger.warning(
+            "%s Failed to upload CLI session meta: %s", log_prefix, meta_result
         )
-    except Exception as e:
-        logger.warning("%s Failed to upload CLI session file: %s", log_prefix, e)
+    logger.info(
+        "%s Uploaded CLI session file (%dB, msg_count=%d) for cross-pod --resume",
+        log_prefix,
+        len(content),
+        message_count,
+    )
 
 
 async def restore_cli_session(
@@ -748,12 +784,14 @@ async def restore_cli_session(
     session_id: str,
     sdk_cwd: str,
     log_prefix: str = "[Transcript]",
-) -> bool:
+) -> CliSessionRestore | None:
     """Download and restore the CLI's native session file for --resume.
 
-    Returns True if the file was successfully restored and --resume can be
-    used with the session UUID.  Returns False if not available (first turn
-    or upload failed), in which case the caller should not set --resume.
+    Always downloads from GCS (overwriting any local file) to avoid cross-pod
+    stale context bugs in load-balanced environments.
+
+    Returns a CliSessionRestore with the raw content and message_count watermark
+    on success, or None if not available (first turn or upload failed).
     """
     session_file = _cli_session_path(sdk_cwd, session_id)
     real_path = os.path.realpath(session_file)
@@ -765,45 +803,56 @@ async def restore_cli_session(
             log_prefix,
             os.path.basename(session_file),
         )
-        return False
-
-    # If the session file already exists locally (same-pod reuse), use it directly.
-    # Downloading from storage could overwrite a newer local version when a previous
-    # turn's upload failed: stored content is stale while the local file already
-    # contains extended history from that turn.
-    if Path(real_path).exists():
-        logger.debug(
-            "%s CLI session file already exists locally — using it for --resume",
-            log_prefix,
-        )
-        return True
+        return None
 
     storage = await get_workspace_storage()
     path = _build_path_from_parts(
         _cli_session_storage_path_parts(user_id, session_id), storage
     )
+    meta_path = _build_path_from_parts(
+        _cli_session_meta_path_parts(user_id, session_id), storage
+    )
 
-    try:
-        content = await storage.retrieve(path)
-    except FileNotFoundError:
+    content_result, meta_result = await asyncio.gather(
+        storage.retrieve(path),
+        storage.retrieve(meta_path),
+        return_exceptions=True,
+    )
+
+    if isinstance(content_result, FileNotFoundError):
         logger.debug("%s No CLI session in storage (first turn or missing)", log_prefix)
-        return False
-    except Exception as e:
-        logger.warning("%s Failed to download CLI session: %s", log_prefix, e)
-        return False
+        return None
+    if isinstance(content_result, BaseException):
+        logger.warning(
+            "%s Failed to download CLI session: %s", log_prefix, content_result
+        )
+        return None
+
+    content: bytes = content_result
+
+    # Parse message_count from companion meta — best-effort, default to 0.
+    message_count = 0
+    if isinstance(meta_result, FileNotFoundError):
+        pass  # No meta — first upload or old version; default to 0
+    elif isinstance(meta_result, BaseException):
+        logger.debug("%s Failed to load CLI session meta: %s", log_prefix, meta_result)
+    else:
+        meta = json.loads(meta_result.decode("utf-8"), fallback={})
+        message_count = meta.get("message_count", 0)
 
     try:
         os.makedirs(os.path.dirname(real_path), exist_ok=True)
         Path(real_path).write_bytes(content)
         logger.info(
-            "%s Restored CLI session file (%dB) for --resume",
+            "%s Restored CLI session file (%dB, msg_count=%d) for --resume",
             log_prefix,
             len(content),
+            message_count,
         )
-        return True
+        return CliSessionRestore(content=content, message_count=message_count)
     except OSError as e:
         logger.warning("%s Failed to write CLI session file: %s", log_prefix, e)
-        return False
+        return None
 
 
 async def upload_transcript(

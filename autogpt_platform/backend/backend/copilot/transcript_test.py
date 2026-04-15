@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from backend.util import json
 
 from .transcript import (
+    CliSessionRestore,
     TranscriptDownload,
     _build_path_from_parts,
     _find_last_assistant_entry,
@@ -867,7 +868,8 @@ class TestUploadCliSession:
                 )
             )
 
-        mock_storage.store.assert_called_once()
+        # Two calls expected: session JSONL + companion .meta.json
+        assert mock_storage.store.call_count == 2
 
     def test_skips_upload_on_oserror(self, tmp_path):
         """OSError reading session file is logged as warning; upload is skipped."""
@@ -918,10 +920,62 @@ class TestUploadCliSession:
 
         mock_storage.store.assert_not_called()
 
+    def test_uploads_companion_meta_json_with_message_count(self, tmp_path):
+        """upload_cli_session also stores a companion .meta.json with message_count."""
+        import asyncio
+        import json
+        import os
+        import re
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import _sanitize_id, upload_cli_session
+
+        projects_base = str(tmp_path)
+        session_id = "12345678-0000-0000-0000-000000000010"
+        sdk_cwd = str(tmp_path)
+
+        encoded_cwd = re.sub(r"[^a-zA-Z0-9]", "-", os.path.realpath(sdk_cwd))
+        session_dir = tmp_path / encoded_cwd
+        session_dir.mkdir(parents=True, exist_ok=True)
+        session_file = session_dir / f"{_sanitize_id(session_id)}.jsonl"
+        session_file.write_bytes(b'{"type":"assistant"}\n')
+
+        mock_storage = AsyncMock()
+
+        with (
+            patch(
+                "backend.copilot.transcript._projects_base",
+                return_value=projects_base,
+            ),
+            patch(
+                "backend.copilot.transcript.get_workspace_storage",
+                new_callable=AsyncMock,
+                return_value=mock_storage,
+            ),
+        ):
+            asyncio.run(
+                upload_cli_session(
+                    user_id="user-1",
+                    session_id=session_id,
+                    sdk_cwd=sdk_cwd,
+                    message_count=5,
+                )
+            )
+
+        assert mock_storage.store.call_count == 2
+        # Find the meta.json store call
+        meta_call = next(
+            c
+            for c in mock_storage.store.call_args_list
+            if c.kwargs.get("filename", "").endswith(".meta.json")
+        )
+        meta_content = json.loads(meta_call.kwargs["content"])
+        assert meta_content["message_count"] == 5
+
 
 class TestRestoreCliSession:
-    def test_returns_false_when_file_not_found_in_storage(self):
-        """Returns False (graceful degradation) when the session is missing."""
+    def test_returns_none_when_file_not_found_in_storage(self):
+        """Returns None (graceful degradation) when the session is missing."""
         import asyncio
         from unittest.mock import AsyncMock, patch
 
@@ -943,9 +997,9 @@ class TestRestoreCliSession:
                 )
             )
 
-        assert result is False
+        assert result is None
 
-    def test_returns_false_when_restore_path_outside_projects_base(self, tmp_path):
+    def test_returns_none_when_restore_path_outside_projects_base(self, tmp_path):
         """Path traversal guard: rejects restoration outside the projects base."""
         import asyncio
         from unittest.mock import AsyncMock, patch
@@ -979,10 +1033,10 @@ class TestRestoreCliSession:
                 )
             )
 
-        assert result is False
+        assert result is None
 
-    def test_returns_true_when_local_file_already_exists(self, tmp_path):
-        """Same-pod reuse: if local file exists, skip storage download and return True."""
+    def test_gcs_overwrites_stale_local_file(self, tmp_path):
+        """GCS always downloads and overwrites any pre-existing local file."""
         import asyncio
         import os
         import re
@@ -993,16 +1047,22 @@ class TestRestoreCliSession:
 
         session_id = "12345678-0000-0000-0000-000000000099"
         sdk_cwd = str(tmp_path)
-
-        # Pre-create the local session file (simulates previous turn on same pod)
         projects_base = os.path.realpath(str(tmp_path))
+
+        # Pre-create a stale local session file
         encoded_cwd = re.sub(r"[^a-zA-Z0-9]", "-", projects_base)
         session_dir = Path(projects_base) / encoded_cwd
         session_dir.mkdir(parents=True, exist_ok=True)
-        existing_content = b'{"type":"user"}\n{"type":"assistant"}\n'
-        (session_dir / f"{session_id}.jsonl").write_bytes(existing_content)
+        stale_content = b'{"type":"user"}\n'
+        (session_dir / f"{session_id}.jsonl").write_bytes(stale_content)
 
+        # GCS returns fresher content
+        fresh_content = b'{"type":"user"}\n{"type":"assistant"}\n'
         mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [
+            fresh_content,
+            FileNotFoundError("no meta"),
+        ]
 
         with (
             patch(
@@ -1023,14 +1083,16 @@ class TestRestoreCliSession:
                 )
             )
 
-        assert result is True
-        # Storage should NOT have been accessed (local file was used as-is)
-        mock_storage.retrieve.assert_not_called()
-        # Local file should be unchanged
-        assert (session_dir / f"{session_id}.jsonl").read_bytes() == existing_content
+        assert isinstance(result, CliSessionRestore)
+        assert result.content == fresh_content
+        assert result.message_count == 0
+        # GCS content overwrites the stale local file
+        assert (session_dir / f"{session_id}.jsonl").read_bytes() == fresh_content
+        # Storage was accessed (no same-pod short-circuit)
+        mock_storage.retrieve.assert_called()
 
-    def test_returns_true_on_success(self, tmp_path):
-        """Happy path: storage has the session → file written → returns True."""
+    def test_returns_cli_session_restore_on_success_no_meta(self, tmp_path):
+        """Happy path with no meta.json: returns CliSessionRestore with message_count=0."""
         import asyncio
         from unittest.mock import AsyncMock, patch
 
@@ -1042,7 +1104,7 @@ class TestRestoreCliSession:
         content = b'{"type":"assistant"}\n'
 
         mock_storage = AsyncMock()
-        mock_storage.retrieve.return_value = content
+        mock_storage.retrieve.side_effect = [content, FileNotFoundError("no meta")]
 
         with (
             patch(
@@ -1063,10 +1125,52 @@ class TestRestoreCliSession:
                 )
             )
 
-        assert result is True
+        assert isinstance(result, CliSessionRestore)
+        assert result.content == content
+        assert result.message_count == 0
 
-    def test_returns_false_on_download_exception(self):
-        """Non-FileNotFoundError during retrieve logs warning and returns False."""
+    def test_returns_cli_session_restore_with_message_count_from_meta(self, tmp_path):
+        """When meta.json is present, message_count is read from it."""
+        import asyncio
+        import json
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import restore_cli_session
+
+        projects_base = str(tmp_path)
+        sdk_cwd = str(tmp_path)
+        session_id = "12345678-0000-0000-0000-000000000005"
+        content = b'{"type":"assistant"}\n'
+        meta_bytes = json.dumps({"message_count": 7, "uploaded_at": 1234567.0}).encode()
+
+        mock_storage = AsyncMock()
+        mock_storage.retrieve.side_effect = [content, meta_bytes]
+
+        with (
+            patch(
+                "backend.copilot.transcript.get_workspace_storage",
+                new_callable=AsyncMock,
+                return_value=mock_storage,
+            ),
+            patch(
+                "backend.copilot.transcript._projects_base",
+                return_value=projects_base,
+            ),
+        ):
+            result = asyncio.run(
+                restore_cli_session(
+                    user_id="user-1",
+                    session_id=session_id,
+                    sdk_cwd=sdk_cwd,
+                )
+            )
+
+        assert isinstance(result, CliSessionRestore)
+        assert result.content == content
+        assert result.message_count == 7
+
+    def test_returns_none_on_download_exception(self):
+        """Non-FileNotFoundError during retrieve logs warning and returns None."""
         import asyncio
         from unittest.mock import AsyncMock, patch
 
@@ -1088,4 +1192,4 @@ class TestRestoreCliSession:
                 )
             )
 
-        assert result is False
+        assert result is None
