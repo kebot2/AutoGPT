@@ -559,10 +559,7 @@ class TestTranscriptLifecycle:
 
             # --- 3. Gate + upload ---
             assert (
-                should_upload_transcript(
-                    user_id="user-1", upload_safe=covers
-                )
-                is True
+                should_upload_transcript(user_id="user-1", upload_safe=covers) is True
             )
             await _upload_final_transcript(
                 user_id="user-1",
@@ -626,10 +623,7 @@ class TestTranscriptLifecycle:
             stop_reason=STOP_REASON_END_TURN,
         )
 
-        assert (
-            should_upload_transcript(user_id=None, upload_safe=True)
-            is False
-        )
+        assert should_upload_transcript(user_id=None, upload_safe=True) is False
 
     @pytest.mark.asyncio
     async def test_lifecycle_missing_download_still_uploads_new_content(self):
@@ -657,9 +651,7 @@ class TestTranscriptLifecycle:
             assert upload_safe is True
             assert dl is None
             assert (
-                should_upload_transcript(
-                    user_id="user-1", upload_safe=upload_safe
-                )
+                should_upload_transcript(user_id="user-1", upload_safe=upload_safe)
                 is True
             )
 

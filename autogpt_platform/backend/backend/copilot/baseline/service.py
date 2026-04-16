@@ -703,9 +703,7 @@ async def _compress_session_messages(
     return messages
 
 
-def should_upload_transcript(
-    user_id: str | None, upload_safe: bool
-) -> bool:
+def should_upload_transcript(user_id: str | None, upload_safe: bool) -> bool:
     """Return ``True`` when the caller should upload the final transcript.
 
     Uploads require a logged-in user (for the storage key) *and* a safe
@@ -1041,7 +1039,7 @@ async def stream_chat_completion_baseline(
     # See extract_context_messages() in transcript.py for the shared primitive.
     prior_context = extract_context_messages(transcript_download, session.messages)
     messages_for_context = await _compress_session_messages(
-        prior_context + [session.messages[-1]],
+        prior_context + ([session.messages[-1]] if session.messages else []),
         model=active_model,
     )
 
