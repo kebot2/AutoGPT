@@ -168,7 +168,7 @@ class TestExpandToMarkers:
 def mock_scan():
     """Patch virus scanner for tests."""
     with patch(
-        "backend.api.features.chat.tools.binary_output_processor.scan_content_safe",
+        "backend.copilot.tools.binary_output_processor.scan_content_safe",
         new_callable=AsyncMock,
     ) as mock:
         yield mock
@@ -354,24 +354,24 @@ class TestOffsetLoopHandling:
         content, ext = result
         assert ext == "pdf"
 
-    def test_handles_misaligned_prefix(self):
-        """Should handle misaligned prefix by finding a valid aligned offset.
+    def test_misaligned_prefix_not_detected(self):
+        """Misaligned prefixes (length not divisible by 4) are NOT recoverable.
 
-        'START' is 5 chars (misaligned). The loop tries offsets 0, 4, 8...
-        Since characters 0-4 include 'START' which is invalid base64 on its own,
-        we need the full PDF base64 to eventually decode correctly at some offset.
+        The loop tries 4-byte aligned offsets: 0, 4, 8, 12...
+        A 5-char 'START' prefix means no aligned offset lands cleanly at the
+        start of the base64 payload — each offset decodes a corrupted sequence
+        that won't match any magic number. This is a known limitation.
+
+        Only markers whose length is divisible by 4 (like PDF_BASE64_START=16)
+        can be skipped by the offset loop.
         """
         pdf_content = b"%PDF-1.4 " + b"x" * 2000
         pdf_b64 = base64.b64encode(pdf_content).decode()
-        # 5-char prefix - misaligned, but offset 4 should start mid-'START'
-        # and offset 8 will be past the prefix
-        with_prefix = f"START{pdf_b64}"
+        with_prefix = f"START{pdf_b64}"  # 5-char prefix — NOT 4-aligned
 
         result = _decode_and_validate(with_prefix)
-        # Should find valid PDF at some offset (8 in this case)
-        assert result is not None
-        _, ext = result
-        assert ext == "pdf"
+        # Misaligned prefix: no aligned offset can recover the PDF magic bytes
+        assert result is None
 
     def test_handles_pdf_base64_start_marker_bleed(self):
         """Should handle PDF_BASE64_START marker bleeding into regex match.
@@ -449,7 +449,7 @@ class TestPdfMarkerExpansion:
         outputs = {"stdout_logs": [stdout]}
 
         with patch(
-            "backend.api.features.chat.tools.binary_output_processor.scan_content_safe",
+            "backend.copilot.tools.binary_output_processor.scan_content_safe",
             new_callable=AsyncMock,
         ):
             result = await process_binary_outputs(
@@ -482,7 +482,7 @@ class TestVirusScanning:
         outputs = {"stdout_logs": [stdout]}
 
         with patch(
-            "backend.api.features.chat.tools.binary_output_processor.scan_content_safe",
+            "backend.copilot.tools.binary_output_processor.scan_content_safe",
             new_callable=AsyncMock,
         ) as mock_scan:
             result = await process_binary_outputs(
@@ -504,7 +504,7 @@ class TestVirusScanning:
         outputs = {"stdout_logs": [stdout]}
 
         with patch(
-            "backend.api.features.chat.tools.binary_output_processor.scan_content_safe",
+            "backend.copilot.tools.binary_output_processor.scan_content_safe",
             new_callable=AsyncMock,
             side_effect=Exception("Virus detected"),
         ):
