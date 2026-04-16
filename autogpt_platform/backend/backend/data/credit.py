@@ -1378,10 +1378,13 @@ async def cancel_stripe_subscription(user_id: str) -> bool:
 async def get_proration_credit_cents(user_id: str, monthly_cost_cents: int) -> int:
     """Return the prorated credit (in cents) the user would receive if they upgraded now.
 
-    Fetches the user's active Stripe subscription to determine how many seconds
-    remain in the current billing period, then calculates the unused portion of
+    Fetches the user's active or trialing Stripe subscription to determine how many
+    seconds remain in the current billing period, then calculates the unused portion of
     the monthly cost. Returns 0 for FREE/ENTERPRISE users or when no active sub
     is found.
+
+    Both ``active`` and ``trialing`` subscriptions are checked: a trialing user still
+    accumulates a billing period and Stripe prorates the remaining trial value on upgrade.
     """
     if monthly_cost_cents <= 0:
         return 0
@@ -1393,20 +1396,25 @@ async def get_proration_credit_cents(user_id: str, monthly_cost_cents: int) -> i
         return 0
     try:
         customer_id = user.stripe_customer_id
-        subscriptions = await run_in_threadpool(
-            stripe.Subscription.list, customer=customer_id, status="active", limit=1
-        )
-        if not subscriptions.data:
-            return 0
-        sub = subscriptions.data[0]
-        period_start: int = sub["current_period_start"]
-        period_end: int = sub["current_period_end"]
-        now = int(time.time())
-        total_seconds = period_end - period_start
-        remaining_seconds = max(period_end - now, 0)
-        if total_seconds <= 0:
-            return 0
-        return int(monthly_cost_cents * remaining_seconds / total_seconds)
+        for status in ("active", "trialing"):
+            subscriptions = await run_in_threadpool(
+                stripe.Subscription.list,
+                customer=customer_id,
+                status=status,
+                limit=1,
+            )
+            if not subscriptions.data:
+                continue
+            sub = subscriptions.data[0]
+            period_start: int = sub["current_period_start"]
+            period_end: int = sub["current_period_end"]
+            now = int(time.time())
+            total_seconds = period_end - period_start
+            remaining_seconds = max(period_end - now, 0)
+            if total_seconds <= 0:
+                return 0
+            return int(monthly_cost_cents * remaining_seconds / total_seconds)
+        return 0
     except Exception:
         logger.warning(
             "get_proration_credit_cents: failed to compute proration for user %s",
@@ -1772,6 +1780,18 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
     amount_due: int = invoice.get("amount_due", 0)
     sub_id: str = invoice.get("subscription", "")
     invoice_id: str = invoice.get("id", "")
+
+    if not invoice_id:
+        # Without an invoice ID we cannot set an idempotency key on the credit
+        # deduction.  Stripe webhook retries would then double-charge the user's
+        # balance on every retry cycle.  Bail out early — a real Stripe invoice
+        # always carries an ID, so a missing one indicates a malformed payload.
+        logger.warning(
+            "handle_subscription_payment_failure: invoice missing 'id' for"
+            " customer %s; skipping to avoid non-idempotent balance deduction",
+            customer_id,
+        )
+        return
 
     if amount_due <= 0:
         logger.info(

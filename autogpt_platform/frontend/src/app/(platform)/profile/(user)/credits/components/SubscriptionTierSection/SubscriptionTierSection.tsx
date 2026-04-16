@@ -249,10 +249,9 @@ export function SubscriptionTierSection() {
             {subscription &&
               subscription.proration_credit_cents > 0 &&
               `Your unused ${currentTier.charAt(0) + currentTier.slice(1).toLowerCase()} subscription ($${(subscription.proration_credit_cents / 100).toFixed(2)}) will be applied as a credit to your next Stripe invoice. `}
-            You will be redirected to Stripe to complete your upgrade to{" "}
-            {TIERS.find((t) => t.key === pendingUpgradeTier)?.label ??
-              pendingUpgradeTier}
-            .
+            {currentTier === "FREE"
+              ? `You will be redirected to Stripe to complete your upgrade to ${TIERS.find((t) => t.key === pendingUpgradeTier)?.label ?? pendingUpgradeTier}.`
+              : `Upgrading to ${TIERS.find((t) => t.key === pendingUpgradeTier)?.label ?? pendingUpgradeTier} will take effect immediately — Stripe will prorate your remaining balance.`}
           </p>
           <Dialog.Footer>
             <Button
@@ -262,7 +261,9 @@ export function SubscriptionTierSection() {
               Cancel
             </Button>
             <Button onClick={() => void confirmUpgrade()}>
-              Continue to Checkout
+              {currentTier === "FREE"
+                ? "Continue to Checkout"
+                : "Confirm Upgrade"}
             </Button>
           </Dialog.Footer>
         </Dialog.Content>

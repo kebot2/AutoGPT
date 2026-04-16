@@ -537,6 +537,44 @@ async def test_get_proration_credit_cents_with_active_sub():
 
 
 @pytest.mark.asyncio
+async def test_get_proration_credit_cents_with_trialing_sub():
+    """Trialing subscriptions also have a billing period — proration must be non-zero."""
+    import time
+
+    now = int(time.time())
+    period_start = now - 5 * 24 * 3600  # 5 days ago
+    period_end = now + 25 * 24 * 3600  # 25 days ahead
+    mock_sub = {
+        "id": "sub_trial_abc",
+        "current_period_start": period_start,
+        "current_period_end": period_end,
+    }
+    empty_subs = MagicMock()
+    empty_subs.data = []
+    trialing_subs = MagicMock()
+    trialing_subs.data = [mock_sub]
+
+    def list_side_effect(*args, **kwargs):
+        return trialing_subs if kwargs.get("status") == "trialing" else empty_subs
+
+    with (
+        patch(
+            "backend.data.credit.get_user_by_id",
+            new_callable=AsyncMock,
+            return_value=_make_user_with_stripe("cus_123"),
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            side_effect=list_side_effect,
+        ),
+    ):
+        result = await get_proration_credit_cents("user-1", monthly_cost_cents=2000)
+    # Trialing sub with ~25 days remaining should yield a significant proration credit
+    assert result > 0
+    assert result < 2000
+
+
+@pytest.mark.asyncio
 async def test_create_subscription_checkout_returns_url():
     mock_session = MagicMock()
     mock_session.url = "https://checkout.stripe.com/pay/cs_test_abc123"
@@ -1094,6 +1132,37 @@ async def test_handle_subscription_payment_failure_passes_invoice_id_as_transact
         mock_add_tx.assert_called_once()
         _, kwargs = mock_add_tx.call_args
         assert kwargs.get("transaction_key") == "in_idempotency_test"
+
+
+@pytest.mark.asyncio
+async def test_handle_subscription_payment_failure_missing_invoice_id_skips():
+    """An invoice payload without an 'id' field must be skipped.
+
+    Without an invoice ID we cannot set an idempotency key on the credit deduction,
+    so Stripe webhook retries would double-charge the user's balance.  The function
+    must return early before calling _add_transaction.
+    """
+    mock_user = _make_user(user_id="user-1", tier=SubscriptionTier.PRO)
+    invoice = {
+        # No "id" field — malformed payload
+        "customer": "cus_123",
+        "subscription": "sub_abc123",
+        "amount_due": 2000,
+    }
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.UserCredit._add_transaction",
+            new_callable=AsyncMock,
+        ) as mock_add_tx,
+    ):
+        await handle_subscription_payment_failure(invoice)
+        # Must not deduct credits when there is no invoice ID to use as an idempotency key
+        mock_add_tx.assert_not_awaited()
 
 
 @pytest.mark.asyncio
