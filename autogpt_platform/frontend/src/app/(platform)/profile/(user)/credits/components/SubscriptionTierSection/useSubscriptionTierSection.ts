@@ -82,6 +82,11 @@ export function useSubscriptionTierSection() {
         return;
       }
       await refetch();
+      toast({
+        title: "Subscription updated",
+        description:
+          "Your plan will be downgraded at the end of your current billing cycle.",
+      });
     } catch (e: unknown) {
       const msg =
         e instanceof Error ? e.message : "Failed to change subscription tier";
