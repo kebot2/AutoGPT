@@ -693,41 +693,48 @@ async def upload_transcript(
     meta = {"message_count": message_count, "mode": mode, "uploaded_at": time.time()}
     meta_encoded = json.dumps(meta).encode("utf-8")
 
-    session_result, meta_result = await asyncio.gather(
-        storage.store(workspace_id=wid, file_id=fid, filename=fname, content=content),
-        storage.store(
-            workspace_id=mwid, file_id=mfid, filename=mfname, content=meta_encoded
-        ),
-        return_exceptions=True,
-    )
-    if isinstance(session_result, BaseException):
-        logger.warning(
-            "%s Failed to upload CLI session file: %s", log_prefix, session_result
+    # Write JSONL first, meta second — sequential so a crash between the two
+    # leaves an orphaned JSONL (no meta) rather than an orphaned meta (wrong
+    # watermark / mode paired with stale or absent content).
+    # On any failure we roll back the other file so the pair is always absent
+    # together; download_transcript returns None when either file is missing.
+    try:
+        await storage.store(
+            workspace_id=wid, file_id=fid, filename=fname, content=content
         )
-        # Roll back the companion meta to avoid pairing a stale session with a
-        # fresh watermark on the next restore.  Best-effort — if this also fails
-        # the next restore will find a meta with no matching session (FileNotFoundError
-        # on the session bytes) and return None, so no data corruption can occur.
-        if not isinstance(meta_result, BaseException):
-            try:
-                meta_path = _build_path_from_parts(
-                    _cli_session_meta_path_parts(user_id, session_id), storage
-                )
-                await storage.delete(meta_path)
-            except Exception as rollback_err:
-                logger.debug(
-                    "%s Meta rollback failed (harmless): %s", log_prefix, rollback_err
-                )
+    except Exception as session_err:
+        logger.warning(
+            "%s Failed to upload CLI session file: %s", log_prefix, session_err
+        )
         return
-    if isinstance(meta_result, BaseException):
-        logger.warning(
-            "%s Failed to upload CLI session meta: %s", log_prefix, meta_result
+
+    try:
+        await storage.store(
+            workspace_id=mwid, file_id=mfid, filename=mfname, content=meta_encoded
         )
+    except Exception as meta_err:
+        logger.warning("%s Failed to upload CLI session meta: %s", log_prefix, meta_err)
+        # Roll back the JSONL so neither file exists — avoids orphaned JSONL being
+        # used with wrong mode/watermark defaults on the next restore.
+        try:
+            session_path = _build_path_from_parts(
+                _cli_session_storage_path_parts(user_id, session_id), storage
+            )
+            await storage.delete(session_path)
+        except Exception as rollback_err:
+            logger.debug(
+                "%s Session rollback failed (harmless — download will return None): %s",
+                log_prefix,
+                rollback_err,
+            )
+        return
+
     logger.info(
-        "%s Uploaded CLI session file (%dB, msg_count=%d) for cross-pod --resume",
+        "%s Uploaded CLI session (%dB, msg_count=%d, mode=%s)",
         log_prefix,
         len(content),
         message_count,
+        mode,
     )
 
 
@@ -793,10 +800,11 @@ async def download_transcript(
                 mode = raw_mode if raw_mode in ("sdk", "baseline") else "sdk"
 
     logger.info(
-        "%s Downloaded CLI session (%dB, msg_count=%d)",
+        "%s Downloaded CLI session (%dB, msg_count=%d, mode=%s)",
         log_prefix,
         len(content),
         message_count,
+        mode,
     )
     return TranscriptDownload(content=content, message_count=message_count, mode=mode)
 

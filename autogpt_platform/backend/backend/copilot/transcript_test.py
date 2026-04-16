@@ -779,14 +779,18 @@ class TestUploadCliSession:
         assert meta_content["message_count"] == 5
 
     def test_skips_upload_on_storage_failure(self):
-        """Storage exception on jsonl write is logged and does not propagate."""
+        """Storage exception on jsonl write is logged and does not propagate.
+
+        With sequential writes, JSONL failure returns early — meta store is
+        never called, so no rollback is needed.
+        """
         import asyncio
         from unittest.mock import AsyncMock, patch
 
         from .transcript import upload_transcript
 
         mock_storage = AsyncMock()
-        mock_storage.store.side_effect = [RuntimeError("gcs unavailable"), None]
+        mock_storage.store.side_effect = RuntimeError("gcs unavailable")
         content = b'{"type":"assistant"}\n'
 
         with patch(
@@ -803,16 +807,24 @@ class TestUploadCliSession:
                 )
             )
 
-    def test_rolls_back_meta_when_session_upload_fails(self):
-        """When session upload fails but meta succeeded, meta is rolled back."""
+        # Only one store call attempted (the JSONL); meta never reached
+        mock_storage.store.assert_called_once()
+        mock_storage.delete.assert_not_called()
+
+    def test_rolls_back_session_when_meta_upload_fails(self):
+        """When meta upload fails after JSONL succeeds, JSONL is rolled back.
+
+        Guarantees the pair is either both present or both absent — avoids an
+        orphaned JSONL being used with wrong mode/watermark defaults.
+        """
         import asyncio
         from unittest.mock import AsyncMock, patch
 
         from .transcript import upload_transcript
 
         mock_storage = AsyncMock()
-        # session store fails, meta store succeeds → rollback delete should be called
-        mock_storage.store.side_effect = [RuntimeError("gcs unavailable"), None]
+        # First store (JSONL) succeeds; second store (meta) fails
+        mock_storage.store.side_effect = [None, RuntimeError("meta write failed")]
         content = b'{"type":"assistant"}\n'
 
         with patch(
@@ -828,7 +840,9 @@ class TestUploadCliSession:
                 )
             )
 
-        # delete should be called once for the meta rollback
+        # Both store calls were attempted (JSONL then meta)
+        assert mock_storage.store.call_count == 2
+        # JSONL should be rolled back via delete
         mock_storage.delete.assert_called_once()
 
     def test_baseline_mode_stored_in_meta(self):
