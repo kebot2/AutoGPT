@@ -1101,8 +1101,9 @@ def _format_sdk_content_blocks(blocks: list) -> list[dict[str, Any]]:
             result.append(block)
         else:
             logger.warning(
-                f"[SDK] Unknown content block type: {type(block).__name__}. "
-                f"This may indicate a new SDK version with additional block types."
+                "[SDK] Unknown content block type: %s."
+                " This may indicate a new SDK version with additional block types.",
+                type(block).__name__,
             )
     return result
 
