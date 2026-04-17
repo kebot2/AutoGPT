@@ -112,6 +112,13 @@ class CheckBackgroundToolTool(BaseTool):
         tool_name: str = entry["tool_name"]
 
         if cancel:
+            # Race guard: the task may have finished between the registry
+            # lookup and the cancel. If so, surface the real result rather
+            # than reporting 'cancelled' and losing the output.
+            if task.done():
+                return _status_from_finished_task(
+                    session, tool_name, background_id, task
+                )
             task.cancel()
             unregister_background_task(background_id)
             logger.info(

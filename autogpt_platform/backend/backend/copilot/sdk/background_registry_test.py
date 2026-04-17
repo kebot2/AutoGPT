@@ -67,8 +67,11 @@ async def test_cancel_all_cancels_pending_tasks_and_empties_registry():
     tasks = [asyncio.create_task(hang_with_cancel_trap(i)) for i in range(3)]
     # Let the tasks start before cancellation.
     await asyncio.sleep(0)
-    for i, t in enumerate(tasks):
-        register_background_task(t, f"tool_{i}")
+    bg_ids = [register_background_task(t, f"tool_{i}") for i, t in enumerate(tasks)]
+
+    # Sanity check: all three actually got registered under real IDs.
+    for bg_id in bg_ids:
+        assert get_background_task(bg_id) is not None
 
     count = cancel_all_background_tasks(reason="test")
     assert count == 3
@@ -79,13 +82,9 @@ async def test_cancel_all_cancels_pending_tasks_and_empties_registry():
             await t
     assert sorted(events) == [0, 1, 2]
 
-    # Registry should be empty now.
-    for t in tasks:
-        # Each bg_id would return None via get_background_task.
-        assert all(
-            get_background_task(bg_id) is None
-            for bg_id in [f"bg-nonexistent-{i}" for i in range(3)]
-        )
+    # Registry should be empty now — verify using the actual IDs we registered.
+    for bg_id in bg_ids:
+        assert get_background_task(bg_id) is None
 
 
 @pytest.mark.asyncio

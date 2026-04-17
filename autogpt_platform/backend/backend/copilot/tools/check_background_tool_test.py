@@ -164,6 +164,30 @@ class TestCheckBackgroundTool:
         assert get_background_task(bg_id) is None
 
     @pytest.mark.asyncio
+    async def test_cancel_after_task_completed_returns_real_result(self):
+        """If the task completes between registration and the agent's
+        cancel=true call, surface the real result instead of reporting
+        'cancelled' and losing the output (race guard)."""
+
+        async def finish_quickly():
+            return _completed_result("final-value")
+
+        task = asyncio.create_task(finish_quickly())
+        await task  # definitely done by the time we register
+        bg_id = register_background_task(task, "slow_tool")
+
+        tool = CheckBackgroundToolTool()
+        response = await tool._execute(
+            user_id="u",
+            session=_make_session(),
+            background_id=bg_id,
+            cancel=True,
+        )
+        assert isinstance(response, BackgroundToolStatus)
+        assert response.status == "completed"
+        assert response.output == "final-value"
+
+    @pytest.mark.asyncio
     async def test_errored_task_reports_error_status(self):
         async def raises():
             raise ValueError("boom")
