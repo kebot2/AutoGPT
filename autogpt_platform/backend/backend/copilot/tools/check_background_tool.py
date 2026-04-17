@@ -8,9 +8,7 @@ stays in control rather than the handler making an irreversible choice.
 
 import asyncio
 import logging
-from typing import Any, Literal
-
-from pydantic import Field
+from typing import Any
 
 from backend.copilot.model import ChatSession
 from backend.copilot.sdk.background_registry import (
@@ -22,24 +20,9 @@ from backend.copilot.sdk.background_registry import (
 )
 
 from .base import BaseTool
-from .models import ErrorResponse, ResponseType, ToolResponseBase
+from .models import BackgroundToolStatus, ErrorResponse, ToolResponseBase
 
 logger = logging.getLogger(__name__)
-
-
-class BackgroundToolStatus(ToolResponseBase):
-    """Status of a backgrounded tool call."""
-
-    type: ResponseType = ResponseType.MCP_TOOL_OUTPUT
-    status: Literal["completed", "still_running", "cancelled", "error"] = Field(
-        description="Current state of the background task."
-    )
-    tool: str = Field(description="The name of the originally-backgrounded tool.")
-    background_id: str
-    output: Any | None = Field(
-        default=None, description="Tool output when status=completed."
-    )
-    waited_seconds: int | None = Field(default=None)
 
 
 class CheckBackgroundToolTool(BaseTool):
@@ -207,6 +190,17 @@ def _status_from_finished_task(
         )
 
     result = task.result()
+    # A tool can complete with success=False without raising — preserve
+    # that as status="error" so the agent doesn't treat it as a win.
+    if not result.success:
+        return BackgroundToolStatus(
+            message=f"'{tool_name}' completed with an error.",
+            session_id=session.session_id,
+            status="error",
+            tool=tool_name,
+            background_id=background_id,
+            output=result.output,
+        )
     return BackgroundToolStatus(
         message=f"'{tool_name}' completed.",
         session_id=session.session_id,

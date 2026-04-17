@@ -1,6 +1,7 @@
 """Tests for CheckBackgroundToolTool."""
 
 import asyncio
+import contextlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,7 +12,8 @@ from backend.copilot.sdk.background_registry import (
     register_background_task,
 )
 
-from .check_background_tool import BackgroundToolStatus, CheckBackgroundToolTool
+from .check_background_tool import CheckBackgroundToolTool
+from .models import BackgroundToolStatus
 
 
 def _make_session() -> MagicMock:
@@ -78,10 +80,8 @@ class TestCheckBackgroundTool:
         assert response.background_id == bg_id
 
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except (asyncio.CancelledError, BaseException):
-            pass
 
     @pytest.mark.asyncio
     async def test_wait_returns_completed_when_task_finishes(self):
@@ -124,15 +124,11 @@ class TestCheckBackgroundTool:
         assert response.waited_seconds == 1
 
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except (asyncio.CancelledError, BaseException):
-            pass
 
     @pytest.mark.asyncio
     async def test_cancel_true_cancels_and_removes_from_registry(self):
-        import contextlib
-
         observed_cancel = asyncio.Event()
 
         async def stays_until_cancelled():
@@ -189,3 +185,31 @@ class TestCheckBackgroundTool:
         assert isinstance(response, BackgroundToolStatus)
         assert response.status == "error"
         assert "boom" in response.message
+
+    @pytest.mark.asyncio
+    async def test_finished_task_with_success_false_reports_error(self):
+        """A tool that completes with success=False (without raising) is
+        reported as status='error', not 'completed', so the agent doesn't
+        treat it as a win."""
+
+        async def finish_with_failure():
+            return StreamToolOutputAvailable(
+                toolCallId="tc-1",
+                output="partial",
+                toolName="broken_tool",
+                success=False,
+            )
+
+        task = asyncio.create_task(finish_with_failure())
+        await task
+        bg_id = register_background_task(task, "broken_tool")
+
+        tool = CheckBackgroundToolTool()
+        response = await tool._execute(
+            user_id="u",
+            session=_make_session(),
+            background_id=bg_id,
+        )
+        assert isinstance(response, BackgroundToolStatus)
+        assert response.status == "error"
+        assert response.output == "partial"

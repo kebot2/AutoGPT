@@ -467,6 +467,38 @@ class TestToolTimeout:
         assert "completed" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
+    async def test_handler_cancellation_cancels_child_task(self):
+        """If the handler itself is cancelled before the tool completes,
+        the child task is cancelled too (no leak into the background
+        registry, since it wasn't parked yet)."""
+        import contextlib
+
+        mock_tool = _make_mock_tool("slow_tool", timeout_seconds=60)
+        child_cancelled = asyncio.Event()
+
+        async def hang_until_cancelled(*_args, **_kwargs):
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                child_cancelled.set()
+                raise
+
+        mock_tool.execute = AsyncMock(side_effect=hang_until_cancelled)
+
+        from backend.copilot.sdk.tool_adapter import _execute_tool_sync
+
+        outer_task = asyncio.create_task(
+            _execute_tool_sync(mock_tool, "u", _make_mock_session(), {})
+        )
+        # Let the handler start waiting on the child.
+        await asyncio.sleep(0.05)
+        outer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await outer_task
+        await asyncio.sleep(0)
+        assert child_cancelled.is_set()
+
+    @pytest.mark.asyncio
     async def test_fast_tool_within_timeout_succeeds(self):
         """Tools that complete well under the timeout are unaffected."""
         mock_tool = _make_mock_tool(

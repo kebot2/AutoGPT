@@ -276,24 +276,34 @@ async def _execute_tool_sync(
     )
 
     timeout = base_tool.timeout_seconds
-    if timeout is None:
-        result = await task
-    else:
-        # asyncio.wait (unlike wait_for) does NOT cancel on timeout — the
-        # task keeps running in the background.
-        await asyncio.wait({task}, timeout=timeout)
+    try:
+        if timeout is None:
+            result = await task
+        else:
+            # asyncio.wait (unlike wait_for) does NOT cancel on timeout — the
+            # task keeps running in the background.
+            await asyncio.wait({task}, timeout=timeout)
+            if not task.done():
+                bg_id = _register_background_task(task, base_tool.name)
+                logger.warning(
+                    "Tool %s exceeded %ss budget — parked as "
+                    "background_id=%s (args=%s)",
+                    base_tool.name,
+                    timeout,
+                    bg_id,
+                    _redact_args_for_log(args),
+                )
+                return _tool_background_result(base_tool.name, timeout, bg_id)
+            # Completed within budget — .result() re-raises any exception.
+            result = task.result()
+    except asyncio.CancelledError:
+        # The handler itself was cancelled (e.g. stream teardown) mid-wait.
+        # Cancel the child so it doesn't keep running untracked — the
+        # registry hasn't seen it yet, so cancel_all_background_tasks
+        # couldn't clean it up.
         if not task.done():
-            bg_id = _register_background_task(task, base_tool.name)
-            logger.warning(
-                "Tool %s exceeded %ss budget — parked as background_id=%s " "(args=%s)",
-                base_tool.name,
-                timeout,
-                bg_id,
-                _redact_args_for_log(args),
-            )
-            return _tool_background_result(base_tool.name, timeout, bg_id)
-        # Completed within budget — .result() re-raises any exception.
-        result = task.result()
+            task.cancel()
+        raise
 
     text = (
         result.output if isinstance(result.output, str) else json.dumps(result.output)

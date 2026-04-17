@@ -259,6 +259,22 @@ class ErrorResponse(ToolResponseBase):
     details: dict[str, Any] | None = None
 
 
+class BackgroundToolStatus(ToolResponseBase):
+    """Status of a backgrounded tool call, returned by ``check_background_tool``."""
+
+    type: ResponseType = ResponseType.MCP_TOOL_OUTPUT
+    status: Literal["completed", "still_running", "cancelled", "error"] = Field(
+        description="Current state of the background task."
+    )
+    tool: str = Field(description="The name of the originally-backgrounded tool.")
+    background_id: str
+    output: Any | None = Field(
+        default=None,
+        description="Tool output when status=completed or status=error.",
+    )
+    waited_seconds: int | None = Field(default=None)
+
+
 class InputValidationErrorResponse(ToolResponseBase):
     """Response when run_agent receives unknown input fields."""
 
