@@ -423,20 +423,33 @@ async def subscribe_to_session(
         extra={"json_fields": {**log_meta, "duration_ms": hgetall_time}},
     )
 
-    # RACE CONDITION FIX: If session not found, retry once after small delay
-    # This handles the case where subscribe_to_session is called immediately
-    # after create_session but before Redis propagates the write
+    # RACE CONDITION FIX: If session not found, retry with backoff.
+    # Duplicate requests skip create_session and subscribe immediately; the
+    # original request's create_session (a Redis hset) may not have completed
+    # yet. 3 × 100ms gives a 300ms window which covers DB-write latency on the
+    # original request before the hset even starts.
     if not meta:
-        logger.warning(
-            "[TIMING] Session not found on first attempt, retrying after 50ms delay",
-            extra={"json_fields": {**log_meta}},
-        )
-        await asyncio.sleep(0.05)  # 50ms
-        meta = await redis.hgetall(meta_key)  # type: ignore[misc]
-        if not meta:
+        _max_retries = 3
+        _retry_delay = 0.1  # 100ms per attempt
+        for attempt in range(_max_retries):
+            logger.warning(
+                f"[TIMING] Session not found (attempt {attempt + 1}/{_max_retries}), "
+                f"retrying after {int(_retry_delay * 1000)}ms",
+                extra={"json_fields": {**log_meta, "attempt": attempt + 1}},
+            )
+            await asyncio.sleep(_retry_delay)
+            meta = await redis.hgetall(meta_key)  # type: ignore[misc]
+            if meta:
+                logger.info(
+                    f"[TIMING] Session found after {attempt + 1} retries",
+                    extra={"json_fields": {**log_meta, "attempts": attempt + 1}},
+                )
+                break
+        else:
             elapsed = (time.perf_counter() - start_time) * 1000
             logger.info(
-                f"[TIMING] Session still not found in Redis after retry ({elapsed:.1f}ms total)",
+                f"[TIMING] Session still not found in Redis after {_max_retries} retries "
+                f"({elapsed:.1f}ms total)",
                 extra={
                     "json_fields": {
                         **log_meta,
@@ -446,10 +459,6 @@ async def subscribe_to_session(
                 },
             )
             return None
-        logger.info(
-            "[TIMING] Session found after retry",
-            extra={"json_fields": {**log_meta}},
-        )
 
     # Note: Redis client uses decode_responses=True, so keys are strings
     session_status = meta.get("status", "")
@@ -1149,3 +1158,50 @@ async def unsubscribe_from_session(
         )
 
     logger.debug(f"Successfully unsubscribed from session {session_id}")
+
+
+async def disconnect_all_listeners(session_id: str) -> int:
+    """Cancel every active listener task for *session_id*.
+
+    Called when the frontend switches away from a session and wants the
+    backend to release resources immediately rather than waiting for the
+    XREAD timeout.
+
+    Scope / limitations (best-effort optimisation, not a correctness primitive):
+    - Pod-local: ``_listener_sessions`` is in-memory. If the DELETE request
+      lands on a different worker than the one serving the SSE, no listener
+      is cancelled here — the SSE worker still releases on its XREAD timeout.
+    - Session-scoped (not subscriber-scoped): cancels every active listener
+      for the session on this pod. In the rare case a single user opens two
+      SSE connections to the same session on the same pod (e.g. two tabs),
+      both would be torn down. Cross-pod, subscriber-scoped cancellation
+      would require a Redis pub/sub fan-out with per-listener tokens; that
+      is not implemented here because the XREAD timeout already bounds the
+      worst case.
+
+    Returns the number of listener tasks that were cancelled.
+    """
+    to_cancel: list[tuple[int, asyncio.Task]] = [
+        (qid, task)
+        for qid, (sid, task) in list(_listener_sessions.items())
+        if sid == session_id and not task.done()
+    ]
+
+    for qid, task in to_cancel:
+        _listener_sessions.pop(qid, None)
+        task.cancel()
+
+    cancelled = 0
+    for _qid, task in to_cancel:
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except asyncio.CancelledError:
+            cancelled += 1
+        except asyncio.TimeoutError:
+            pass
+        except Exception as e:
+            logger.error(f"Error cancelling listener for session {session_id}: {e}")
+
+    if cancelled:
+        logger.info(f"Disconnected {cancelled} listener(s) for session {session_id}")
+    return cancelled

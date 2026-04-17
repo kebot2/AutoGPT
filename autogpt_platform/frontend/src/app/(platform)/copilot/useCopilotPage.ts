@@ -42,7 +42,8 @@ export function useCopilotPage() {
     setSessionToDelete,
     isDrawerOpen,
     setDrawerOpen,
-    copilotMode,
+    copilotChatMode,
+    copilotLlmModel,
     isDryRun,
   } = useCopilotUIStore();
 
@@ -60,6 +61,7 @@ export function useCopilotPage() {
     createSession,
     isCreatingSession,
     refetchSession,
+    sessionDryRun,
   } = useChatSession({ dryRun: isDryRun });
 
   const {
@@ -78,10 +80,11 @@ export function useCopilotPage() {
     hydratedMessages,
     hasActiveStream,
     refetchSession,
-    copilotMode: isModeToggleEnabled ? copilotMode : undefined,
+    copilotMode: isModeToggleEnabled ? copilotChatMode : undefined,
+    copilotModel: isModeToggleEnabled ? copilotLlmModel : undefined,
   });
 
-  const { olderMessages, hasMore, isLoadingMore, loadMore } =
+  const { pagedMessages, hasMore, isLoadingMore, loadMore } =
     useLoadMoreMessages({
       sessionId,
       initialOldestSequence: oldestSequence,
@@ -89,10 +92,11 @@ export function useCopilotPage() {
       initialPageRawMessages: rawSessionMessages,
     });
 
-  // Combine older (paginated) messages with current page messages,
-  // merging consecutive assistant UIMessages at the page boundary so
-  // reasoning + response parts stay in a single bubble.
-  const messages = concatWithAssistantMerge(olderMessages, currentMessages);
+  // Combine paginated messages with current page messages, merging consecutive
+  // assistant UIMessages at the page boundary so reasoning + response parts
+  // stay in a single bubble. Paged messages are older history prepended before
+  // the current page.
+  const messages = concatWithAssistantMerge(pagedMessages, currentMessages);
 
   useCopilotNotifications(sessionId);
 
@@ -416,6 +420,11 @@ export function useCopilotPage() {
     rateLimitMessage,
     dismissRateLimit,
     // Dry run dev toggle
+    // isDryRun = global preference for NEW sessions (from localStorage).
+    // sessionDryRun = actual dry_run value of the CURRENT session (from API).
+    // Use isDryRun to configure future sessions; use sessionDryRun to display
+    // the current session's simulation state (banner, indicators).
     isDryRun,
+    sessionDryRun,
   };
 }

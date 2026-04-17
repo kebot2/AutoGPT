@@ -16,19 +16,26 @@ from backend.util.clients import OPENROUTER_BASE_URL
 # subscription flag → LaunchDarkly COPILOT_SDK → config.use_claude_agent_sdk.
 CopilotMode = Literal["fast", "extended_thinking"]
 
+# Per-request model tier set by the frontend model toggle.
+# 'standard' uses the global config default (currently Sonnet).
+# 'advanced' forces the highest-capability model (currently Opus).
+# None means no preference — falls through to LD per-user targeting, then config.
+# Using tier names instead of model names keeps the contract model-agnostic.
+CopilotLlmModel = Literal["standard", "advanced"]
+
 
 class ChatConfig(BaseSettings):
     """Configuration for the chat system."""
 
     # OpenAI API Configuration
     model: str = Field(
-        default="anthropic/claude-sonnet-4",
+        default="anthropic/claude-sonnet-4-6",
         description="Default model for extended thinking mode. "
-        "Changed from Opus ($15/$75 per M) to Sonnet ($3/$15 per M) — "
-        "5x cheaper. Override via CHAT_MODEL env var for Opus.",
+        "Uses Sonnet 4.6 as the balanced default. "
+        "Override via CHAT_MODEL env var if you want a different default.",
     )
     fast_model: str = Field(
-        default="anthropic/claude-sonnet-4",
+        default="anthropic/claude-sonnet-4-6",
         description="Model for fast mode (baseline path). Should be faster/cheaper than the default model.",
     )
     title_model: str = Field(
@@ -149,9 +156,10 @@ class ChatConfig(BaseSettings):
         "history compression. Falls back to compression when unavailable.",
     )
     claude_agent_fallback_model: str = Field(
-        default="claude-sonnet-4-20250514",
+        default="",
         description="Fallback model when the primary model is unavailable (e.g. 529 "
-        "overloaded). The SDK automatically retries with this cheaper model.",
+        "overloaded). The SDK automatically retries with this cheaper model. "
+        "Empty string disables the fallback (no --fallback-model flag passed to CLI).",
     )
     claude_agent_max_turns: int = Field(
         default=50,
@@ -163,12 +171,12 @@ class ChatConfig(BaseSettings):
         "CHAT_CLAUDE_AGENT_MAX_TURNS env var if your workflows need more.",
     )
     claude_agent_max_budget_usd: float = Field(
-        default=15.0,
+        default=10.0,
         ge=0.01,
         le=1000.0,
         description="Maximum spend in USD per SDK query. The CLI attempts "
         "to wrap up gracefully when this budget is reached. "
-        "Set to $15 to allow most tasks to complete (p50=$5.37, p75=$13.07). "
+        "Set to $10 to allow most tasks to complete (p50=$5.37, p75=$13.07). "
         "Override via CHAT_CLAUDE_AGENT_MAX_BUDGET_USD env var.",
     )
     claude_agent_max_thinking_tokens: int = Field(

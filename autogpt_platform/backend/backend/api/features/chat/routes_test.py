@@ -133,16 +133,23 @@ def test_stream_chat_rejects_too_many_file_ids():
     assert response.status_code == 422
 
 
-def _mock_stream_internals(mocker: pytest_mock.MockFixture):
+def _mock_stream_internals(mocker: pytest_mock.MockerFixture):
     """Mock the async internals of stream_chat_post so tests can exercise
-    validation and enrichment logic without needing Redis/RabbitMQ."""
+    validation and enrichment logic without needing RabbitMQ.
+
+    Returns:
+        A namespace with ``save`` and ``enqueue`` mock objects so
+        callers can make additional assertions about side-effects.
+    """
+    import types
+
     mocker.patch(
         "backend.api.features.chat.routes._validate_and_get_session",
         return_value=None,
     )
-    mocker.patch(
+    mock_save = mocker.patch(
         "backend.api.features.chat.routes.append_and_save_message",
-        return_value=None,
+        return_value=MagicMock(),  # non-None = message was saved (not a duplicate)
     )
     mock_registry = mocker.MagicMock()
     mock_registry.create_session = mocker.AsyncMock(return_value=None)
@@ -150,7 +157,7 @@ def _mock_stream_internals(mocker: pytest_mock.MockFixture):
         "backend.api.features.chat.routes.stream_registry",
         mock_registry,
     )
-    mocker.patch(
+    mock_enqueue = mocker.patch(
         "backend.api.features.chat.routes.enqueue_copilot_turn",
         return_value=None,
     )
@@ -158,9 +165,12 @@ def _mock_stream_internals(mocker: pytest_mock.MockFixture):
         "backend.api.features.chat.routes.track_user_message",
         return_value=None,
     )
+    return types.SimpleNamespace(
+        save=mock_save, enqueue=mock_enqueue, registry=mock_registry
+    )
 
 
-def test_stream_chat_accepts_20_file_ids(mocker: pytest_mock.MockFixture):
+def test_stream_chat_accepts_20_file_ids(mocker: pytest_mock.MockerFixture):
     """Exactly 20 file_ids should be accepted (not rejected by validation)."""
     _mock_stream_internals(mocker)
     # Patch workspace lookup as imported by the routes module
@@ -186,10 +196,33 @@ def test_stream_chat_accepts_20_file_ids(mocker: pytest_mock.MockFixture):
     assert response.status_code == 200
 
 
+# ─── Duplicate message dedup ──────────────────────────────────────────
+
+
+def test_stream_chat_skips_enqueue_for_duplicate_message(
+    mocker: pytest_mock.MockerFixture,
+):
+    """When append_and_save_message returns None (duplicate detected),
+    enqueue_copilot_turn and stream_registry.create_session must NOT be called
+    to avoid double-processing and to prevent overwriting the active stream's
+    turn_id in Redis (which would cause reconnecting clients to miss the response)."""
+    mocks = _mock_stream_internals(mocker)
+    # Override save to return None — signalling a duplicate
+    mocks.save.return_value = None
+
+    response = client.post(
+        "/sessions/sess-1/stream",
+        json={"message": "hello"},
+    )
+    assert response.status_code == 200
+    mocks.enqueue.assert_not_called()
+    mocks.registry.create_session.assert_not_called()
+
+
 # ─── UUID format filtering ─────────────────────────────────────────────
 
 
-def test_file_ids_filters_invalid_uuids(mocker: pytest_mock.MockFixture):
+def test_file_ids_filters_invalid_uuids(mocker: pytest_mock.MockerFixture):
     """Non-UUID strings in file_ids should be silently filtered out
     and NOT passed to the database query."""
     _mock_stream_internals(mocker)
@@ -228,7 +261,7 @@ def test_file_ids_filters_invalid_uuids(mocker: pytest_mock.MockFixture):
 # ─── Cross-workspace file_ids ─────────────────────────────────────────
 
 
-def test_file_ids_scoped_to_workspace(mocker: pytest_mock.MockFixture):
+def test_file_ids_scoped_to_workspace(mocker: pytest_mock.MockerFixture):
     """The batch query should scope to the user's workspace."""
     _mock_stream_internals(mocker)
     mocker.patch(
@@ -257,7 +290,7 @@ def test_file_ids_scoped_to_workspace(mocker: pytest_mock.MockFixture):
 # ─── Rate limit → 429 ─────────────────────────────────────────────────
 
 
-def test_stream_chat_returns_429_on_daily_rate_limit(mocker: pytest_mock.MockFixture):
+def test_stream_chat_returns_429_on_daily_rate_limit(mocker: pytest_mock.MockerFixture):
     """When check_rate_limit raises RateLimitExceeded for daily limit the endpoint returns 429."""
     from backend.copilot.rate_limit import RateLimitExceeded
 
@@ -278,7 +311,9 @@ def test_stream_chat_returns_429_on_daily_rate_limit(mocker: pytest_mock.MockFix
     assert "daily" in response.json()["detail"].lower()
 
 
-def test_stream_chat_returns_429_on_weekly_rate_limit(mocker: pytest_mock.MockFixture):
+def test_stream_chat_returns_429_on_weekly_rate_limit(
+    mocker: pytest_mock.MockerFixture,
+):
     """When check_rate_limit raises RateLimitExceeded for weekly limit the endpoint returns 429."""
     from backend.copilot.rate_limit import RateLimitExceeded
 
@@ -301,7 +336,7 @@ def test_stream_chat_returns_429_on_weekly_rate_limit(mocker: pytest_mock.MockFi
     assert "resets in" in detail
 
 
-def test_stream_chat_429_includes_reset_time(mocker: pytest_mock.MockFixture):
+def test_stream_chat_429_includes_reset_time(mocker: pytest_mock.MockerFixture):
     """The 429 response detail should include the human-readable reset time."""
     from backend.copilot.rate_limit import RateLimitExceeded
 
@@ -677,3 +712,104 @@ class TestStripInjectedContext:
         result = _strip_injected_context(msg)
         # Without a role, the helper short-circuits without touching content.
         assert result["content"] == "hello"
+
+
+# ─── DELETE /sessions/{id}/stream — disconnect listeners ──────────────
+
+
+def test_disconnect_stream_returns_204_and_awaits_registry(
+    mocker: pytest_mock.MockerFixture,
+    test_user_id: str,
+) -> None:
+    mock_session = MagicMock()
+    mocker.patch(
+        "backend.api.features.chat.routes.get_chat_session",
+        new_callable=AsyncMock,
+        return_value=mock_session,
+    )
+    mock_disconnect = mocker.patch(
+        "backend.api.features.chat.routes.stream_registry.disconnect_all_listeners",
+        new_callable=AsyncMock,
+        return_value=2,
+    )
+
+    response = client.delete("/sessions/sess-1/stream")
+
+    assert response.status_code == 204
+    mock_disconnect.assert_awaited_once_with("sess-1")
+
+
+def test_disconnect_stream_returns_404_when_session_missing(
+    mocker: pytest_mock.MockerFixture,
+    test_user_id: str,
+) -> None:
+    mocker.patch(
+        "backend.api.features.chat.routes.get_chat_session",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+    mock_disconnect = mocker.patch(
+        "backend.api.features.chat.routes.stream_registry.disconnect_all_listeners",
+        new_callable=AsyncMock,
+    )
+
+    response = client.delete("/sessions/unknown-session/stream")
+
+    assert response.status_code == 404
+    mock_disconnect.assert_not_awaited()
+
+
+# ─── GET /sessions/{session_id} — backward pagination ─────────────────────────
+
+
+def _make_paginated_messages(
+    mocker: pytest_mock.MockerFixture, *, has_more: bool = False
+):
+    """Return a mock PaginatedMessages and configure the DB patch."""
+    from datetime import UTC, datetime
+
+    from backend.copilot.db import PaginatedMessages
+    from backend.copilot.model import ChatMessage, ChatSessionInfo, ChatSessionMetadata
+
+    now = datetime.now(UTC)
+    session_info = ChatSessionInfo(
+        session_id="sess-1",
+        user_id=TEST_USER_ID,
+        usage=[],
+        started_at=now,
+        updated_at=now,
+        metadata=ChatSessionMetadata(),
+    )
+    page = PaginatedMessages(
+        messages=[ChatMessage(role="user", content="hello", sequence=0)],
+        has_more=has_more,
+        oldest_sequence=0,
+        session=session_info,
+    )
+    mock_paginate = mocker.patch(
+        "backend.api.features.chat.routes.get_chat_messages_paginated",
+        new_callable=AsyncMock,
+        return_value=page,
+    )
+    return page, mock_paginate
+
+
+def test_get_session_returns_backward_paginated(
+    mocker: pytest_mock.MockerFixture,
+    test_user_id: str,
+) -> None:
+    """All sessions use backward (newest-first) pagination."""
+    _make_paginated_messages(mocker)
+    mocker.patch(
+        "backend.api.features.chat.routes.stream_registry.get_active_session",
+        new_callable=AsyncMock,
+        return_value=(None, None),
+    )
+
+    response = client.get("/sessions/sess-1")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["oldest_sequence"] == 0
+    assert "forward_paginated" not in data
+    assert "newest_sequence" not in data

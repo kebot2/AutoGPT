@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.copilot import service as chat_service
 from backend.copilot import stream_registry
-from backend.copilot.config import ChatConfig, CopilotMode
+from backend.copilot.config import ChatConfig, CopilotLlmModel, CopilotMode
 from backend.copilot.db import get_chat_messages_paginated
 from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
 from backend.copilot.model import (
@@ -42,7 +42,7 @@ from backend.copilot.rate_limit import (
     reset_daily_usage,
 )
 from backend.copilot.response_model import StreamError, StreamFinish, StreamHeartbeat
-from backend.copilot.service import strip_user_context_prefix
+from backend.copilot.service import strip_injected_context_for_display
 from backend.copilot.tools.e2b_sandbox import kill_sandbox
 from backend.copilot.tools.models import (
     AgentDetailsResponse,
@@ -61,6 +61,10 @@ from backend.copilot.tools.models import (
     InputValidationErrorResponse,
     MCPToolOutputResponse,
     MCPToolsDiscoveredResponse,
+    MemoryForgetCandidatesResponse,
+    MemoryForgetConfirmResponse,
+    MemorySearchResponse,
+    MemoryStoreResponse,
     NeedLoginResponse,
     NoResultsResponse,
     SetupRequirementsResponse,
@@ -103,21 +107,22 @@ router = APIRouter(
 
 
 def _strip_injected_context(message: dict) -> dict:
-    """Hide the server-side `<user_context>` prefix from the API response.
+    """Hide server-injected context blocks from the API response.
 
-    Returns a **shallow copy** of *message* with the prefix removed from
-    ``content`` (if applicable).  The original dict is never mutated, so
-    callers can safely pass live session dicts without risking side-effects.
+    Returns a **shallow copy** of *message* with all server-injected XML
+    blocks removed from ``content`` (if applicable).  The original dict is
+    never mutated, so callers can safely pass live session dicts without
+    risking side-effects.
 
-    The strip is delegated to ``strip_user_context_prefix`` in
-    ``backend.copilot.service`` so the on-the-wire format stays in lockstep
-    with ``inject_user_context`` (the writer).  Only ``user``-role messages
-    with string content are touched; assistant / multimodal blocks pass
-    through unchanged.
+    Handles all three injected block types — ``<memory_context>``,
+    ``<env_context>``, and ``<user_context>`` — regardless of the order they
+    appear at the start of the message.  Only ``user``-role messages with
+    string content are touched; assistant / multimodal blocks pass through
+    unchanged.
     """
     if message.get("role") == "user" and isinstance(message.get("content"), str):
         result = message.copy()
-        result["content"] = strip_user_context_prefix(message["content"])
+        result["content"] = strip_injected_context_for_display(message["content"])
         return result
     return message
 
@@ -138,6 +143,11 @@ class StreamChatRequest(BaseModel):
         default=None,
         description="Autopilot mode: 'fast' for baseline LLM, 'extended_thinking' for Claude Agent SDK. "
         "If None, uses the server default (extended_thinking).",
+    )
+    model: CopilotLlmModel | None = Field(
+        default=None,
+        description="Model tier: 'standard' for the default model, 'advanced' for the highest-capability model. "
+        "If None, the server applies per-user LD targeting then falls back to config.",
     )
 
 
@@ -376,6 +386,31 @@ async def delete_session(
     return Response(status_code=204)
 
 
+@router.delete(
+    "/sessions/{session_id}/stream",
+    dependencies=[Security(auth.requires_user)],
+    status_code=204,
+)
+async def disconnect_session_stream(
+    session_id: str,
+    user_id: Annotated[str, Security(auth.get_user_id)],
+) -> Response:
+    """Disconnect all active SSE listeners for a session.
+
+    Called by the frontend when the user switches away from a chat so the
+    backend releases XREAD listeners immediately rather than waiting for
+    the 5-10 s timeout.
+    """
+    session = await get_chat_session(session_id, user_id)
+    if not session:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id} not found or access denied",
+        )
+    await stream_registry.disconnect_all_listeners(session_id)
+    return Response(status_code=204)
+
+
 @router.patch(
     "/sessions/{session_id}/title",
     summary="Update session title",
@@ -427,22 +462,13 @@ async def get_session(
 
     Supports cursor-based pagination via ``limit`` and ``before_sequence``.
     When no pagination params are provided, returns the most recent messages.
-
-    Args:
-        session_id: The unique identifier for the desired chat session.
-        user_id: The authenticated user's ID.
-        limit: Maximum number of messages to return (1-200, default 50).
-        before_sequence: Return messages with sequence < this value (cursor).
-
-    Returns:
-        SessionDetailResponse: Details for the requested session, including
-            active_stream info and pagination metadata.
     """
     page = await get_chat_messages_paginated(
         session_id, limit, before_sequence, user_id=user_id
     )
     if page is None:
         raise NotFoundError(f"Session {session_id} not found.")
+
     messages = [
         _strip_injected_context(message.model_dump()) for message in page.messages
     ]
@@ -452,10 +478,6 @@ async def get_session(
     if before_sequence is None:
         active_session, last_message_id = await stream_registry.get_active_session(
             session_id, user_id
-        )
-        logger.info(
-            f"[GET_SESSION] session={session_id}, active_session={active_session is not None}, "
-            f"msg_count={len(messages)}, last_role={messages[-1].get('role') if messages else 'none'}"
         )
         if active_session:
             active_stream_info = ActiveStreamInfo(
@@ -840,64 +862,75 @@ async def stream_chat_post(
 
     # Atomically append user message to session BEFORE creating task to avoid
     # race condition where GET_SESSION sees task as "running" but message isn't
-    # saved yet.  append_and_save_message re-fetches inside a lock to prevent
-    # message loss from concurrent requests.
+    # saved yet.  append_and_save_message returns None when a duplicate is
+    # detected — in that case skip enqueue to avoid processing the message twice.
+    is_duplicate_message = False
     if request.message:
         message = ChatMessage(
             role="user" if request.is_user_message else "assistant",
             content=request.message,
         )
-        if request.is_user_message:
+        logger.info(f"[STREAM] Saving user message to session {session_id}")
+        is_duplicate_message = (
+            await append_and_save_message(session_id, message)
+        ) is None
+        logger.info(f"[STREAM] User message saved for session {session_id}")
+        if not is_duplicate_message and request.is_user_message:
             track_user_message(
                 user_id=user_id,
                 session_id=session_id,
                 message_length=len(request.message),
             )
-        logger.info(f"[STREAM] Saving user message to session {session_id}")
-        await append_and_save_message(session_id, message)
-        logger.info(f"[STREAM] User message saved for session {session_id}")
 
-    # Create a task in the stream registry for reconnection support
-    turn_id = str(uuid4())
-    log_meta["turn_id"] = turn_id
-
-    session_create_start = time.perf_counter()
-    await stream_registry.create_session(
-        session_id=session_id,
-        user_id=user_id,
-        tool_call_id="chat_stream",
-        tool_name="chat",
-        turn_id=turn_id,
-    )
-    logger.info(
-        f"[TIMING] create_session completed in {(time.perf_counter() - session_create_start) * 1000:.1f}ms",
-        extra={
-            "json_fields": {
-                **log_meta,
-                "duration_ms": (time.perf_counter() - session_create_start) * 1000,
-            }
-        },
-    )
-
-    # Per-turn stream is always fresh (unique turn_id), subscribe from beginning
-    subscribe_from_id = "0-0"
-
-    await enqueue_copilot_turn(
-        session_id=session_id,
-        user_id=user_id,
-        message=request.message,
-        turn_id=turn_id,
-        is_user_message=request.is_user_message,
-        context=request.context,
-        file_ids=sanitized_file_ids,
-        mode=request.mode,
-    )
+    # Create a task in the stream registry for reconnection support.
+    # For duplicate messages, skip create_session entirely so the infra-retry
+    # client subscribes to the *existing* turn's Redis stream and receives the
+    # in-progress executor output rather than an empty stream.
+    turn_id = ""
+    if not is_duplicate_message:
+        turn_id = str(uuid4())
+        log_meta["turn_id"] = turn_id
+        session_create_start = time.perf_counter()
+        await stream_registry.create_session(
+            session_id=session_id,
+            user_id=user_id,
+            tool_call_id="chat_stream",
+            tool_name="chat",
+            turn_id=turn_id,
+        )
+        logger.info(
+            f"[TIMING] create_session completed in {(time.perf_counter() - session_create_start) * 1000:.1f}ms",
+            extra={
+                "json_fields": {
+                    **log_meta,
+                    "duration_ms": (time.perf_counter() - session_create_start) * 1000,
+                }
+            },
+        )
+        await enqueue_copilot_turn(
+            session_id=session_id,
+            user_id=user_id,
+            message=request.message,
+            turn_id=turn_id,
+            is_user_message=request.is_user_message,
+            context=request.context,
+            file_ids=sanitized_file_ids,
+            mode=request.mode,
+            model=request.model,
+        )
+    else:
+        logger.info(
+            f"[STREAM] Duplicate message detected for session {session_id}, skipping enqueue"
+        )
 
     setup_time = (time.perf_counter() - stream_start_time) * 1000
     logger.info(
         f"[TIMING] Task enqueued to RabbitMQ, setup={setup_time:.1f}ms",
         extra={"json_fields": {**log_meta, "setup_time_ms": setup_time}},
     )
+
+    # Per-turn stream is always fresh (unique turn_id), subscribe from beginning
+    subscribe_from_id = "0-0"
 
     # SSE endpoint that subscribes to the task's stream
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -923,7 +956,6 @@ async def stream_chat_post(
 
             if subscriber_queue is None:
                 yield StreamFinish().to_sse()
-                yield "data: [DONE]\n\n"
                 return
 
             # Read from the subscriber queue and yield to SSE
@@ -953,7 +985,6 @@ async def stream_chat_post(
 
                     yield chunk.to_sse()
 
-                    # Check for finish signal
                     if isinstance(chunk, StreamFinish):
                         total_time = time_module.perf_counter() - event_gen_start
                         logger.info(
@@ -968,6 +999,7 @@ async def stream_chat_post(
                             },
                         )
                         break
+
                 except asyncio.TimeoutError:
                     yield StreamHeartbeat().to_sse()
 
@@ -982,7 +1014,6 @@ async def stream_chat_post(
                     }
                 },
             )
-            pass  # Client disconnected - background task continues
         except Exception as e:
             elapsed = (time_module.perf_counter() - event_gen_start) * 1000
             logger.error(
@@ -1288,6 +1319,10 @@ ToolResponseUnion = (
     | DocPageResponse
     | MCPToolsDiscoveredResponse
     | MCPToolOutputResponse
+    | MemoryStoreResponse
+    | MemorySearchResponse
+    | MemoryForgetCandidatesResponse
+    | MemoryForgetConfirmResponse
 )
 
 

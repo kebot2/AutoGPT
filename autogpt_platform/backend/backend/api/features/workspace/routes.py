@@ -2,6 +2,7 @@
 Workspace API routes for managing user file storage.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -303,9 +304,11 @@ async def get_storage_usage(
     """
     workspace = await get_or_create_workspace(user_id)
 
-    used_bytes = await get_workspace_total_size(workspace.id)
-    file_count = await count_workspace_files(workspace.id)
-    limit_bytes = await get_workspace_storage_limit_bytes(user_id)
+    used_bytes, file_count, limit_bytes = await asyncio.gather(
+        get_workspace_total_size(workspace.id),
+        count_workspace_files(workspace.id),
+        get_workspace_storage_limit_bytes(user_id),
+    )
 
     return StorageUsageResponse(
         used_bytes=used_bytes,
