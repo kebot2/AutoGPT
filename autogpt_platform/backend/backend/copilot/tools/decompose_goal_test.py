@@ -604,10 +604,10 @@ async def test_schedule_auto_approve_creates_task(monkeypatch):
     )
 
     session = make_session(_USER_ID)
-    # Two messages already in the session — the next one (the tool result)
-    # will land at index 2.
+    # make_session pre-populates 1 message (guide_read). Add 2 more.
     session.messages.append(ChatMessage(role="user", content="initial"))
     session.messages.append(ChatMessage(role="assistant", content="tool call"))
+    expected_baseline = len(session.messages)
 
     await _REAL_SCHEDULE_AUTO_APPROVE(
         session_id="session-schedule",
@@ -620,7 +620,7 @@ async def test_schedule_auto_approve_creates_task(monkeypatch):
     while decompose_goal_module._pending_auto_approvals:
         await asyncio.sleep(0)
 
-    fake_run.assert_awaited_once_with("session-schedule", _USER_ID, 2)
+    fake_run.assert_awaited_once_with("session-schedule", _USER_ID, expected_baseline)
 
 
 @pytest.mark.asyncio
