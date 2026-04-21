@@ -225,6 +225,17 @@ class ChatConfig(BaseSettings):
         "from the prefix. Set to False to fall back to passing the system "
         "prompt as a raw string.",
     )
+    baseline_reasoning_max_tokens: int = Field(
+        default=8192,
+        ge=0,
+        le=128000,
+        description="Max thinking/reasoning tokens per baseline (OpenRouter) LLM "
+        "call. Sent as ``extra_body={'reasoning': {'max_tokens': N}}`` on "
+        "Anthropic routes so the frontend can render a Reasoning collapse "
+        "alongside the final text. 0 disables the feature (no reasoning "
+        "params sent). Only applies to Anthropic routes — other providers "
+        "ignore the field.",
+    )
     baseline_prompt_cache_ttl: str = Field(
         default="1h",
         description="TTL for the ephemeral prompt-cache markers on the baseline "
