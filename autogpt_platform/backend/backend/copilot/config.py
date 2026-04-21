@@ -60,6 +60,9 @@ class ChatConfig(BaseSettings):
     )
     fast_advanced_model: str = Field(
         default="anthropic/claude-opus-4.7",
+        validation_alias=AliasChoices(
+            "CHAT_FAST_ADVANCED_MODEL",
+        ),
         description="Baseline path, 'advanced' tier.  Opus by default so "
         "the advanced tier is a clean A/B vs the SDK advanced tier: same "
         "model, different path — isolates the reasoning-wire + cache "
@@ -67,7 +70,11 @@ class ChatConfig(BaseSettings):
         "(the reasoning-native sibling) benchmarks ~9pp behind K2.6 on "
         "SWE-Bench Verified and ~23pp behind on BrowseComp, is text-only, "
         "and was published 6 months before K2.6 — not a fit for the "
-        "advanced tier today.  Override via ``CHAT_FAST_ADVANCED_MODEL``.",
+        "advanced tier today.  Override via ``CHAT_FAST_ADVANCED_MODEL``. "
+        "Unlike the other three cells there is no legacy env var to "
+        "alias — this cell was created in the 2×2 split — but the "
+        "``validation_alias`` stays explicit so the override isn't "
+        "coupled to ``env_prefix`` continuing to exist.",
     )
     thinking_standard_model: str = Field(
         default="anthropic/claude-sonnet-4-6",

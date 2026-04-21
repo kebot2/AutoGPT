@@ -153,6 +153,34 @@ class TestResolveBaselineModel:
         assert cfg.thinking_advanced_model == "legacy/opus-via-advanced"
         assert cfg.fast_standard_model == "legacy/fast-via-fast-model"
 
+    def test_all_four_new_env_vars_bind_to_their_cells(self, monkeypatch):
+        """Each of the four (path, tier) cells must be overridable via
+        its documented ``CHAT_*_*_MODEL`` env var — including
+        ``CHAT_FAST_ADVANCED_MODEL`` which was missing a
+        ``validation_alias`` in the original split and only bound
+        implicitly through ``env_prefix``.  Pinning all four here so
+        that whenever someone touches the config shape, an accidental
+        unbinding fails CI instead of silently ignoring operator
+        overrides.
+        """
+        from backend.copilot.config import ChatConfig
+
+        monkeypatch.setenv("CHAT_FAST_STANDARD_MODEL", "explicit/fast-std")
+        monkeypatch.setenv("CHAT_FAST_ADVANCED_MODEL", "explicit/fast-adv")
+        monkeypatch.setenv("CHAT_THINKING_STANDARD_MODEL", "explicit/think-std")
+        monkeypatch.setenv("CHAT_THINKING_ADVANCED_MODEL", "explicit/think-adv")
+        # Clear the legacy aliases so they don't win priority in
+        # ``AliasChoices`` (first match wins).
+        for legacy in ("CHAT_MODEL", "CHAT_ADVANCED_MODEL", "CHAT_FAST_MODEL"):
+            monkeypatch.delenv(legacy, raising=False)
+
+        cfg = ChatConfig()
+
+        assert cfg.fast_standard_model == "explicit/fast-std"
+        assert cfg.fast_advanced_model == "explicit/fast-adv"
+        assert cfg.thinking_standard_model == "explicit/think-std"
+        assert cfg.thinking_advanced_model == "explicit/think-adv"
+
 
 class TestLoadPriorTranscript:
     """``_load_prior_transcript`` wraps the CLI session restore + validate + load flow."""
