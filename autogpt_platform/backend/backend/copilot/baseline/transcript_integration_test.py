@@ -105,7 +105,7 @@ class TestResolveBaselineModel:
 
         assert (
             ChatConfig.model_fields["fast_advanced_model"].default
-            == "anthropic/claude-opus-4-7"
+            == "anthropic/claude-opus-4.7"
         )
 
     def test_standard_cells_diverge_across_paths(self):
@@ -130,6 +130,28 @@ class TestResolveBaselineModel:
             ChatConfig.model_fields["fast_standard_model"].default
             != ChatConfig.model_fields["fast_advanced_model"].default
         )
+
+    def test_legacy_env_aliases_route_to_new_fields(self, monkeypatch):
+        """Backward compat: the pre-split env var names must still bind.
+
+        The four-field matrix was introduced with ``validation_alias``
+        entries so that existing deployments setting ``CHAT_MODEL`` /
+        ``CHAT_ADVANCED_MODEL`` / ``CHAT_FAST_MODEL`` continue to override
+        the same effective cell without a rename.  Construct a fresh
+        ``ChatConfig`` with each legacy name set and confirm it lands on
+        the new field.
+        """
+        from backend.copilot.config import ChatConfig
+
+        monkeypatch.setenv("CHAT_MODEL", "legacy/sonnet-via-chat-model")
+        monkeypatch.setenv("CHAT_ADVANCED_MODEL", "legacy/opus-via-advanced")
+        monkeypatch.setenv("CHAT_FAST_MODEL", "legacy/fast-via-fast-model")
+
+        cfg = ChatConfig()
+
+        assert cfg.thinking_standard_model == "legacy/sonnet-via-chat-model"
+        assert cfg.thinking_advanced_model == "legacy/opus-via-advanced"
+        assert cfg.fast_standard_model == "legacy/fast-via-fast-model"
 
 
 class TestLoadPriorTranscript:

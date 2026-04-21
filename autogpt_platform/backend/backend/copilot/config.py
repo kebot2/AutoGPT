@@ -17,8 +17,12 @@ from backend.util.clients import OPENROUTER_BASE_URL
 CopilotMode = Literal["fast", "extended_thinking"]
 
 # Per-request model tier set by the frontend model toggle.
-# 'standard' picks the cheaper everyday model for the active path.
-# 'advanced' picks the premium model for the active path (Opus today).
+# 'standard' picks the cheaper everyday model for the active path —
+#   ``fast_standard_model`` on the baseline path, ``thinking_standard_model``
+#   on the SDK path.
+# 'advanced' picks the premium model for the active path — ``fast_advanced_model``
+#   on the baseline path, ``thinking_advanced_model`` on the SDK path (both
+#   default to Opus today).
 # None means no preference — falls through to LD per-user targeting, then config.
 # Using tier names instead of model names keeps the contract model-agnostic.
 CopilotLlmModel = Literal["standard", "advanced"]
@@ -55,7 +59,7 @@ class ChatConfig(BaseSettings):
         "``_is_anthropic_model``).",
     )
     fast_advanced_model: str = Field(
-        default="anthropic/claude-opus-4-7",
+        default="anthropic/claude-opus-4.7",
         description="Baseline path, 'advanced' tier.  Opus by default so "
         "the advanced tier is a clean A/B vs the SDK advanced tier: same "
         "model, different path — isolates the reasoning-wire + cache "
@@ -79,7 +83,7 @@ class ChatConfig(BaseSettings):
         "``CHAT_MODEL`` still honored).",
     )
     thinking_advanced_model: str = Field(
-        default="anthropic/claude-opus-4-7",
+        default="anthropic/claude-opus-4.7",
         validation_alias=AliasChoices(
             "CHAT_THINKING_ADVANCED_MODEL",
             "CHAT_ADVANCED_MODEL",
