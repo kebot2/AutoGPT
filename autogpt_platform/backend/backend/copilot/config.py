@@ -209,13 +209,20 @@ class ChatConfig(BaseSettings):
         default=True,
         description="Render extended-thinking reasoning as live UI parts "
         "(``reasoning-start``/``reasoning-delta``/``reasoning-end``) on the "
-        "wire. When False, the baseline emitter and the SDK response adapter "
-        "suppress the three reasoning wire events — the model still reasons "
-        "and tokens are still billed, but the frontend sees a text-only "
-        "stream. Reasoning rows are still persisted to ``session.messages`` "
-        "as ``role='reasoning'`` entries, so a future per-session toggle can "
-        "surface them on reload. Flip to False to silence the reasoning "
-        "collapse without dropping the persisted audit trail.",
+        "wire AND as persisted ``role='reasoning'`` rows in "
+        "``session.messages``. When False, the baseline emitter and the SDK "
+        "response adapter suppress the three reasoning wire events AND skip "
+        "the ``ChatMessage(role='reasoning')`` persistence — the model still "
+        "reasons and tokens are still billed, but the frontend sees a "
+        "text-only stream on the live wire and on reload. Persistence is "
+        "coupled to the wire events because "
+        "``convertChatSessionToUiMessages.ts`` unconditionally re-renders "
+        "persisted reasoning rows as ``{type: 'reasoning'}`` UI parts; "
+        "keeping the rows while silencing the live wire would resurrect the "
+        "collapse on refresh. Audit trail of the reasoning content remains "
+        "available through the SDK transcript "
+        "(``_format_sdk_content_blocks``) / upstream provider logs; "
+        "``session.messages`` is a UI-render store, not an audit store.",
     )
     stream_replay_count: int = Field(
         default=200,

@@ -70,10 +70,16 @@ class SDKResponseAdapter:
         self.has_ended_reasoning = True
         # When False, ``_ensure_reasoning_started`` / ``StreamReasoningDelta``
         # emission / ``_end_reasoning_if_open`` become no-ops so the frontend
-        # sees a text-only stream for a ``ThinkingBlock``.  The block is
-        # still persisted to ``session.messages`` via
-        # ``_format_sdk_content_blocks`` — same rule as the baseline
-        # emitter: operator silences the live collapse, audit trail stays.
+        # sees a text-only stream for a ``ThinkingBlock``.  ``session.messages``
+        # persistence is also skipped as a side-effect: ``_dispatch_response``
+        # only creates a ``ChatMessage(role="reasoning")`` row on
+        # ``StreamReasoningStart`` (see ``sdk/service.py``), which is
+        # suppressed here.  That keeps the SDK path in lockstep with the
+        # baseline emitter — flag off means no live wire, no persisted row,
+        # and therefore no hydrated reasoning collapse on reload.  The
+        # ThinkingBlock content is still carried through
+        # ``_format_sdk_content_blocks`` into the SDK transcript for
+        # ``--resume`` continuity, which is independent of ``session.messages``.
         self._render_reasoning_in_ui = render_reasoning_in_ui
         self.current_tool_calls: dict[str, dict[str, str]] = {}
         self.resolved_tool_calls: set[str] = set()
@@ -158,9 +164,14 @@ class SDKResponseAdapter:
                     #
                     # When ``render_reasoning_in_ui=False`` the three
                     # reasoning helpers below (and the append) no-op, so
-                    # the frontend sees a text-only stream.  Persistence
-                    # of the thinking text (``_format_sdk_content_blocks``)
-                    # is unaffected.
+                    # the frontend sees a text-only stream AND no
+                    # ``ChatMessage(role='reasoning')`` row is persisted
+                    # (the row is only created by ``_dispatch_response``
+                    # when ``StreamReasoningStart`` arrives, which is
+                    # suppressed here).  Persistence of the thinking text
+                    # into the SDK transcript via
+                    # ``_format_sdk_content_blocks`` is unaffected — that
+                    # feeds ``--resume`` continuity, not the UI.
                     if block.thinking:
                         self._end_text_if_open(responses)
                         self._ensure_reasoning_started(responses)

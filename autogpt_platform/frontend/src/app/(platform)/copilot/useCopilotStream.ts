@@ -30,10 +30,11 @@ const RECONNECT_MAX_ATTEMPTS = 3;
  * `isReconnectScheduledRef` already prevents OVERLAPPING reconnects, but
  * tab-throttle / visibility wake bursts can fire `onFinish(isDisconnect)`
  * several times inside a single second — each one would schedule a fresh
- * reconnect the moment the previous timer cleared the ref. The debounce
- * rejects any reconnect request that arrives within this window since the
- * last one's resume actually ran, so a throttle storm collapses to one
- * GET /stream instead of three.
+ * reconnect the moment the previous timer cleared the ref. Requests that
+ * arrive inside this window since the last reconnect's resume are COALESCED:
+ * scheduled to run at the window boundary rather than dropped, so a
+ * fast-failing resume (e.g. a 502 on GET /stream that trips `onError` inside
+ * 500 ms) still retries instead of stalling the retry loop.
  */
 const RECONNECT_DEBOUNCE_MS = 1_500;
 
@@ -145,15 +146,28 @@ export function useCopilotStream({
     if (isReconnectScheduledRef.current || !sid) return;
 
     // Debounce: if the previous reconnect resumed within the last
-    // RECONNECT_DEBOUNCE_MS, drop this request. Browser tab-throttle bursts
-    // can fire onFinish(isDisconnect) 2–3 times in a second; without this
-    // guard each fires its own GET /stream, each one replays the Redis
-    // stream, and the flicker storm is back.
+    // RECONNECT_DEBOUNCE_MS, COALESCE this request onto the window boundary
+    // rather than dropping it. Browser tab-throttle bursts can fire
+    // onFinish(isDisconnect) 2–3 times in a second; without the debounce,
+    // each fires its own GET /stream, each one replays the Redis stream,
+    // and the flicker storm is back. Dropping the request silently (the
+    // previous behaviour) stalled the retry loop when a resume failed
+    // quickly — e.g. a 502 on GET /stream that trips onError inside 500 ms
+    // while the 1500 ms window is still open. Scheduling the retry for
+    // the remaining window preserves both the storm cap and the retry.
     const sinceLastResume = Date.now() - lastReconnectResumeAtRef.current;
     if (
       lastReconnectResumeAtRef.current > 0 &&
       sinceLastResume < RECONNECT_DEBOUNCE_MS
     ) {
+      const remainingDelay = RECONNECT_DEBOUNCE_MS - sinceLastResume;
+      isReconnectScheduledRef.current = true;
+      setIsReconnectScheduled(true);
+      reconnectTimerRef.current = setTimeout(() => {
+        isReconnectScheduledRef.current = false;
+        setIsReconnectScheduled(false);
+        handleReconnect(sid);
+      }, remainingDelay);
       return;
     }
 

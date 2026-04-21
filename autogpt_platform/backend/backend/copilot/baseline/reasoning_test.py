@@ -283,9 +283,12 @@ class TestReasoningPersistence:
 
 class TestBaselineReasoningEmitterRenderFlag:
     """``render_in_ui=False`` must silence ``StreamReasoning*`` wire events
-    while keeping persistence intact — the operator can hide the collapse
-    without losing the audit trail.  These tests pin the contract in both
-    directions so future refactors can't flip only one half."""
+    AND drop persistence of ``role="reasoning"`` rows — the operator hides
+    the collapse on both the live wire and on reload.  Persistence is tied
+    to the wire events because the frontend's hydration path unconditionally
+    re-renders persisted reasoning rows; keeping them would make the flag a
+    no-op post-reload.  These tests pin the contract in both directions so
+    future refactors can't flip only one half."""
 
     def test_render_off_suppresses_start_and_delta(self):
         emitter = BaselineReasoningEmitter(render_in_ui=False)
@@ -302,7 +305,10 @@ class TestBaselineReasoningEmitterRenderFlag:
         assert events == []
         assert emitter.is_open is False
 
-    def test_render_off_still_persists_rows(self):
+    def test_render_off_skips_persistence(self):
+        """When render is off the emitter must NOT append a ``role="reasoning"``
+        row to ``session_messages`` — hydration would re-render it, undoing
+        the operator's intent."""
         session: list[ChatMessage] = []
         emitter = BaselineReasoningEmitter(session, render_in_ui=False)
 
@@ -310,9 +316,7 @@ class TestBaselineReasoningEmitterRenderFlag:
         emitter.on_delta(_delta(reasoning="part two"))
         emitter.close()
 
-        assert len(session) == 1
-        assert session[0].role == "reasoning"
-        assert session[0].content == "part one part two"
+        assert session == []
 
     def test_render_off_rotates_block_id_between_sessions(self):
         """Even with wire events silenced the block id must rotate on close,
