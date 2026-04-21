@@ -56,3 +56,42 @@ class TestAgentGenerationGuideContainsClarifySection:
             "### Workflow"
         )[0]
         assert "ask_question" in clarify_section
+
+
+class TestBaselineWebSearchSupplement:
+    """The fast-mode web-search supplement must point at block IDs that
+    actually exist and name each block's required input fields, so the
+    Kimi / baseline model can call them via ``run_block`` without a
+    ``find_block`` round-trip.  Pinning the block IDs against the live
+    registry means a block rename / delete breaks this test rather than
+    shipping a dead UUID to the model."""
+
+    def test_perplexity_block_id_matches_registered_block(self):
+        from backend.blocks.perplexity import PerplexityBlock
+
+        assert PerplexityBlock().id == prompting.PERPLEXITY_BLOCK_ID
+
+    def test_send_web_request_block_id_matches_registered_block(self):
+        from backend.blocks.http import SendWebRequestBlock
+
+        assert SendWebRequestBlock().id == prompting.SEND_WEB_REQUEST_BLOCK_ID
+
+    def test_supplement_surfaces_both_block_ids(self):
+        text = prompting.get_baseline_web_search_supplement()
+        assert prompting.PERPLEXITY_BLOCK_ID in text
+        assert prompting.SEND_WEB_REQUEST_BLOCK_ID in text
+
+    def test_supplement_names_required_inputs(self):
+        text = prompting.get_baseline_web_search_supplement()
+        # Perplexity required input.
+        assert '"prompt"' in text
+        # SendWebRequest required input.
+        assert '"url"' in text
+        # Default Perplexity model is named explicitly so Kimi doesn't
+        # guess (``sonar-xl`` etc. 404 on the Perplexity API).
+        assert '"sonar"' in text
+
+    def test_supplement_flags_credentials_dependency(self):
+        text = prompting.get_baseline_web_search_supplement()
+        assert "credentials" in text.lower()
+        assert "connect_integration" in text

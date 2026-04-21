@@ -55,7 +55,11 @@ from backend.copilot.pending_messages import (
     drain_pending_messages,
     format_pending_as_user_message,
 )
-from backend.copilot.prompting import SHARED_TOOL_NOTES, get_graphiti_supplement
+from backend.copilot.prompting import (
+    SHARED_TOOL_NOTES,
+    get_baseline_web_search_supplement,
+    get_graphiti_supplement,
+)
 from backend.copilot.response_model import (
     StreamBaseResponse,
     StreamError,
@@ -1417,6 +1421,7 @@ async def stream_chat_completion_baseline(
     system_prompt = (
         base_system_prompt
         + SHARED_TOOL_NOTES
+        + get_baseline_web_search_supplement()
         + graphiti_supplement
         + builder_session_suffix
     )

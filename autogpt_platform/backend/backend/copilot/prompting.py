@@ -411,3 +411,65 @@ You have access to persistent temporal memory tools that remember facts across s
 - group_id is handled automatically by the system — never set it yourself.
 - When storing, be specific about operational rules and instructions (e.g., "CC Sarah on client communications" not just "Sarah is the assistant").
 """
+
+
+# Block IDs for the baseline-path web-search supplement.  Surfaced as module
+# constants so a test can assert they match the live block registry (see
+# prompting_test.py — if a block is renamed/deleted the assertion catches it
+# before the prompt ships a dead UUID).
+PERPLEXITY_BLOCK_ID = "c8a5f2e9-8b3d-4a7e-9f6c-1d5e3c9b7a4f"
+SEND_WEB_REQUEST_BLOCK_ID = "6595ae1f-b924-42cb-9a41-551a0611c4b4"
+
+
+def get_baseline_web_search_supplement() -> str:
+    """Web-search instructions for the baseline (fast) path.
+
+    SDK (extended_thinking) mode has Claude's native ``WebSearch`` tool,
+    so it gets web access for free.  The baseline path does NOT — it runs
+    against whatever OpenRouter model is configured (Kimi K2.6 by
+    default) and those providers don't expose a built-in search.  To
+    close the gap without adding a new tool type, we point the model at
+    two existing copilot blocks via ``run_block``:
+
+    * Perplexity (web search w/ citations, sonar models) —
+      ``PERPLEXITY_BLOCK_ID``.
+    * SendWebRequest (fetch an arbitrary URL) —
+      ``SEND_WEB_REQUEST_BLOCK_ID``.
+
+    The supplement is static — no per-user / per-session content — so it
+    stays on the cacheable prefix.  Append to the baseline system prompt
+    only; SDK callers would just confuse their native ``WebSearch`` with
+    a competing block recipe.
+    """
+    return f"""
+
+## Web Search & URL Fetch (fast mode)
+
+Fast mode doesn't expose a native web-search tool — use the existing
+copilot blocks via ``run_block`` when you need live web content.
+
+### Web search with citations — Perplexity
+- Block ID: ``{PERPLEXITY_BLOCK_ID}``
+- Input: ``{{"prompt": "<query>", "model": "sonar"}}``
+  (``model`` defaults to ``sonar``; other options: ``sonar-pro``,
+  ``sonar-reasoning``, ``sonar-reasoning-pro``, ``sonar-deep-research``
+  — use ``sonar`` unless the user asks for deeper research.)
+- Output: ``response`` (string), ``annotations`` (list of URL citations).
+- Requires Perplexity credentials connected to the user's account.  If
+  the block errors with a missing-credentials message, call
+  ``connect_integration`` for Perplexity and retry.
+
+### Fetch a specific URL — SendWebRequest
+- Block ID: ``{SEND_WEB_REQUEST_BLOCK_ID}``
+- Input: ``{{"url": "<url>", "method": "GET"}}`` (supports POST / PUT /
+  DELETE / PATCH too; add ``headers`` / ``body`` as needed).
+- Output: ``response`` (server body), plus ``client_error`` /
+  ``server_error`` / ``error`` channels — check the error outputs
+  before trusting ``response``.
+
+Prefer Perplexity for open-ended questions ("what's the latest...",
+"find articles about...") and SendWebRequest when the user names a
+specific URL or needs structured API data.  Call ``find_block`` first
+only if neither pattern fits — the two block IDs above cover 95% of
+baseline web-access needs and skip one search round-trip.
+"""
