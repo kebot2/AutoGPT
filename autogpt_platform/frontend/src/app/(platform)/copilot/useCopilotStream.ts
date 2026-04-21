@@ -25,6 +25,18 @@ import { useHydrateOnStreamEnd } from "./useHydrateOnStreamEnd";
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_ATTEMPTS = 3;
 
+/**
+ * Minimum spacing between successive reconnect attempts.
+ * `isReconnectScheduledRef` already prevents OVERLAPPING reconnects, but
+ * tab-throttle / visibility wake bursts can fire `onFinish(isDisconnect)`
+ * several times inside a single second — each one would schedule a fresh
+ * reconnect the moment the previous timer cleared the ref. The debounce
+ * rejects any reconnect request that arrives within this window since the
+ * last one's resume actually ran, so a throttle storm collapses to one
+ * GET /stream instead of three.
+ */
+const RECONNECT_DEBOUNCE_MS = 1_500;
+
 /** Minimum time the page must have been hidden to trigger a wake re-sync. */
 const WAKE_RESYNC_THRESHOLD_MS = 30_000;
 
@@ -110,6 +122,11 @@ export function useCopilotStream({
   const isReconnectScheduledRef = useRef(false);
   const [isReconnectScheduled, setIsReconnectScheduled] = useState(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  // Timestamp of the last reconnect's actual resume call — used together
+  // with RECONNECT_DEBOUNCE_MS to drop rapid duplicate reconnect requests
+  // (e.g. visibility throttle firing onFinish(isDisconnect) several times
+  // in the same second). 0 = no reconnect has fired yet in this session.
+  const lastReconnectResumeAtRef = useRef(0);
   const hasShownDisconnectToast = useRef(false);
   // Set when the user explicitly clicks stop — prevents onError from
   // triggering a reconnect cycle for the resulting AbortError.
@@ -126,6 +143,19 @@ export function useCopilotStream({
 
   function handleReconnect(sid: string) {
     if (isReconnectScheduledRef.current || !sid) return;
+
+    // Debounce: if the previous reconnect resumed within the last
+    // RECONNECT_DEBOUNCE_MS, drop this request. Browser tab-throttle bursts
+    // can fire onFinish(isDisconnect) 2–3 times in a second; without this
+    // guard each fires its own GET /stream, each one replays the Redis
+    // stream, and the flicker storm is back.
+    const sinceLastResume = Date.now() - lastReconnectResumeAtRef.current;
+    if (
+      lastReconnectResumeAtRef.current > 0 &&
+      sinceLastResume < RECONNECT_DEBOUNCE_MS
+    ) {
+      return;
+    }
 
     const nextAttempt = reconnectAttemptsRef.current + 1;
     if (nextAttempt > RECONNECT_MAX_ATTEMPTS) {
@@ -163,6 +193,7 @@ export function useCopilotStream({
         }
         return prev;
       });
+      lastReconnectResumeAtRef.current = Date.now();
       resumeStreamRef.current();
     }, delay);
   }
@@ -469,6 +500,7 @@ export function useCopilotStream({
     setRateLimitMessage(null);
     hasShownDisconnectToast.current = false;
     lastSubmittedMsgRef.current = null;
+    lastReconnectResumeAtRef.current = 0;
     setReconnectExhausted(false);
     setIsSyncing(false);
     hasResumedRef.current.clear();

@@ -733,7 +733,11 @@ class TestDoTransientBackoff:
             async for _ in _do_transient_backoff(3, state, "msg-1", "sess-1"):
                 pass
 
-        mock_cls.assert_called_once_with(message_id="msg-1", session_id="sess-1")
+        mock_cls.assert_called_once_with(
+            message_id="msg-1",
+            session_id="sess-1",
+            render_reasoning_in_ui=True,
+        )
         assert state.adapter is new_adapter
 
     async def test_resets_usage_after_yield(self):

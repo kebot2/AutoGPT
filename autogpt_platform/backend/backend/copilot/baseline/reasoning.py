@@ -172,16 +172,28 @@ class BaselineReasoningEmitter:
     fresh ``ChatMessage(role="reasoning")`` is appended and mutated
     in-place as further deltas arrive; :meth:`close` drops the reference
     but leaves the appended row intact.
+
+    Pass ``render_in_ui=False`` to suppress the ``StreamReasoning*`` wire
+    events — the emitter still reads the reasoning payload and still
+    appends / mutates the persisted ``role="reasoning"`` row, but returns
+    empty event lists from :meth:`on_delta` and :meth:`close`.  This lets
+    the operator (via :attr:`ChatConfig.render_reasoning_in_ui`) hide the
+    reasoning collapse from the live stream without dropping the audit
+    trail; a future per-session toggle can surface the persisted rows on
+    reload.
     """
 
     def __init__(
         self,
         session_messages: list[ChatMessage] | None = None,
+        *,
+        render_in_ui: bool = True,
     ) -> None:
         self._block_id: str = str(uuid.uuid4())
         self._open: bool = False
         self._session_messages = session_messages
         self._current_row: ChatMessage | None = None
+        self._render_in_ui = render_in_ui
 
     @property
     def is_open(self) -> bool:
@@ -195,6 +207,11 @@ class BaselineReasoningEmitter:
         Persistence (when a session message list is attached) happens in
         lockstep with emission so the row's content stays equal to the
         concatenated deltas at every delta boundary.
+
+        When ``render_in_ui=False`` the wire events are suppressed (empty
+        list returned) but the state machine still advances and the
+        persistence row is still appended / mutated, so ``close`` behaves
+        symmetrically and the persisted audit trail is identical.
         """
         ext = OpenRouterDeltaExtension.from_delta(delta)
         text = ext.visible_text()
@@ -202,12 +219,14 @@ class BaselineReasoningEmitter:
             return []
         events: list[StreamBaseResponse] = []
         if not self._open:
-            events.append(StreamReasoningStart(id=self._block_id))
+            if self._render_in_ui:
+                events.append(StreamReasoningStart(id=self._block_id))
             self._open = True
             if self._session_messages is not None:
                 self._current_row = ChatMessage(role="reasoning", content="")
                 self._session_messages.append(self._current_row)
-        events.append(StreamReasoningDelta(id=self._block_id, delta=text))
+        if self._render_in_ui:
+            events.append(StreamReasoningDelta(id=self._block_id, delta=text))
         if self._current_row is not None:
             self._current_row.content = (self._current_row.content or "") + text
         return events
@@ -220,11 +239,18 @@ class BaselineReasoningEmitter:
         than reusing one already closed on the wire.  The persisted row is
         not removed — it stays in ``session_messages`` as the durable
         record of what was reasoned.
+
+        When ``render_in_ui=False`` the wire event is suppressed (empty
+        list returned) but the block still rotates so subsequent reasoning
+        uses a fresh id — keeps the state machine in lockstep with the
+        render-on branch.
         """
         if not self._open:
             return []
-        event = StreamReasoningEnd(id=self._block_id)
+        events: list[StreamBaseResponse] = (
+            [StreamReasoningEnd(id=self._block_id)] if self._render_in_ui else []
+        )
         self._open = False
         self._block_id = str(uuid.uuid4())
         self._current_row = None
-        return [event]
+        return events

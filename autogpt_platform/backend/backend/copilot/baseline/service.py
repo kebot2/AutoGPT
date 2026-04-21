@@ -379,7 +379,13 @@ class _BaselineStreamState:
         # frontend's ``convertChatSessionToUiMessages`` relies on these
         # rows to render the Reasoning collapse after the AI SDK's
         # stream-end hydrate swaps in the DB-backed message list.
-        self.reasoning_emitter = BaselineReasoningEmitter(self.session_messages)
+        # ``render_in_ui`` is sourced from ``config.render_reasoning_in_ui``
+        # so the operator can silence the reasoning collapse globally
+        # without dropping the persisted audit trail.
+        self.reasoning_emitter = BaselineReasoningEmitter(
+            self.session_messages,
+            render_in_ui=config.render_reasoning_in_ui,
+        )
 
 
 def _is_anthropic_model(model: str) -> bool:

@@ -205,6 +205,33 @@ class ChatConfig(BaseSettings):
         "``max_thinking_tokens`` kwarg so the CLI falls back to model default "
         "(which, without the flag, leaves extended thinking off).",
     )
+    render_reasoning_in_ui: bool = Field(
+        default=True,
+        description="Render extended-thinking reasoning as live UI parts "
+        "(``reasoning-start``/``reasoning-delta``/``reasoning-end``) on the "
+        "wire. When False, the baseline emitter and the SDK response adapter "
+        "suppress the three reasoning wire events — the model still reasons "
+        "and tokens are still billed, but the frontend sees a text-only "
+        "stream. Reasoning rows are still persisted to ``session.messages`` "
+        "as ``role='reasoning'`` entries, so a future per-session toggle can "
+        "surface them on reload. Flip to False to silence the reasoning "
+        "collapse without dropping the persisted audit trail.",
+    )
+    stream_replay_count: int = Field(
+        default=200,
+        ge=1,
+        le=10000,
+        description="Maximum number of Redis stream entries replayed on SSE "
+        "reconnect in :func:`stream_registry.subscribe_to_session`. Lowered "
+        "from 1000 to bound the replay storm when a tab-switch / throttle "
+        "triggers multiple quick reconnects — 200 still covers a full Kimi "
+        "turn after coalescing (~150 events) and leaves headroom for long "
+        "Opus tool loops. Redis ``XREAD`` ``count`` caps the *response size*, "
+        "not the total events that existed; dropping older entries on replay "
+        "is acceptable because the frontend deduplicates on block ids. "
+        "Scoped to the SSE resume path only — live stream listener XREAD "
+        "(no replay) is unchanged.",
+    )
     claude_agent_thinking_effort: Literal["low", "medium", "high", "max"] | None = (
         Field(
             default=None,

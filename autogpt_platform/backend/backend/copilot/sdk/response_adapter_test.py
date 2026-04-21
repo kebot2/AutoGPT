@@ -331,6 +331,64 @@ def test_empty_thinking_block_is_ignored():
     assert [type(r).__name__ for r in results] == ["StreamStartStep"]
 
 
+def test_render_reasoning_in_ui_false_suppresses_thinking_events():
+    """``render_reasoning_in_ui=False`` silences ``StreamReasoning*`` on
+    the wire — the frontend sees a text-only stream.  Persistence via
+    ``_format_sdk_content_blocks`` is handled elsewhere; this test only
+    pins the wire contract.
+    """
+    adapter = SDKResponseAdapter(
+        message_id="m",
+        session_id="s",
+        render_reasoning_in_ui=False,
+    )
+    msg = AssistantMessage(
+        content=[ThinkingBlock(thinking="plan", signature="sig")],
+        model="test",
+    )
+    results = adapter.convert_message(msg)
+    types = [type(r).__name__ for r in results]
+    assert "StreamReasoningStart" not in types
+    assert "StreamReasoningDelta" not in types
+    assert "StreamReasoningEnd" not in types
+
+
+def test_render_reasoning_off_text_after_thinking_emits_no_reasoning_end():
+    """With rendering off the ReasoningEnd is never synthesized when text
+    follows — no ReasoningStart ever hit the wire, so no close is due."""
+    adapter = SDKResponseAdapter(
+        message_id="m",
+        session_id="s",
+        render_reasoning_in_ui=False,
+    )
+    adapter.convert_message(
+        AssistantMessage(
+            content=[ThinkingBlock(thinking="warming up", signature="sig")],
+            model="test",
+        )
+    )
+    results = adapter.convert_message(
+        AssistantMessage(content=[TextBlock(text="hello")], model="test")
+    )
+    types = [type(r).__name__ for r in results]
+    assert "StreamReasoningEnd" not in types
+    assert "StreamTextStart" in types
+    assert "StreamTextDelta" in types
+
+
+def test_render_reasoning_on_is_default():
+    """Default is True — existing callers keep emitting reasoning events."""
+    adapter = SDKResponseAdapter(message_id="m", session_id="s")
+    msg = AssistantMessage(
+        content=[ThinkingBlock(thinking="plan", signature="sig")],
+        model="test",
+    )
+    results = adapter.convert_message(msg)
+    types = [type(r).__name__ for r in results]
+    assert "StreamReasoningStart" in types
+    assert "StreamReasoningDelta" in types
+
+
 def test_result_success_synthesizes_fallback_text_when_final_turn_is_thinking_only():
     """If the model's last LLM call after a tool_result produced only a
     ThinkingBlock (no TextBlock), the UI would hang on the tool output

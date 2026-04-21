@@ -485,9 +485,17 @@ async def subscribe_to_session(
     subscriber_queue: asyncio.Queue[StreamBaseResponse] = asyncio.Queue()
     stream_key = _get_turn_stream_key(session.turn_id)
 
-    # Step 1: Replay messages from Redis Stream
+    # Step 1: Replay messages from Redis Stream.
+    # ``count`` caps the replay batch size — lowered from a hard-coded 1000
+    # to :attr:`ChatConfig.stream_replay_count` (default 200) to bound the
+    # replay storm when a tab-switch / browser throttle triggers multiple
+    # reconnects in quick succession.  200 still covers a full Kimi turn
+    # after coalescing (~150 events); dropping older entries on replay is
+    # acceptable because the frontend deduplicates on block ids.
     xread_start = time.perf_counter()
-    messages = await redis.xread({stream_key: last_message_id}, block=None, count=1000)
+    messages = await redis.xread(
+        {stream_key: last_message_id}, block=None, count=config.stream_replay_count
+    )
     xread_time = (time.perf_counter() - xread_start) * 1000
     logger.info(
         f"[TIMING] Redis xread (replay) took {xread_time:.1f}ms, status={session_status}",
