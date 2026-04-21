@@ -44,51 +44,45 @@ _CANCEL_KEY_TTL_SECONDS = AUTO_APPROVE_SERVER_SECONDS + 30
 _pending_auto_approvals: dict[str, asyncio.Task] = {}
 
 
-_APPROVAL_MARKERS = ("approved",)
-
-
 def needs_build_plan_approval(session: ChatSession) -> bool:
-    """Return True if the current build must be blocked pending decomposition
-    approval.
+    """Return True if the current build must be blocked pending user response.
 
-    Enforces the "STOP — do not proceed until the user approves" gate from
+    Enforces the "STOP — do not proceed until the user responds" gate from
     ``agent_generation_guide.md`` at the *code* level. Natural-language
-    instruction alone is not enough — the LLM has been observed:
-    1. Calling ``decompose_goal`` and ``create_agent`` in the same turn
-       (building while the user is mid-countdown), AND
-    2. Skipping ``decompose_goal`` entirely and jumping straight to
-       ``create_agent`` on follow-up build requests when the session
-       already contains a prior resolved decomposition.
+    instruction alone is not enough — the LLM has been observed calling
+    ``decompose_goal`` and ``create_agent`` in the same turn.
 
-    Rule: the most recent user message must be an approval message
-    (contains "approved", case-insensitive) AND a ``decompose_goal`` tool
-    call must exist somewhere in the session before that approval.
+    Rule: a ``decompose_goal`` tool call must exist in the session AND at
+    least one user message must appear after it. The gate does NOT check
+    *what* the user said — the LLM interprets the intent (build, modify,
+    or reject). The gate only blocks same-turn builds where the user hasn't
+    responded at all.
 
-    - Fresh "build me X" request without decomposition → block.
-    - New build request after a previous completed build → block until
-      a new decompose_goal + approval cycle runs.
-    - decompose_goal called but user hasn't responded yet → block.
-    - User said "Approved" after decompose_goal → allow.
+    - No decompose_goal in session → block (must decompose first).
+    - decompose_goal called but no user response yet → block.
+    - Any user message after decompose_goal → allow (LLM decides).
     """
-    last_user_idx = -1
+    # Walk backward to find the latest decompose_goal tool call.
+    decompose_idx = -1
     for i in range(len(session.messages) - 1, -1, -1):
-        if session.messages[i].role == "user":
-            last_user_idx = i
-            break
-    if last_user_idx < 0:
-        return True
-
-    last_user_content = (session.messages[last_user_idx].content or "").lower()
-    if not any(marker in last_user_content for marker in _APPROVAL_MARKERS):
-        return True
-
-    for i in range(last_user_idx - 1, -1, -1):
         msg = session.messages[i]
         if msg.role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
                 name = (tc.get("function") or {}).get("name") or tc.get("name")
                 if name == "decompose_goal":
-                    return False
+                    decompose_idx = i
+                    break
+            if decompose_idx >= 0:
+                break
+
+    if decompose_idx < 0:
+        return True
+
+    # Any user message after the decompose_goal call unblocks the gate.
+    for msg in session.messages[decompose_idx + 1 :]:
+        if msg.role == "user":
+            return False
+
     return True
 
 

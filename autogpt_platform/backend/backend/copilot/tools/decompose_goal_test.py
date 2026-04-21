@@ -311,24 +311,20 @@ def test_needs_approval_blocks_when_no_decompose_in_session():
     assert needs_build_plan_approval(session) is True
 
 
-def test_needs_approval_blocks_when_last_user_is_not_approval():
-    """Even with a decompose_goal earlier, a fresh non-approval user message
-    starts a new build flow that requires its own decomposition."""
+def test_needs_approval_allows_any_user_response():
+    """Any user message after decompose_goal unblocks the gate."""
     session = make_session(_USER_ID)
-    session.messages.append(ChatMessage(role="user", content="Build v1"))
+    session.messages.append(ChatMessage(role="user", content="Build me an agent"))
     session.messages.append(
         ChatMessage(role="assistant", content="", tool_calls=[_decompose_tool_call()])
     )
-    session.messages.append(ChatMessage(role="tool", content="{plan v1}"))
-    session.messages.append(ChatMessage(role="user", content="Approved"))
-    session.messages.append(ChatMessage(role="assistant", content="agent built."))
-    # User asks for a second build — LLM must call decompose_goal again.
-    session.messages.append(ChatMessage(role="user", content="Now build v2"))
-    assert needs_build_plan_approval(session) is True
+    session.messages.append(ChatMessage(role="tool", content="{plan}"))
+    session.messages.append(ChatMessage(role="user", content="Sure"))
+    assert needs_build_plan_approval(session) is False
 
 
-def test_needs_approval_allows_when_user_approved_after_decompose():
-    """User said "Approved" after a decompose_goal → build may proceed."""
+def test_needs_approval_allows_explicit_approval():
+    """Explicit 'Approved' also passes (common from button/auto-approve)."""
     session = make_session(_USER_ID)
     session.messages.append(ChatMessage(role="user", content="Build me an agent"))
     session.messages.append(
@@ -341,8 +337,8 @@ def test_needs_approval_allows_when_user_approved_after_decompose():
     assert needs_build_plan_approval(session) is False
 
 
-def test_needs_approval_allows_modified_approval():
-    """Approved with modifications also counts as approval."""
+def test_needs_approval_allows_modification_request():
+    """User asking to modify the plan also passes — LLM decides what to do."""
     session = make_session(_USER_ID)
     session.messages.append(ChatMessage(role="user", content="Build me an agent"))
     session.messages.append(
@@ -350,46 +346,28 @@ def test_needs_approval_allows_modified_approval():
     )
     session.messages.append(ChatMessage(role="tool", content="{plan}"))
     session.messages.append(
-        ChatMessage(
-            role="user",
-            content="Approved with modifications. Please build the agent following these steps: ...",
-        )
+        ChatMessage(role="user", content="Change step 3 to use Gmail instead")
     )
     assert needs_build_plan_approval(session) is False
 
 
 def test_needs_approval_blocks_same_turn_decompose_and_build():
     """LLM calls decompose_goal then immediately tries create_agent in the
-    same turn — the last user message is still the original build request,
-    not an approval."""
+    same turn — no user message after decompose_goal yet."""
     session = make_session(_USER_ID)
     session.messages.append(ChatMessage(role="user", content="Build me an agent"))
     session.messages.append(
         ChatMessage(role="assistant", content="", tool_calls=[_decompose_tool_call()])
     )
     session.messages.append(ChatMessage(role="tool", content="{plan}"))
-    # No user message yet — still mid-countdown.
     assert needs_build_plan_approval(session) is True
 
 
-def test_needs_approval_blocks_approval_without_prior_decompose():
-    """User spontaneously says "Approved" but no decompose_goal was ever
-    called — the LLM did not show a plan, so the gate stays closed."""
-    session = make_session(_USER_ID)
-    session.messages.append(ChatMessage(role="user", content="Approved"))
-    assert needs_build_plan_approval(session) is True
-
-
-def test_needs_approval_case_insensitive():
-    """Approval detection is case-insensitive."""
+def test_needs_approval_blocks_without_prior_decompose():
+    """No decompose_goal in session → must decompose first."""
     session = make_session(_USER_ID)
     session.messages.append(ChatMessage(role="user", content="Build me an agent"))
-    session.messages.append(
-        ChatMessage(role="assistant", content="", tool_calls=[_decompose_tool_call()])
-    )
-    session.messages.append(ChatMessage(role="tool", content="{plan}"))
-    session.messages.append(ChatMessage(role="user", content="APPROVED, go."))
-    assert needs_build_plan_approval(session) is False
+    assert needs_build_plan_approval(session) is True
 
 
 # ---------------------------------------------------------------------------
