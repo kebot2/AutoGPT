@@ -1,6 +1,7 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, Union
 
+import openai
 from pydantic import SecretStr
 from replicate.client import Client as ReplicateClient
 from replicate.helpers import FileOutput
@@ -76,6 +77,14 @@ SIZE_TO_NANO_BANANA_RATIO = {
     ImageSize.TALL: "9:16",
 }
 
+SIZE_TO_OPENAI = {
+    ImageSize.SQUARE: "1024x1024",
+    ImageSize.LANDSCAPE: "1536x1024",
+    ImageSize.PORTRAIT: "1024x1536",
+    ImageSize.WIDE: "1536x1024",
+    ImageSize.TALL: "1024x1536",
+}
+
 
 class ImageStyle(str, Enum):
     """
@@ -107,7 +116,7 @@ class ImageStyle(str, Enum):
 
 class ImageGenModel(str, Enum):
     """
-    Available model providers
+    Available model providers including OpenAI GPT-image family
     """
 
     FLUX = "Flux 1.1 Pro"
@@ -116,14 +125,19 @@ class ImageGenModel(str, Enum):
     SD3_5 = "Stable Diffusion 3.5 Medium"
     NANO_BANANA_PRO = "Nano Banana Pro"
     NANO_BANANA_2 = "Nano Banana 2"
+    GPT_IMAGE_1 = "gpt-image-1"
+    GPT_IMAGE_1_5 = "gpt-image-1-5"
+    GPT_IMAGE_2 = "gpt-image-2"
+    GPT_IMAGE_1_MINI = "gpt-image-1-mini"
 
 
 class AIImageGeneratorBlock(Block):
     class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
-            Literal[ProviderName.REPLICATE], Literal["api_key"]
+            Union[Literal[ProviderName.REPLICATE], Literal[ProviderName.OPENAI]],
+            Literal["api_key"],
         ] = CredentialsField(
-            description="Enter your Replicate API key to access the image generation API. You can obtain an API key from https://replicate.com/account/api-tokens.",
+            description="Enter your Replicate or OpenAI API key to access the image generation API.",
         )
         prompt: str = SchemaField(
             description="Text prompt for image generation",
@@ -182,7 +196,10 @@ class AIImageGeneratorBlock(Block):
                 # Return a data URI directly so store_media_file doesn't need to download
                 "_run_client": lambda *args, **kwargs: (
                     "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAQAcJYgCdAEO"
-                )
+                ),
+                "_generate_with_openai": lambda *args, **kwargs: (
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                ),
             },
         )
 
@@ -216,8 +233,34 @@ class AIImageGeneratorBlock(Block):
         except Exception as e:
             raise RuntimeError(f"Unexpected error during model execution: {e}")
 
+    async def _generate_with_openai(
+        self, input_data: Input, credentials: APIKeyCredentials
+    ) -> str:
+        client = openai.AsyncOpenAI(
+            api_key=credentials.api_key.get_secret_value()
+        )
+
+        size = SIZE_TO_OPENAI.get(input_data.size, "1024x1024")
+
+        response = await client.images.generate(
+            model=input_data.model.value,
+            prompt=input_data.prompt,
+            n=1,
+            size=size,  # type: ignore[arg-type]
+            quality="auto",
+        )
+        if response.data and response.data[0].url:
+            return response.data[0].url
+        if response.data and response.data[0].b64_json:
+            return f"data:image/png;base64,{response.data[0].b64_json}"
+        raise RuntimeError("OpenAI image generation returned empty result")
+
     async def generate_image(self, input_data: Input, credentials: APIKeyCredentials):
         try:
+            # Route to OpenAI for GPT-image models
+            if input_data.model.value.startswith("gpt-image"):
+                return await self._generate_with_openai(input_data, credentials)
+
             # Handle style-based prompt modification for models without native style support
             modified_prompt = input_data.prompt
             if input_data.model not in [ImageGenModel.RECRAFT]:

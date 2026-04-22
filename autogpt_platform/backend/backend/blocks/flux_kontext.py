@@ -1,6 +1,7 @@
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
+import openai
 from pydantic import SecretStr
 from replicate.client import Client as ReplicateClient
 from replicate.helpers import FileOutput
@@ -43,6 +44,10 @@ class ImageEditorModel(str, Enum):
     FLUX_KONTEXT_MAX = "Flux Kontext Max"
     NANO_BANANA_PRO = "Nano Banana Pro"
     NANO_BANANA_2 = "Nano Banana 2"
+    GPT_IMAGE_1 = "gpt-image-1"
+    GPT_IMAGE_1_5 = "gpt-image-1-5"
+    GPT_IMAGE_2 = "gpt-image-2"
+    GPT_IMAGE_1_MINI = "gpt-image-1-mini"
 
     @property
     def api_name(self) -> str:
@@ -76,12 +81,30 @@ class AspectRatio(str, Enum):
     ASPECT_1_2 = "1:2"
 
 
+ASPECT_TO_OPENAI_SIZE = {
+    AspectRatio.ASPECT_1_1: "1024x1024",
+    AspectRatio.ASPECT_16_9: "1536x1024",
+    AspectRatio.ASPECT_9_16: "1024x1536",
+    AspectRatio.ASPECT_4_3: "1536x1024",
+    AspectRatio.ASPECT_3_4: "1024x1536",
+    AspectRatio.ASPECT_3_2: "1536x1024",
+    AspectRatio.ASPECT_2_3: "1024x1536",
+    AspectRatio.ASPECT_4_5: "1024x1536",
+    AspectRatio.ASPECT_5_4: "1536x1024",
+    AspectRatio.ASPECT_21_9: "1536x1024",
+    AspectRatio.ASPECT_9_21: "1024x1536",
+    AspectRatio.ASPECT_2_1: "1536x1024",
+    AspectRatio.ASPECT_1_2: "1024x1536",
+}
+
+
 class AIImageEditorBlock(Block):
     class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
-            Literal[ProviderName.REPLICATE], Literal["api_key"]
+            Union[Literal[ProviderName.REPLICATE], Literal[ProviderName.OPENAI]],
+            Literal["api_key"],
         ] = CredentialsField(
-            description="Replicate API key with permissions for Flux Kontext and Nano Banana models",
+            description="Replicate or OpenAI API key with permissions for image editing models",
         )
         prompt: str = SchemaField(
             description="Text instruction describing the desired edit",
@@ -99,7 +122,7 @@ class AIImageEditorBlock(Block):
             advanced=False,
         )
         seed: Optional[int] = SchemaField(
-            description="Random seed. Set for reproducible generation (Flux Kontext only; ignored by Nano Banana models)",
+            description="Random seed. Set for reproducible generation (Flux Kontext only; ignored by other models)",
             default=None,
             title="Seed",
             advanced=True,
@@ -119,8 +142,8 @@ class AIImageEditorBlock(Block):
         super().__init__(
             id="3fd9c73d-4370-4925-a1ff-1b86b99fabfa",
             description=(
-                "Edit images using Flux Kontext or Google Nano Banana models. Provide a prompt "
-                "and optional reference image to generate a modified image."
+                "Edit images using Flux Kontext, Google Nano Banana, or OpenAI GPT-image models. "
+                "Provide a prompt and optional reference image to generate a modified image."
             ),
             categories={BlockCategory.AI, BlockCategory.MULTIMEDIA},
             input_schema=AIImageEditorBlock.Input,
@@ -140,7 +163,7 @@ class AIImageEditorBlock(Block):
             test_mock={
                 # Use data URI to avoid HTTP requests during tests
                 "run_model": lambda *args, **kwargs: (
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAhKmMIQAAAABJRU5ErkJggg=="
                 ),
             },
             test_credentials=TEST_CREDENTIALS,
@@ -180,6 +203,39 @@ class AIImageEditorBlock(Block):
         )
         yield "output_image", stored_url
 
+    async def _edit_with_openai(
+        self,
+        api_key: SecretStr,
+        model: ImageEditorModel,
+        prompt: str,
+        input_image_b64: Optional[str],
+        aspect_ratio: str,
+    ) -> MediaFileType:
+        if not input_image_b64:
+            raise ValueError("OpenAI image editing requires an input image.")
+
+        client = openai.AsyncOpenAI(api_key=api_key.get_secret_value())
+        from io import BytesIO
+        import base64
+
+        header, encoded = str(input_image_b64).split(",", 1)
+        image_bytes = BytesIO(base64.b64decode(encoded))
+
+        size = ASPECT_TO_OPENAI_SIZE.get(aspect_ratio, "1024x1024")
+
+        response = await client.images.edit(
+            model=model.value,
+            image=image_bytes,
+            prompt=prompt,
+            n=1,
+            size=size,  # type: ignore[arg-type]
+        )
+        if response.data and response.data[0].url:
+            return MediaFileType(response.data[0].url)
+        if response.data and response.data[0].b64_json:
+            return MediaFileType(f"data:image/png;base64,{response.data[0].b64_json}")
+        raise ValueError("OpenAI image edit returned empty result")
+
     async def run_model(
         self,
         api_key: SecretStr,
@@ -191,6 +247,12 @@ class AIImageEditorBlock(Block):
         user_id: str,
         graph_exec_id: str,
     ) -> MediaFileType:
+        # Route to OpenAI for GPT-image models
+        if model.value.startswith("gpt-image"):
+            return await self._edit_with_openai(
+                api_key, model, prompt, input_image_b64, aspect_ratio
+            )
+
         client = ReplicateClient(api_token=api_key.get_secret_value())
         model_name = model.api_name
 
