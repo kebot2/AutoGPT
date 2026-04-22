@@ -383,7 +383,7 @@ def apply_tool_permissions(
         ``ClaudeAgentOptions.disallowed_tools``.
     """
     from backend.copilot.sdk.tool_adapter import (
-        _BASELINE_ONLY_MCP_TOOLS,
+        BASELINE_ONLY_MCP_TOOLS,
         _READ_TOOL_NAME,
         MCP_TOOL_PREFIX,
         get_copilot_tool_names,
@@ -425,7 +425,7 @@ def apply_tool_permissions(
     # keeping only those present in the original base_allowed list.
     def to_sdk_names(short: str) -> list[str]:
         names: list[str] = []
-        if short in _BASELINE_ONLY_MCP_TOOLS:
+        if short in BASELINE_ONLY_MCP_TOOLS:
             # Baseline ships MCP versions of these (Task/TodoWrite) for
             # model-flexibility parity, but SDK mode uses the CLI-native
             # originals. Permissions target the CLI built-in here so

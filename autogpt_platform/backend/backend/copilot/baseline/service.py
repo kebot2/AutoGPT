@@ -952,7 +952,18 @@ async def _run_task_subagent(
         {"role": "system", "content": _TASK_INNER_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
-    inner_tools = [t for t in tools if (t.get("function") or {}).get("name") != "Task"]
+    inner_tools: list[Any] = [
+        t for t in tools if (t.get("function") or {}).get("name") != "Task"
+    ]
+    # The parent pre-marks ``cache_control`` on the last tool schema once per
+    # session for Anthropic routes (see ``_mark_tools_with_cache_control``
+    # in ``stream_chat_completion_baseline``).  Filtering ``Task`` off the
+    # end can drop that marker, which would make every sub-agent LLM round
+    # re-send the ~8 KB tool schema uncached.  Re-apply on Anthropic routes
+    # so each inner round hits the cache from round 2 onward; no-op for
+    # OpenAI / Grok / other providers where ``cache_control`` is unknown.
+    if _is_anthropic_model(parent_state.model) and inner_tools:
+        inner_tools = cast(list[Any], _mark_tools_with_cache_control(inner_tools))
 
     tool_names_seen: list[str] = []
     iterations = 0
@@ -963,10 +974,20 @@ async def _run_task_subagent(
         _baseline_tool_executor,
         state=inner_state,
         user_id=user_id,
+        # NOTE: the sub-agent deliberately shares the parent's ``session``
+        # object — ``_baseline_tool_executor`` calls
+        # ``session.announce_inflight_tool_call(tool_name)`` which feeds
+        # in-turn guards like ``require_guide_read``.  Cross-contaminating
+        # the announce-set is the intended behaviour: if the parent calls
+        # ``get_agent_building_guide`` and the sub-agent then calls
+        # ``create_agent``, the guard should recognise the prereq was met.
+        # Message history and streaming events ARE isolated (fresh
+        # ``_BaselineStreamState`` above) — only the announce-set leaks.
         session=session,
     )
     inner_llm = partial(_baseline_llm_caller, state=inner_state)
 
+    task_exc: BaseException | None = None
     token = _TASK_DEPTH_VAR.set(depth + 1)
     try:
         async for loop_result in tool_call_loop(
@@ -991,19 +1012,36 @@ async def _run_task_subagent(
             finished_naturally = loop_result.finished_naturally
             if loop_result.finished_naturally:
                 final_response_text = loop_result.response_text or ""
-    except Exception as exc:  # noqa: BLE001 — surface any inner failure
-        logger.error("[Baseline] Task sub-agent failed: %s", exc, exc_info=True)
+    except BaseException as exc:  # noqa: BLE001
+        # BaseException (not Exception) so CancelledError / KeyboardInterrupt
+        # / SystemExit still land in the ``finally`` and reset the
+        # ContextVar — otherwise a cancelled Task would leak an elevated
+        # depth into whatever task reuses this asyncio context next.
+        # Swallow only ``Exception`` below; re-raise ``BaseException`` after
+        # the reset.
+        task_exc = exc
+    finally:
         _TASK_DEPTH_VAR.reset(token)
-        # Still roll up token usage so the user is charged for partial work.
-        _absorb_inner_usage(parent_state, inner_state)
+
+    # Usage rolls up regardless of outcome so partial work is still billed.
+    _absorb_inner_usage(parent_state, inner_state)
+
+    if task_exc is not None:
+        if not isinstance(task_exc, Exception):
+            # KeyboardInterrupt / SystemExit / CancelledError propagate
+            # after the depth counter was safely restored above.
+            raise task_exc
+        logger.error(
+            "[Baseline] Task sub-agent failed: %s", task_exc, exc_info=task_exc
+        )
         body = TaskResponse(
-            message=f"Task failed: {exc}",
+            message=f"Task failed: {task_exc}",
             description=description,
             response="",
             iterations=iterations,
             tool_calls=tool_names_seen,
             status="error",
-            error=str(exc),
+            error=str(task_exc),
         )
         return StreamToolOutputAvailable(
             toolCallId=tool_call_id,
@@ -1011,10 +1049,6 @@ async def _run_task_subagent(
             output=body.model_dump_json(exclude_none=True),
             success=False,
         )
-    else:
-        _TASK_DEPTH_VAR.reset(token)
-
-    _absorb_inner_usage(parent_state, inner_state)
 
     status: Literal["completed", "max_iterations"] = (
         "completed" if finished_naturally else "max_iterations"

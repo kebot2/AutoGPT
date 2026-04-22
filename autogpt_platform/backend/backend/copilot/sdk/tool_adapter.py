@@ -856,15 +856,19 @@ DANGEROUS_PATTERNS = [
 # Platform-tool names whose MCP wrappers must NOT be exposed to SDK mode.
 # Baseline implements MCP versions of these for model-flexibility parity;
 # SDK mode keeps using the CLI-native built-ins listed in
-# ``_SDK_BUILTIN_ALWAYS`` so there is no double exposure.
-_BASELINE_ONLY_MCP_TOOLS: frozenset[str] = frozenset({"Task", "TodoWrite"})
+# ``_SDK_BUILTIN_ALWAYS`` so there is no double exposure. This is a
+# deliberate cross-module constant — ``permissions.apply_tool_permissions``
+# consults it to map short tool names back to the CLI built-in form in SDK
+# mode.  Public (no leading underscore) so a future refactor renaming it is
+# visible to both call sites, not silently broken.
+BASELINE_ONLY_MCP_TOOLS: frozenset[str] = frozenset({"Task", "TodoWrite"})
 
 
 def _registry_mcp_tools() -> list[str]:
     return [
         f"{MCP_TOOL_PREFIX}{name}"
         for name in TOOL_REGISTRY.keys()
-        if name not in _BASELINE_ONLY_MCP_TOOLS
+        if name not in BASELINE_ONLY_MCP_TOOLS
     ]
 
 

@@ -2188,6 +2188,183 @@ class TestBaselineTaskSubagent:
         assert parent_state.cost_usd == pytest.approx(0.012)
 
     @pytest.mark.asyncio
+    async def test_depth_var_reset_on_exception(self):
+        """ContextVar must be reset via ``finally`` even when the inner
+        loop raises.  A leaked depth would either refuse a later sibling
+        Task at the cap or run one level shallower than intended."""
+        parent_state = _BaselineStreamState(model="anthropic/claude-sonnet-4-6")
+        session = _task_session()
+        depth_before = _TASK_DEPTH_VAR.get()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=RuntimeError("boom")
+        )
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            result = await _run_task_subagent(
+                tool_call_id="tc-exc",
+                tool_args={"description": "kaboom", "prompt": "run"},
+                tools=[],
+                parent_state=parent_state,
+                user_id="u",
+                session=session,
+            )
+
+        assert _TASK_DEPTH_VAR.get() == depth_before
+        import json
+
+        payload = json.loads(result.output)
+        assert payload["status"] == "error"
+        assert "boom" in payload["error"]
+
+    @pytest.mark.asyncio
+    async def test_depth_var_reset_on_cancellation(self):
+        """CancelledError propagates out of ``_run_task_subagent`` but the
+        depth counter must be restored first so the cancelled asyncio task
+        doesn't poison the next Task call on the same context."""
+        import asyncio
+
+        parent_state = _BaselineStreamState(model="anthropic/claude-sonnet-4-6")
+        session = _task_session()
+        depth_before = _TASK_DEPTH_VAR.get()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=asyncio.CancelledError()
+        )
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await _run_task_subagent(
+                    tool_call_id="tc-cancel",
+                    tool_args={"description": "cancel", "prompt": "run"},
+                    tools=[],
+                    parent_state=parent_state,
+                    user_id="u",
+                    session=session,
+                )
+
+        assert _TASK_DEPTH_VAR.get() == depth_before
+
+    @pytest.mark.asyncio
+    async def test_inner_tools_cache_marked_on_anthropic(self):
+        """After stripping ``Task`` the inner tool list still needs a
+        ``cache_control`` marker on its final entry so long sub-agent
+        loops don't re-send the tool schema uncached on Anthropic
+        routes (~8 KB × iterations of wasted tokens otherwise)."""
+        parent_state = _BaselineStreamState(model="anthropic/claude-sonnet-4-6")
+        session = _task_session()
+
+        captured_tools: list = []
+
+        async def fake_create(**kwargs):
+            captured_tools.append(kwargs.get("tools"))
+            return _final_text_chunk("ok")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=fake_create)
+
+        sample_tools: list[ChatCompletionToolParam] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "Task",
+                    "description": "recurse",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "find_block",
+                    "description": "search",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_block",
+                    "description": "execute",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ]
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            await _run_task_subagent(
+                tool_call_id="tc-cache",
+                tool_args={"description": "short", "prompt": "do it"},
+                tools=sample_tools,
+                parent_state=parent_state,
+                user_id="u",
+                session=session,
+            )
+
+        assert captured_tools
+        inner = captured_tools[0] or []
+        assert inner, "inner loop must receive at least one tool"
+        assert "cache_control" in inner[-1]
+        assert inner[-1]["cache_control"]["type"] == "ephemeral"
+        names = [(t.get("function") or {}).get("name") for t in inner]
+        assert "Task" not in names
+
+    @pytest.mark.asyncio
+    async def test_inner_tools_unmarked_on_non_anthropic(self):
+        """Non-Anthropic providers reject ``cache_control``; the marker
+        must NOT be applied when the model isn't Anthropic."""
+        parent_state = _BaselineStreamState(model="openai/gpt-4o")
+        session = _task_session()
+
+        captured_tools: list = []
+
+        async def fake_create(**kwargs):
+            captured_tools.append(kwargs.get("tools"))
+            return _final_text_chunk("ok")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=fake_create)
+
+        sample_tools: list[ChatCompletionToolParam] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "find_block",
+                    "description": "search",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            await _run_task_subagent(
+                tool_call_id="tc-openai",
+                tool_args={"description": "short", "prompt": "do it"},
+                tools=sample_tools,
+                parent_state=parent_state,
+                user_id="u",
+                session=session,
+            )
+
+        assert captured_tools
+        inner = captured_tools[0] or []
+        assert inner
+        assert "cache_control" not in inner[-1]
+
+    @pytest.mark.asyncio
     async def test_task_not_in_inner_tools(self):
         """The inner tool list must strip ``Task`` so a sub-agent can't
         re-enter this path. Depth cap is belt-and-braces; the strip is the
