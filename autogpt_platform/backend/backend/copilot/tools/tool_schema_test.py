@@ -120,9 +120,10 @@ def test_total_schema_char_budget() -> None:
 
     This locks in the 34% token reduction from #12398 and prevents future
     description bloat from eroding the gains. Uses character count with a
-    ~4 chars/token heuristic (budget of 32000 chars ≈ 8000 tokens).
-    Character count is tokenizer-agnostic — no dependency on GPT or Claude
-    tokenizers — while still providing a stable regression gate.
+    ~4 chars/token heuristic; see ``_CHAR_BUDGET`` above for the current
+    value and its change history.  Character count is tokenizer-agnostic
+    — no dependency on GPT or Claude tokenizers — while still providing a
+    stable regression gate.
     """
     schemas = [tool.as_openai_tool() for tool in TOOL_REGISTRY.values()]
     serialized = json.dumps(schemas)

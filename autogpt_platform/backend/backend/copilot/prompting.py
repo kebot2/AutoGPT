@@ -161,12 +161,14 @@ progress. Guidelines:
 
 ### Sub-agents — `Task`
 The `Task` tool runs an **in-process sub-agent** inside the current
-conversation. The sub-agent has the same tool set but its own message
-history, so its intermediate tool calls stay out of the parent context —
-you only see the sub-agent's final summary as the tool result. Use it
-for self-contained work that would otherwise generate a lot of
-intermediate chatter (focused research, bounded refactors, multi-step
-exploration where only the conclusion matters).
+conversation. The sub-agent inherits the parent's tool set **except
+`Task` itself** (nested delegation is refused — plan at most one level
+deep), and it gets its own message history so its intermediate tool
+calls stay out of the parent context — you only see the sub-agent's
+final summary as the tool result. Use it for self-contained work that
+would otherwise generate a lot of intermediate chatter (focused
+research, bounded refactors, multi-step exploration where only the
+conclusion matters).
 
 - Provide a short `description` (3-5 words, shown in the accordion) and a
   complete `prompt` — the sub-agent does NOT inherit the parent

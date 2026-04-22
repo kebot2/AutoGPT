@@ -987,50 +987,47 @@ async def _run_task_subagent(
     )
     inner_llm = partial(_baseline_llm_caller, state=inner_state)
 
-    task_exc: BaseException | None = None
+    task_exc: Exception | None = None
     token = _TASK_DEPTH_VAR.set(depth + 1)
     try:
-        async for loop_result in tool_call_loop(
-            messages=inner_messages,
-            tools=inner_tools,
-            llm_call=inner_llm,
-            execute_tool=inner_executor,
-            update_conversation=_inner_task_conversation_updater,
-            max_iterations=_MAX_TASK_ITERATIONS,
-            last_iteration_message=(
-                "This is the final iteration — produce your summary now."
-            ),
-        ):
-            # Discard inner streaming events so only the Task envelope and
-            # its final summary reach the parent client. Token accounting
-            # still happens via ``inner_state`` and rolls up after the
-            # loop exits.
-            inner_state.pending_events.clear()
-            for tc in loop_result.last_tool_calls:
-                tool_names_seen.append(tc.name)
-            iterations = loop_result.iterations
-            finished_naturally = loop_result.finished_naturally
-            if loop_result.finished_naturally:
-                final_response_text = loop_result.response_text or ""
-    except BaseException as exc:  # noqa: BLE001
-        # BaseException (not Exception) so CancelledError / KeyboardInterrupt
-        # / SystemExit still land in the ``finally`` and reset the
-        # ContextVar — otherwise a cancelled Task would leak an elevated
-        # depth into whatever task reuses this asyncio context next.
-        # Swallow only ``Exception`` below; re-raise ``BaseException`` after
-        # the reset.
-        task_exc = exc
+        try:
+            async for loop_result in tool_call_loop(
+                messages=inner_messages,
+                tools=inner_tools,
+                llm_call=inner_llm,
+                execute_tool=inner_executor,
+                update_conversation=_inner_task_conversation_updater,
+                max_iterations=_MAX_TASK_ITERATIONS,
+                last_iteration_message=(
+                    "This is the final iteration — produce your summary now."
+                ),
+            ):
+                # Discard inner streaming events so only the Task envelope
+                # and its final summary reach the parent client. Token
+                # accounting still happens via ``inner_state`` and rolls up
+                # after the loop exits.
+                inner_state.pending_events.clear()
+                for tc in loop_result.last_tool_calls:
+                    tool_names_seen.append(tc.name)
+                iterations = loop_result.iterations
+                finished_naturally = loop_result.finished_naturally
+                if loop_result.finished_naturally:
+                    final_response_text = loop_result.response_text or ""
+        except Exception as exc:
+            task_exc = exc
+        # ``CancelledError`` / ``KeyboardInterrupt`` / ``SystemExit``
+        # derive from ``BaseException`` and are intentionally NOT caught
+        # here — they propagate through the outer ``finally`` below, which
+        # still resets the depth counter and rolls up usage before the
+        # exception reaches the caller.  Letting them bubble naturally
+        # avoids the ``except BaseException`` suppressor pattern.
     finally:
         _TASK_DEPTH_VAR.reset(token)
-
-    # Usage rolls up regardless of outcome so partial work is still billed.
-    _absorb_inner_usage(parent_state, inner_state)
+        # Usage rolls up on every path (success, caught Exception, or
+        # propagating BaseException) so partial work is still billed.
+        _absorb_inner_usage(parent_state, inner_state)
 
     if task_exc is not None:
-        if not isinstance(task_exc, Exception):
-            # KeyboardInterrupt / SystemExit / CancelledError propagate
-            # after the depth counter was safely restored above.
-            raise task_exc
         logger.error(
             "[Baseline] Task sub-agent failed: %s", task_exc, exc_info=task_exc
         )
