@@ -383,8 +383,8 @@ def apply_tool_permissions(
         ``ClaudeAgentOptions.disallowed_tools``.
     """
     from backend.copilot.sdk.tool_adapter import (
-        BASELINE_ONLY_MCP_TOOLS,
         _READ_TOOL_NAME,
+        BASELINE_ONLY_MCP_TOOLS,
         MCP_TOOL_PREFIX,
         get_copilot_tool_names,
         get_sdk_disallowed_tools,
