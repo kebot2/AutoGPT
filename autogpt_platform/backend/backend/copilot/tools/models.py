@@ -88,6 +88,10 @@ class ResponseType(str, Enum):
     MEMORY_FORGET_CANDIDATES = "memory_forget_candidates"
     MEMORY_FORGET_CONFIRM = "memory_forget_confirm"
 
+    # Planning / delegation
+    TODO_WRITE = "todo_write"
+    TASK = "task"
+
 
 # Base response model
 class ToolResponseBase(BaseModel):
@@ -839,3 +843,60 @@ class MemoryForgetConfirmResponse(ToolResponseBase):
     type: ResponseType = ResponseType.MEMORY_FORGET_CONFIRM
     deleted_uuids: list[str] = Field(default_factory=list)
     failed_uuids: list[str] = Field(default_factory=list)
+
+
+# --- Planning / delegation ---
+
+
+class TodoItem(BaseModel):
+    """One entry in a ``TodoWrite`` checklist.
+
+    Mirrors the schema used by Claude Code's built-in ``TodoWrite`` tool so
+    the frontend's ``GenericTool`` accordion renders baseline-emitted todos
+    identically to SDK-emitted ones.
+    """
+
+    content: str = Field(description="Imperative description of the task.")
+    activeForm: str = Field(
+        description="Present-continuous form shown while the task is running.",
+    )
+    status: Literal["pending", "in_progress", "completed"] = Field(
+        default="pending",
+    )
+
+
+class TodoWriteResponse(ToolResponseBase):
+    """Ack returned by ``TodoWrite``.
+
+    The tool is effectively stateless — the authoritative task list lives in
+    the assistant's latest tool-call arguments, which are replayed from the
+    transcript on each turn. The tool output only needs to confirm that the
+    update was accepted so the model can proceed.
+    """
+
+    type: ResponseType = ResponseType.TODO_WRITE
+    todos: list[TodoItem] = Field(default_factory=list)
+
+
+class TaskResponse(ToolResponseBase):
+    """Result of a delegated ``Task`` in-process sub-agent run.
+
+    The sub-agent runs a fresh tool-call loop with an isolated message
+    history, then returns only its final assistant text. Intermediate tool
+    calls and thinking stay inside the sub-agent's loop so the parent
+    context is not polluted.
+    """
+
+    type: ResponseType = ResponseType.TASK
+    description: str = ""
+    response: str = Field(
+        default="",
+        description="Final assistant text the sub-agent produced.",
+    )
+    iterations: int = 0
+    tool_calls: list[str] = Field(
+        default_factory=list,
+        description="Names of tools the sub-agent invoked (for observability).",
+    )
+    status: Literal["completed", "max_iterations", "error"] = "completed"
+    error: str | None = None

@@ -25,7 +25,12 @@ from backend.copilot.tools import TOOL_REGISTRY
 # (server-side Anthropic beta). Description already trimmed to the
 # minimum viable copy; the bump absorbs the schema skeleton cost
 # (~300 chars / ~75 tokens) for a new LLM-facing primitive.
-_CHAR_BUDGET = 32_800
+# Bumped 32800 -> 34200 when baseline gained MCP `TodoWrite` and `Task`
+# platform tools for parity with the Claude Code SDK's built-ins
+# (PR: feat/copilot-baseline-todowrite-task). The two new schemas add
+# ~1200 chars / ~300 tokens combined; descriptions are already trimmed
+# to the minimum viable copy.
+_CHAR_BUDGET = 34_200
 
 
 @pytest.fixture(scope="module")

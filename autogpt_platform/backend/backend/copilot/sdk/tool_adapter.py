@@ -853,9 +853,24 @@ DANGEROUS_PATTERNS = [
     r"subprocess",
 ]
 
+# Platform-tool names whose MCP wrappers must NOT be exposed to SDK mode.
+# Baseline implements MCP versions of these for model-flexibility parity;
+# SDK mode keeps using the CLI-native built-ins listed in
+# ``_SDK_BUILTIN_ALWAYS`` so there is no double exposure.
+_BASELINE_ONLY_MCP_TOOLS: frozenset[str] = frozenset({"Task", "TodoWrite"})
+
+
+def _registry_mcp_tools() -> list[str]:
+    return [
+        f"{MCP_TOOL_PREFIX}{name}"
+        for name in TOOL_REGISTRY.keys()
+        if name not in _BASELINE_ONLY_MCP_TOOLS
+    ]
+
+
 # Static tool name list for the non-E2B case (backward compatibility).
 COPILOT_TOOL_NAMES = [
-    *[f"{MCP_TOOL_PREFIX}{name}" for name in TOOL_REGISTRY.keys()],
+    *_registry_mcp_tools(),
     f"{MCP_TOOL_PREFIX}{WRITE_TOOL_NAME}",
     f"{MCP_TOOL_PREFIX}{READ_TOOL_NAME}",
     f"{MCP_TOOL_PREFIX}{EDIT_TOOL_NAME}",
@@ -877,7 +892,7 @@ def get_copilot_tool_names(*, use_e2b: bool = False) -> list[str]:
     # from E2B_FILE_TOOLS instead), so don't include them here.
     # _READ_TOOL_NAME is still needed for SDK tool-result reads.
     return [
-        *[f"{MCP_TOOL_PREFIX}{name}" for name in TOOL_REGISTRY.keys()],
+        *_registry_mcp_tools(),
         f"{MCP_TOOL_PREFIX}{_READ_TOOL_NAME}",
         *[f"{MCP_TOOL_PREFIX}{name}" for name in E2B_FILE_TOOL_NAMES],
         *_SDK_BUILTIN_ALWAYS,

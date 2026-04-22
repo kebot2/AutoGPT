@@ -124,9 +124,14 @@ ToolName = Literal[
 # Frozen set of all valid tool names — derived from the Literal.
 ALL_TOOL_NAMES: frozenset[str] = frozenset(get_args(ToolName))
 
-# SDK built-in tool names — uppercase-initial names are SDK built-ins.
+# SDK built-in tool names — tools provided by the Claude Code CLI that our
+# code does not implement directly.  ``Task`` and ``TodoWrite`` are
+# DELIBERATELY excluded: baseline mode ships MCP-wrapped platform versions
+# of both (see ``tools/task.py`` / ``tools/todo_write.py``), while SDK mode
+# still uses the CLI-native originals via ``_SDK_BUILTIN_ALWAYS`` in
+# ``sdk/tool_adapter.py`` — the MCP copies are filtered out there.
 SDK_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
-    n for n in ALL_TOOL_NAMES if n[0].isupper()
+    {"Agent", "Edit", "Glob", "Grep", "Read", "WebSearch", "Write"}
 )
 
 # Platform tool names — everything that isn't an SDK built-in.
@@ -378,6 +383,7 @@ def apply_tool_permissions(
         ``ClaudeAgentOptions.disallowed_tools``.
     """
     from backend.copilot.sdk.tool_adapter import (
+        _BASELINE_ONLY_MCP_TOOLS,
         _READ_TOOL_NAME,
         MCP_TOOL_PREFIX,
         get_copilot_tool_names,
@@ -419,7 +425,14 @@ def apply_tool_permissions(
     # keeping only those present in the original base_allowed list.
     def to_sdk_names(short: str) -> list[str]:
         names: list[str] = []
-        if short in TOOL_REGISTRY:
+        if short in _BASELINE_ONLY_MCP_TOOLS:
+            # Baseline ships MCP versions of these (Task/TodoWrite) for
+            # model-flexibility parity, but SDK mode uses the CLI-native
+            # originals. Permissions target the CLI built-in here so
+            # ``base_allowed`` (which excludes the MCP wrappers) still
+            # matches.
+            names.append(short)
+        elif short in TOOL_REGISTRY:
             names.append(f"{MCP_TOOL_PREFIX}{short}")
         elif short in _SDK_TO_MCP:
             # Map SDK built-in file tool to its MCP equivalent.

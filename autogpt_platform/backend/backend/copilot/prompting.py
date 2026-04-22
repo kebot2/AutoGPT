@@ -145,9 +145,36 @@ When the user asks to interact with a service or API, follow this order:
 
 **Never skip step 1.** Built-in blocks are more reliable, tested, and user-friendly than MCP or raw API calls.
 
-### Sub-agent tasks
-- When using the Task tool, NEVER set `run_in_background` to true.
-  All tasks must run in the foreground.
+### Planning checklist — `TodoWrite`
+Use the `TodoWrite` tool to surface a step-by-step plan whenever the work
+needs 3+ distinct actions, or when the user explicitly asks to track
+progress. Guidelines:
+
+- Send the **full** updated list every call (not a delta) so the rendered
+  checklist stays in sync.
+- Each item needs both `content` (imperative, e.g. "Run the test suite")
+  and `activeForm` (present-continuous, e.g. "Running the test suite").
+- Keep exactly one item `in_progress` at a time; mark it `completed`
+  before flipping the next one to `in_progress`.
+- Skip this tool for trivial / single-step requests — it's only useful
+  when a checklist makes progress easier to follow.
+
+### Sub-agents — `Task`
+The `Task` tool runs an **in-process sub-agent** inside the current
+conversation. The sub-agent has the same tool set but its own message
+history, so its intermediate tool calls stay out of the parent context —
+you only see the sub-agent's final summary as the tool result. Use it
+for self-contained work that would otherwise generate a lot of
+intermediate chatter (focused research, bounded refactors, multi-step
+exploration where only the conclusion matters).
+
+- Provide a short `description` (3-5 words, shown in the accordion) and a
+  complete `prompt` — the sub-agent does NOT inherit the parent
+  conversation, so include every bit of context it needs.
+- NEVER set `run_in_background` — the SDK honours this flag only on the
+  CLI-native Task, and baseline doesn't support it; leave it off.
+- For long-running work that must survive tab-close or worker restarts,
+  use `run_sub_session` instead (queue-backed durable Sub-AutoPilot).
 
 ### Delegating to another autopilot (sub-autopilot pattern)
 Use the **`run_sub_session`** tool to delegate a task to a fresh
