@@ -309,20 +309,9 @@ class ChatConfig(BaseSettings):
     )
     sdk_include_partial_messages: bool = Field(
         default=True,
-        description="Enable per-token streaming on the SDK path by setting "
-        "``include_partial_messages=True`` on ``ClaudeAgentOptions``.  The "
-        "CLI then emits raw Anthropic ``content_block_delta`` events as "
-        "``StreamEvent`` messages ahead of each summary "
-        "``AssistantMessage``, so long answers and extended-thinking "
-        "reasoning land on the wire token-by-token instead of popping in "
-        "as a lump at ``content_block_stop``.  Matches the perceptual "
-        "progress the baseline path has shipped since #12873.  On by "
-        "default after internal soak — the adapter's diff-based reconcile "
-        "(see ``docs/sdk-per-token-streaming-followup.md``) has been "
-        "stable; partial/summary events emit consistently without "
-        "double-writing.  Kill-switch "
-        "``CHAT_SDK_INCLUDE_PARTIAL_MESSAGES=false`` falls back to "
-        "summary-only emission if an adapter regression surfaces.",
+        description="Stream SDK responses token-by-token instead of in "
+        "one lump at the end.  Set to False if the SDK path starts "
+        "double-writing text or dropping the tail of long messages.",
     )
     sdk_reconcile_openrouter_cost: bool = Field(
         default=True,
