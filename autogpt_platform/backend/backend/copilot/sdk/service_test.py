@@ -18,6 +18,7 @@ from .service import (
     _override_cost_for_non_anthropic,
     _prepare_file_attachments,
     _resolve_sdk_model,
+    _resolve_sdk_model_for_request,
     _safe_close_sdk_client,
 )
 
@@ -515,6 +516,66 @@ class TestResolveSdkModel:
         )
         monkeypatch.setattr("backend.copilot.sdk.service.config", cfg)
         assert _resolve_sdk_model() == "claude-opus-4-6"
+
+
+class TestResolveSdkModelForRequestLdFallback:
+    """``_resolve_sdk_model_for_request`` must fail soft when the LD value
+    can't be normalised for the active routing mode — flagged as MAJOR by
+    CodeRabbit + HIGH by Sentry when it was a hard ValueError."""
+
+    @pytest.mark.asyncio
+    async def test_direct_anthropic_mode_rejects_kimi_ld_value_and_falls_back(
+        self, monkeypatch, _clean_config_env
+    ):
+        """LD serves ``moonshotai/kimi-k2.6`` but we're on direct-Anthropic
+        (no OpenRouter key).  ``_normalize_model_name`` raises; the
+        resolver must log + return the config-default path instead of
+        500-ing the turn."""
+        cfg = cfg_mod.ChatConfig(
+            thinking_standard_model="anthropic/claude-sonnet-4-6",
+            claude_agent_model=None,
+            use_openrouter=False,
+            api_key=None,
+            base_url=None,
+            use_claude_code_subscription=False,
+        )
+        monkeypatch.setattr("backend.copilot.sdk.service.config", cfg)
+
+        with patch(
+            "backend.copilot.sdk.service._resolve_thinking_model_for_user",
+            new=AsyncMock(return_value="moonshotai/kimi-k2.6"),
+        ):
+            resolved = await _resolve_sdk_model_for_request(
+                model="standard", session_id="sess-abc", user_id="user-1"
+            )
+
+        # Fallback == _resolve_sdk_model() on this config = "claude-sonnet-4-6"
+        assert resolved == "claude-sonnet-4-6"
+
+    @pytest.mark.asyncio
+    async def test_openrouter_mode_accepts_ld_kimi_value(
+        self, monkeypatch, _clean_config_env
+    ):
+        """On OpenRouter the Kimi slug is legitimate — no fallback,
+        value returned as-is."""
+        cfg = cfg_mod.ChatConfig(
+            thinking_standard_model="anthropic/claude-sonnet-4-6",
+            claude_agent_model=None,
+            use_openrouter=True,
+            api_key="or-key",
+            base_url="https://openrouter.ai/api/v1",
+            use_claude_code_subscription=False,
+        )
+        monkeypatch.setattr("backend.copilot.sdk.service.config", cfg)
+
+        with patch(
+            "backend.copilot.sdk.service._resolve_thinking_model_for_user",
+            new=AsyncMock(return_value="moonshotai/kimi-k2.6"),
+        ):
+            resolved = await _resolve_sdk_model_for_request(
+                model="standard", session_id="sess-abc", user_id="user-1"
+            )
+        assert resolved == "moonshotai/kimi-k2.6"
 
 
 # ---------------------------------------------------------------------------

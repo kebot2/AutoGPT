@@ -844,7 +844,26 @@ async def _resolve_sdk_model_for_request(
         return None
 
     resolved = await _resolve_thinking_model_for_user(tier_name, user_id)
-    sdk_model = _normalize_model_name(resolved)
+    try:
+        sdk_model = _normalize_model_name(resolved)
+    except ValueError as exc:
+        # The per-user LD value didn't pass ``_normalize_model_name``'s
+        # vendor check (most commonly: a ``moonshotai/kimi-*`` slug on a
+        # direct-Anthropic deployment that has no OpenRouter route).  Fail
+        # soft to the config-default path instead of 500-ing the request —
+        # the LD misconfig is visible in the log + Sentry, but the user
+        # still gets a working turn.
+        fallback = _resolve_sdk_model()
+        logger.warning(
+            "[SDK] [%s] LD model %r rejected for tier=%s (%s); falling "
+            "back to config default %s",
+            session_id[:12] if session_id else "?",
+            resolved,
+            tier_name,
+            exc,
+            fallback,
+        )
+        return fallback
     logger.info(
         "[SDK] [%s] Resolved model for tier=%s: %s",
         session_id[:12] if session_id else "?",
