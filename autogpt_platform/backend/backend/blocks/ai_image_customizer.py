@@ -32,7 +32,7 @@ class ImageCustomizerModel(str, Enum):
     NANO_BANANA_PRO = "google/nano-banana-pro"
     NANO_BANANA_2 = "google/nano-banana-2"
     GPT_IMAGE_1 = "gpt-image-1"
-    GPT_IMAGE_1_5 = "gpt-image-1-5"
+    GPT_IMAGE_1_5 = "gpt-image-1.5"
     GPT_IMAGE_2 = "gpt-image-2"
     GPT_IMAGE_1_MINI = "gpt-image-1-mini"
 

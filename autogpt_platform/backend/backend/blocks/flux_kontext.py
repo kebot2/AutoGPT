@@ -1,5 +1,7 @@
 from enum import Enum
-from typing import Literal, Optional, Union
+from io import BytesIO
+import base64
+from typing import Literal, Optional, cast
 
 import openai
 from pydantic import SecretStr
@@ -45,7 +47,7 @@ class ImageEditorModel(str, Enum):
     NANO_BANANA_PRO = "Nano Banana Pro"
     NANO_BANANA_2 = "Nano Banana 2"
     GPT_IMAGE_1 = "gpt-image-1"
-    GPT_IMAGE_1_5 = "gpt-image-1-5"
+    GPT_IMAGE_1_5 = "gpt-image-1.5"
     GPT_IMAGE_2 = "gpt-image-2"
     GPT_IMAGE_1_MINI = "gpt-image-1-mini"
 
@@ -82,6 +84,7 @@ class AspectRatio(str, Enum):
 
 
 ASPECT_TO_OPENAI_SIZE = {
+    AspectRatio.MATCH_INPUT_IMAGE: "auto",
     AspectRatio.ASPECT_1_1: "1024x1024",
     AspectRatio.ASPECT_16_9: "1536x1024",
     AspectRatio.ASPECT_9_16: "1024x1536",
@@ -101,7 +104,7 @@ ASPECT_TO_OPENAI_SIZE = {
 class AIImageEditorBlock(Block):
     class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
-            Union[Literal[ProviderName.REPLICATE], Literal[ProviderName.OPENAI]],
+            Literal[ProviderName.REPLICATE, ProviderName.OPENAI],
             Literal["api_key"],
         ] = CredentialsField(
             description="Replicate or OpenAI API key with permissions for image editing models",
@@ -157,13 +160,11 @@ class AIImageEditorBlock(Block):
                 "credentials": TEST_CREDENTIALS_INPUT,
             },
             test_output=[
-                # Output will be a workspace ref or data URI depending on context
                 ("output_image", lambda x: x.startswith(("workspace://", "data:"))),
             ],
             test_mock={
-                # Use data URI to avoid HTTP requests during tests
                 "run_model": lambda *args, **kwargs: (
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAhKmMIQAAAABJRU5ErkJggg=="
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
                 ),
             },
             test_credentials=TEST_CREDENTIALS,
@@ -185,7 +186,7 @@ class AIImageEditorBlock(Block):
                 await store_media_file(
                     file=input_data.input_image,
                     execution_context=execution_context,
-                    return_format="for_external_api",  # Get content for Replicate API
+                    return_format="for_external_api",
                 )
                 if input_data.input_image
                 else None
@@ -195,7 +196,6 @@ class AIImageEditorBlock(Block):
             user_id=execution_context.user_id or "",
             graph_exec_id=execution_context.graph_exec_id or "",
         )
-        # Store the generated image to the user's workspace for persistence
         stored_url = await store_media_file(
             file=result,
             execution_context=execution_context,
@@ -215,26 +215,28 @@ class AIImageEditorBlock(Block):
             raise ValueError("OpenAI image editing requires an input image.")
 
         client = openai.AsyncOpenAI(api_key=api_key.get_secret_value())
-        from io import BytesIO
-        import base64
 
-        header, encoded = str(input_image_b64).split(",", 1)
+        data_uri = str(input_image_b64)
+        if "," not in data_uri:
+            raise ValueError("Expected a data-URI for the input image.")
+        _, encoded = data_uri.split(",", 1)
         image_bytes = BytesIO(base64.b64decode(encoded))
 
         size = ASPECT_TO_OPENAI_SIZE.get(aspect_ratio, "1024x1024")
+        size_literal = cast(
+            Literal["1024x1024", "1536x1024", "1024x1536", "auto"], size
+        )
 
         response = await client.images.edit(
             model=model.value,
             image=image_bytes,
             prompt=prompt,
             n=1,
-            size=size,  # type: ignore[arg-type]
+            size=size_literal,
         )
-        if response.data and response.data[0].url:
-            return MediaFileType(response.data[0].url)
-        if response.data and response.data[0].b64_json:
-            return MediaFileType(f"data:image/png;base64,{response.data[0].b64_json}")
-        raise ValueError("OpenAI image edit returned empty result")
+        if not response.data or not response.data[0].b64_json:
+            raise ValueError("OpenAI image edit returned empty result")
+        return MediaFileType(f"data:image/png;base64,{response.data[0].b64_json}")
 
     async def run_model(
         self,
@@ -247,7 +249,6 @@ class AIImageEditorBlock(Block):
         user_id: str,
         graph_exec_id: str,
     ) -> MediaFileType:
-        # Route to OpenAI for GPT-image models
         if model.value.startswith("gpt-image"):
             return await self._edit_with_openai(
                 api_key, model, prompt, input_image_b64, aspect_ratio
@@ -267,7 +268,6 @@ class AIImageEditorBlock(Block):
                 "output_format": "jpg",
                 "safety_filter_level": "block_only_high",
             }
-            # NB API expects "image_input" as a list, unlike Flux's single "input_image"
             if input_image_b64:
                 input_params["image_input"] = [input_image_b64]
         else:
