@@ -45,6 +45,7 @@ from backend.copilot.model import (
     maybe_append_user_message,
     upsert_chat_session,
 )
+from backend.copilot.model_router import resolve_model
 from backend.copilot.pending_message_helpers import (
     combine_pending_with_current,
     drain_pending_safe,
@@ -327,8 +328,6 @@ async def _resolve_baseline_model(
     ``(fast, tier)`` cell is LD-overridable per user.  ``None`` tier
     maps to ``"standard"``.
     """
-    from backend.copilot.model_router import resolve_model
-
     tier_name = "advanced" if tier == "advanced" else "standard"
     return await resolve_model("fast", tier_name, user_id, config=config)
 

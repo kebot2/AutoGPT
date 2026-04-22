@@ -56,6 +56,7 @@ from ..constants import (
 from ..session_cleanup import prune_orphan_tool_calls
 from ..context import encode_cwd_for_cli, get_workspace_manager
 from ..graphiti.config import is_enabled_for_user
+from ..model_router import resolve_model
 from ..model import (
     ChatMessage,
     ChatSession,
@@ -726,8 +727,6 @@ async def _resolve_thinking_model_for_user(
     Consults ``copilot-thinking-{tier}-model`` and falls back to the
     ``ChatConfig`` default on missing user / missing flag.
     """
-    from backend.copilot.model_router import resolve_model
-
     return await resolve_model("thinking", tier, user_id, config=config)
 
 
