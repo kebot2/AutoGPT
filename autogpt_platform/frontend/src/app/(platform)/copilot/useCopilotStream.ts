@@ -18,6 +18,7 @@ import {
   resolveInProgressTools,
   getSendSuppressionReason,
   disconnectSessionStream,
+  shouldDebounceReconnect,
 } from "./helpers";
 import type { CopilotLlmModel, CopilotMode } from "./store";
 import { useHydrateOnStreamEnd } from "./useHydrateOnStreamEnd";
@@ -155,12 +156,12 @@ export function useCopilotStream({
     // quickly — e.g. a 502 on GET /stream that trips onError inside 500 ms
     // while the 1500 ms window is still open. Scheduling the retry for
     // the remaining window preserves both the storm cap and the retry.
-    const sinceLastResume = Date.now() - lastReconnectResumeAtRef.current;
-    if (
-      lastReconnectResumeAtRef.current > 0 &&
-      sinceLastResume < RECONNECT_DEBOUNCE_MS
-    ) {
-      const remainingDelay = RECONNECT_DEBOUNCE_MS - sinceLastResume;
+    const remainingDelay = shouldDebounceReconnect(
+      lastReconnectResumeAtRef.current,
+      Date.now(),
+      RECONNECT_DEBOUNCE_MS,
+    );
+    if (remainingDelay !== null) {
       isReconnectScheduledRef.current = true;
       setIsReconnectScheduled(true);
       reconnectTimerRef.current = setTimeout(() => {
