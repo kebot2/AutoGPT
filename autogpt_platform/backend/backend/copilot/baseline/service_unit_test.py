@@ -42,7 +42,10 @@ from backend.util.tool_call_loop import LLMLoopResponse, LLMToolCall, ToolCallRe
 class TestBaselineStreamState:
     def test_defaults(self):
         state = _BaselineStreamState()
-        assert state.pending_events == []
+        # ``pending_events`` is an asyncio.Queue now (live SSE channel).
+        # The durable inspection view is ``emitted_events``.
+        assert state.pending_events.empty()
+        assert state.emitted_events == []
         assert state.assistant_text == ""
         assert state.text_started is False
         assert state.turn_prompt_tokens == 0
@@ -1690,7 +1693,7 @@ class TestBaselineReasoningStreaming:
                 state=state,
             )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningDelta" in types
         assert "StreamReasoningEnd" in types
@@ -1705,14 +1708,14 @@ class TestBaselineReasoningStreaming:
         # a fresh id after the reasoning-end rotation.
         reasoning_ids = {
             e.id
-            for e in state.pending_events
+            for e in state.emitted_events
             if isinstance(
                 e, (StreamReasoningStart, StreamReasoningDelta, StreamReasoningEnd)
             )
         }
         text_ids = {
             e.id
-            for e in state.pending_events
+            for e in state.emitted_events
             if isinstance(e, (StreamTextStart, StreamTextDelta, StreamTextEnd))
         }
         assert len(reasoning_ids) == 1
@@ -1720,7 +1723,7 @@ class TestBaselineReasoningStreaming:
         assert reasoning_ids.isdisjoint(text_ids)
 
         combined = "".join(
-            e.delta for e in state.pending_events if isinstance(e, StreamReasoningDelta)
+            e.delta for e in state.emitted_events if isinstance(e, StreamReasoningDelta)
         )
         assert combined == "thinking... more"
 
@@ -1762,7 +1765,7 @@ class TestBaselineReasoningStreaming:
 
         # A reasoning-end must have been emitted — this is the tool_calls
         # branch's responsibility, not the stream-end cleanup.
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningEnd" in types
 
@@ -1805,7 +1808,7 @@ class TestBaselineReasoningStreaming:
                     state=state,
                 )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         # The reasoning block was opened, the exception fired, and the
         # finally block must have closed it before emitting the finish
         # step.
@@ -1938,7 +1941,7 @@ class TestBaselineReasoningStreaming:
                 state=state,
             )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningEnd" in types
         # No text was produced — no text events should be emitted.
@@ -2147,11 +2150,13 @@ class TestBaselineTaskSubagent:
             )
 
         # ``_run_task_subagent`` returns a ``StreamToolOutputAvailable`` but
-        # does NOT append to ``parent_state.pending_events`` itself — the
-        # outer ``_baseline_tool_executor`` handles that.  What we care
-        # about here is the negative invariant: the inner loop's deltas,
-        # step envelopes, and sub-tool events never leaked in.
-        assert parent_state.pending_events == []
+        # does NOT emit to ``parent_state`` itself — the outer
+        # ``_baseline_tool_executor`` handles that.  What we care about here
+        # is the negative invariant: the inner loop's deltas, step
+        # envelopes, and sub-tool events never leaked in.  Both the live
+        # queue AND the test-mirror list must be untouched.
+        assert parent_state.pending_events.empty()
+        assert parent_state.emitted_events == []
 
     @pytest.mark.asyncio
     async def test_usage_rolls_up_to_parent(self):

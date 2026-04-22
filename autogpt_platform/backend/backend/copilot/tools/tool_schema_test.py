@@ -25,12 +25,19 @@ from backend.copilot.tools import TOOL_REGISTRY
 # (server-side Anthropic beta). Description already trimmed to the
 # minimum viable copy; the bump absorbs the schema skeleton cost
 # (~300 chars / ~75 tokens) for a new LLM-facing primitive.
-# Bumped 32800 -> 34200 when baseline gained MCP `TodoWrite` and `Task`
+# Bumped 32800 -> 33200 on PR #12873 for the web_search Perplexity
+# Sonar refactor — adds a load-bearing `deep` boolean with explicit
+# "~100x more expensive" cost warning the model must see to avoid
+# accidentally triggering sonar-reasoning on ordinary lookups, plus
+# synthesised-answer wording in the top-level description so the LLM
+# reads the answer before reaching for `web_fetch`. Both are
+# LLM-decision-critical copy, not bloat.
+# Bumped 33200 -> 34600 when baseline gained MCP `TodoWrite` and `Task`
 # platform tools for parity with the Claude Code SDK's built-ins
 # (PR: feat/copilot-baseline-todowrite-task). The two new schemas add
 # ~1200 chars / ~300 tokens combined; descriptions are already trimmed
 # to the minimum viable copy.
-_CHAR_BUDGET = 34_200
+_CHAR_BUDGET = 34_600
 
 
 @pytest.fixture(scope="module")
