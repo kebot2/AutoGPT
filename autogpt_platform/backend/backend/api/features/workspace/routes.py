@@ -273,13 +273,16 @@ async def upload_file(
                 f"Failed to soft-delete over-quota file {workspace_file.id} "
                 f"in workspace {workspace.id}: {e}"
             )
+        from backend.util.workspace import _format_bytes
+
         raise fastapi.HTTPException(
             status_code=413,
-            detail={
-                "message": "Storage limit exceeded (concurrent upload)",
-                "used_bytes": new_total,
-                "limit_bytes": storage_limit_bytes,
-            },
+            detail=(
+                f"Storage limit exceeded. "
+                f"You've used {_format_bytes(new_total)} of your "
+                f"{_format_bytes(storage_limit_bytes)} quota. "
+                f"Delete some files or upgrade your plan for more storage."
+            ),
         )
 
     return UploadFileResponse(
