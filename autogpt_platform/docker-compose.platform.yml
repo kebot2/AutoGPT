@@ -73,15 +73,53 @@ services:
 
   redis:
     image: redis:latest
+    command:
+      - redis-server
+      - --cluster-enabled
+      - "yes"
+      - --cluster-config-file
+      - /data/nodes.conf
+      - --cluster-node-timeout
+      - "5000"
+      - --cluster-require-full-coverage
+      - "no"
+      - --appendonly
+      - "yes"
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli ping && redis-cli cluster info | grep -q 'cluster_state:ok'",
+        ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # One-shot sidecar that bootstraps the single-node cluster on first boot.
+  # After ``cluster create`` succeeds the state is persisted to ``nodes.conf``
+  # on the ``redis-data`` volume, so subsequent restarts skip the create.
+  redis-init:
+    image: redis:latest
+    depends_on:
+      redis:
+        condition: service_started
+    command:
+      - sh
+      - -c
+      - |
+        until redis-cli -h redis ping; do sleep 1; done
+        if ! redis-cli -h redis cluster info 2>/dev/null | grep -q 'cluster_state:ok'; then
+          echo "yes" | redis-cli --cluster create redis:6379 --cluster-yes
+        fi
+    networks:
+      - app-network
+    restart: "no"
   falkordb:
     image: falkordb/falkordb:latest
     ports:
@@ -391,6 +429,7 @@ services:
 volumes:
   workspace-data:
   falkordb_data:
+  redis-data:
 
 networks:
   app-network:

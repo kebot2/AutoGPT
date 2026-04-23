@@ -98,13 +98,8 @@ class _EventPayloadWrapper(BaseModel, Generic[M]):
 class RedisEventBus(BaseRedisEventBus[M], ABC):
     @property
     def pubsub_connection(self) -> Redis:
-        # Pub/sub uses a dedicated standalone client because
-        # (a) the subscribed connection blocks on ``listen()`` and cannot
-        #     be interleaved with regular command traffic, and
-        # (b) redis-py's ``RedisCluster`` sync ``.pubsub()`` returns a
-        #     ``ClusterPubSub`` that connects to exactly one node, which is
-        #     what we want too — classic pub/sub is broadcast across the
-        #     whole cluster so one node's subscription sees everything.
+        # Dedicated standalone client: a subscribed connection blocks on
+        # ``listen()`` and cannot share a socket with regular commands.
         return redis.get_redis_pubsub()
 
     def publish_event(self, event: M, channel_key: str):
@@ -141,9 +136,8 @@ class AsyncRedisEventBus(BaseRedisEventBus[M], ABC):
 
     @property
     async def pubsub_connection(self) -> AsyncRedis:
-        # See RedisEventBus.pubsub_connection — async RedisCluster has no
-        # ``pubsub()`` method at all, so the dedicated standalone client is
-        # mandatory in cluster mode and harmless in standalone mode.
+        # Async RedisCluster has no ``pubsub()`` method, so the dedicated
+        # standalone client is mandatory for the subscribe/publish path.
         return await redis.get_redis_pubsub_async()
 
     async def close(self) -> None:

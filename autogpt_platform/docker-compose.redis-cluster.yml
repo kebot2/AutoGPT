@@ -1,11 +1,12 @@
-# Override that swaps the single-node ``redis`` service for a 6-node Redis
-# Cluster (3 masters + 3 replicas) for local testing of cluster-mode.
+# Override that replaces the default 1-shard ``redis`` cluster service from
+# docker-compose.platform.yml with a 6-node Redis Cluster (3 masters +
+# 3 replicas) so developers can exercise real sharding + MOVED redirects
+# locally. The app always uses ``RedisCluster``; platform.yml's default
+# already gives you a 1-shard cluster — apply this override only when you
+# need to test multi-shard behaviour.
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.redis-cluster.yml up
-#
-# Also set ``REDIS_CLUSTER_ENABLED=true`` in your backend env so the Python
-# client builds a ``RedisCluster`` instead of a standalone ``Redis``.
 #
 # Topology: six ``bitnamilegacy/redis-cluster`` containers. The ``redis``
 # service keeps its compose hostname and port (6379) so every other service's
@@ -16,14 +17,16 @@
 #
 # DYNAMIC_IPS=yes (bitnami default) tells the cluster to re-resolve each
 # node's IP on startup — that's what we want because docker assigns random
-# IPs per container.  Clients (including the Python RedisCluster client)
+# IPs per container. Clients (including the Python RedisCluster client)
 # end up talking to each node via its compose hostname.
 #
 # Note: docker compose merges this file on top of docker-compose.yml, which
 # in turn extends docker-compose.platform.yml. We cannot "un-extend" the
 # redis service from here, so we override every field (image, command, env,
-# ports, healthcheck) that platform.yml sets for the standalone node; the
-# extended bits we do not override (networks, restart policy) are harmless.
+# ports, healthcheck, volumes) that platform.yml sets for the 1-shard node;
+# the extended bits we do not override (networks, restart policy) are
+# harmless. We also override ``redis-init`` to a no-op: bitnami's cluster
+# creator sidecar (``redis-node-6``) handles cluster bootstrap here.
 
 x-redis-node-env: &redis-node-env
   ALLOW_EMPTY_PASSWORD: "yes"
@@ -102,3 +105,11 @@ services:
       - redis-node-3
       - redis-node-4
       - redis-node-5
+
+  # No-op the 1-shard bootstrap sidecar from platform.yml — the bitnami
+  # cluster creator on ``redis-node-6`` handles cluster wiring here.
+  redis-init:
+    image: busybox
+    command: /bin/true
+    depends_on: []
+    restart: "no"

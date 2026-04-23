@@ -14,7 +14,6 @@ import hashlib
 import hmac
 import inspect
 import logging
-import os
 import pickle
 import threading
 import time
@@ -22,20 +21,10 @@ from dataclasses import dataclass
 from functools import cache, wraps
 from typing import Any, Callable, ParamSpec, Protocol, TypeVar, cast, runtime_checkable
 
-from redis import ConnectionPool, Redis
 from redis.cluster import ClusterNode, RedisCluster
 
 from backend.util.retry import conn_retry
 from backend.util.settings import Settings
-
-# Kept in sync with ``backend.data.redis_client.CLUSTER_ENABLED``.  Duplicated
-# here rather than imported to avoid a circular import
-# (``redis_client`` imports this module's ``cached`` decorator).
-_CACHE_CLUSTER_ENABLED = os.getenv("REDIS_CLUSTER_ENABLED", "false").lower() in (
-    "1",
-    "true",
-    "yes",
-)
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -56,11 +45,22 @@ _HMAC_SIG_LEN = 32
 
 
 @cache
-def _get_cache_pool() -> ConnectionPool:
-    """Get or create a connection pool for cache operations (lazy, thread-safe)."""
-    return ConnectionPool(
-        host=settings.config.redis_host,
-        port=settings.config.redis_port,
+@conn_retry("Redis", "Acquiring cache connection")
+def _get_redis() -> RedisCluster:
+    """
+    Get the lazily-initialized Redis client for shared cache operations.
+    Uses @cache for thread-safe singleton behavior so services that only use
+    in-memory caching don't pay a connection until first shared-cache access.
+
+    All cache operations are single-key (GET/SETEX/DELETE/SCAN) so they are
+    cluster-safe; the pipeline in ``cache_clear`` is a per-command router
+    under ``RedisCluster``, so multi-key deletes across slots route
+    individually rather than as a cross-slot MULTI/EXEC.
+    """
+    c = RedisCluster(
+        startup_nodes=[
+            ClusterNode(settings.config.redis_host, settings.config.redis_port)
+        ],
         password=settings.config.redis_password or None,
         decode_responses=False,  # Binary mode for pickle
         max_connections=50,
@@ -68,38 +68,6 @@ def _get_cache_pool() -> ConnectionPool:
         socket_connect_timeout=5,
         retry_on_timeout=True,
     )
-
-
-@cache
-@conn_retry("Redis", "Acquiring cache connection")
-def _get_redis() -> "Redis | RedisCluster":
-    """
-    Get the lazily-initialized Redis client for shared cache operations.
-    Uses @cache for thread-safe singleton behavior - connection is only
-    established when first accessed, allowing services that only use
-    in-memory caching to work without Redis configuration.
-
-    When ``REDIS_CLUSTER_ENABLED`` is set, returns a ``RedisCluster`` client
-    that auto-discovers the cluster topology via the seed node.  All cache
-    operations are single-key (GET/SETEX/DELETE/SCAN) so they are
-    cluster-safe; the pipeline in ``cache_clear`` is a per-command router
-    (not MULTI/EXEC) under ``RedisCluster``, so multi-key deletes across
-    slots route individually.
-    """
-    if _CACHE_CLUSTER_ENABLED:
-        c: Redis | RedisCluster = RedisCluster(
-            startup_nodes=[
-                ClusterNode(settings.config.redis_host, settings.config.redis_port)
-            ],
-            password=settings.config.redis_password or None,
-            decode_responses=False,
-            max_connections=50,
-            socket_keepalive=True,
-            socket_connect_timeout=5,
-            retry_on_timeout=True,
-        )
-    else:
-        c = Redis(connection_pool=_get_cache_pool())
     c.ping()  # Verify connection
     return c
 

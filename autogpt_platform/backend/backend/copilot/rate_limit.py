@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 
 from backend.data.db_accessors import user_db
-from backend.data.redis_client import CLUSTER_ENABLED, get_redis_async
+from backend.data.redis_client import get_redis_async
 from backend.data.user import get_user_by_id
 from backend.util.cache import cached
 
@@ -319,29 +319,15 @@ async def reset_daily_usage(user_id: str, daily_cost_limit: int = 0) -> bool:
         d_key = _daily_key(user_id, now=now)
         w_key = _weekly_key(user_id, now=now) if daily_cost_limit > 0 else None
 
-        if CLUSTER_ENABLED:
-            # Cross-slot: run the two writes sequentially. We lose the "both
-            # or neither" guarantee, but the failure mode (daily deleted,
-            # weekly not decremented) is a best-effort refund budget — the
-            # read-side rate limit check already tolerates drift here.
-            await redis.delete(d_key)
-            if w_key is not None:
-                new_val = await redis.decrby(w_key, daily_cost_limit)
-                if new_val < 0:
-                    await redis.set(w_key, 0, keepttl=True)
-        else:
-            # MULTI/EXEC so DELETE and DECRBY either both execute or neither
-            # does — prevents the caller refunding credits after the daily
-            # counter was cleared without the weekly offset.
-            pipe = redis.pipeline(transaction=True)
-            pipe.delete(d_key)
-            if w_key is not None:
-                pipe.decrby(w_key, daily_cost_limit)
-            results = await pipe.execute()
-            if w_key is not None:
-                new_val = results[1]
-                if new_val < 0:
-                    await redis.set(w_key, 0, keepttl=True)
+        # Daily and weekly keys hash to different cluster slots, so cross-key
+        # MULTI/EXEC is not available. Issue the writes sequentially — the
+        # failure mode (daily deleted, weekly not decremented) is a
+        # best-effort refund budget that the read path already tolerates.
+        await redis.delete(d_key)
+        if w_key is not None:
+            new_val = await redis.decrby(w_key, daily_cost_limit)
+            if new_val < 0:
+                await redis.set(w_key, 0, keepttl=True)
 
         logger.info("Reset daily usage for user %s", user_id[:8])
         return True
@@ -437,25 +423,12 @@ async def record_cost_usage(
     weekly_ttl = max(int((_weekly_reset_time(now=now) - now).total_seconds()), 1)
     try:
         redis = await get_redis_async()
-        # MULTI/EXEC pipelines in Redis Cluster require every key to land on
-        # the same slot.  Daily and weekly keys have different per-day/per-week
-        # suffixes and can hash to different slots, so in cluster mode we run
-        # two single-key transactions instead of one cross-slot one.  The
-        # INCRBY+EXPIRE atomicity per counter is what we actually need — we
-        # just give up cross-counter atomicity, which was never meaningful
-        # (the counters are independent budgets).
-        if CLUSTER_ENABLED:
-            await _incr_counter_atomic(redis, d_key, cost_microdollars, daily_ttl)
-            await _incr_counter_atomic(redis, w_key, cost_microdollars, weekly_ttl)
-            return
-
-        # Standalone path: a single MULTI/EXEC keeps the prior semantics.
-        pipe = redis.pipeline(transaction=True)
-        pipe.incrby(d_key, cost_microdollars)
-        pipe.expire(d_key, daily_ttl)
-        pipe.incrby(w_key, cost_microdollars)
-        pipe.expire(w_key, weekly_ttl)
-        await pipe.execute()
+        # Daily and weekly keys hash to different cluster slots — cross-slot
+        # MULTI/EXEC is not supported, so each counter gets its own
+        # single-key transaction. Per-counter INCRBY+EXPIRE atomicity is the
+        # invariant that matters; the two counters are independent budgets.
+        await _incr_counter_atomic(redis, d_key, cost_microdollars, daily_ttl)
+        await _incr_counter_atomic(redis, w_key, cost_microdollars, weekly_ttl)
     except (RedisError, ConnectionError, OSError):
         logger.warning(
             "Redis unavailable for recording cost usage (microdollars=%d)",
