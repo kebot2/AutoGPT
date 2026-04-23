@@ -132,3 +132,25 @@ async def test_get_redis_pubsub_async_caches_connect() -> None:
 
     assert a is b
     m.assert_called_once()
+
+
+def test_disconnect_closes_cached_client() -> None:
+    with patch.object(redis_client, "connect", autospec=True) as mock_connect:
+        fake = MagicMock(spec=RedisCluster)
+        mock_connect.return_value = fake
+        redis_client.get_redis()
+        redis_client.disconnect()
+
+    fake.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_async_closes_cached_client() -> None:
+    with patch.object(redis_client, "connect_async", autospec=True) as mock_connect:
+        fake = MagicMock(spec=AsyncRedisCluster)
+        fake.close = AsyncMock()
+        mock_connect.return_value = fake
+        await redis_client.get_redis_async()
+        await redis_client.disconnect_async()
+
+    fake.close.assert_awaited_once()
