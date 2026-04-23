@@ -936,6 +936,23 @@ class TestResetDailyUsage:
 
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_decr_counter_floor_zero_invokes_lua_script(self):
+        """The atomic DECRBY+floor helper routes through redis.eval with the
+        expected single-key, single-arg call shape."""
+        from backend.copilot.rate_limit import (
+            _DECR_FLOOR_ZERO_SCRIPT,
+            _decr_counter_floor_zero,
+        )
+
+        mock_redis = AsyncMock()
+
+        await _decr_counter_floor_zero(mock_redis, "weekly:user1", 42)
+
+        mock_redis.eval.assert_called_once_with(
+            _DECR_FLOOR_ZERO_SCRIPT, 1, "weekly:user1", 42
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tier-limit enforcement (integration-style)
