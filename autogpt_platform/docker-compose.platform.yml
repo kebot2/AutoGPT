@@ -158,8 +158,13 @@ services:
         until redis-cli -h redis-2 ping; do sleep 1; done
         size=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_size/ {print $$2+0}' | tr -d '[:cntrl:]')
         state=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_state/ {print $$2}' | tr -d '[:cntrl:]')
-        if [ "$$state" = "ok" ] && [ "$$size" = "2" ]; then
-          echo "cluster already bootstrapped"
+        # Idempotency guard: bail whenever the cluster is already ok. size=2 is
+        # the happy path; size=1 means a prior partial run left `redis` owning
+        # all slots — re-issuing ADDSLOTSRANGE would create a split under
+        # CLUSTER MEET, so demand an operator wipes `redis-data`/`redis-2-data`
+        # volumes before re-running.
+        if [ "$$state" = "ok" ]; then
+          echo "cluster already bootstrapped (state=ok, size=$$size); skipping init"
           exit 0
         fi
         # Resolve peer IP via getent — CLUSTER MEET needs an IP/hostname that
@@ -504,6 +509,7 @@ volumes:
   workspace-data:
   falkordb_data:
   redis-data:
+  redis-2-data:
 
 networks:
   app-network:

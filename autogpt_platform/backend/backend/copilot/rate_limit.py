@@ -325,9 +325,7 @@ async def reset_daily_usage(user_id: str, daily_cost_limit: int = 0) -> bool:
         # best-effort refund budget that the read path already tolerates.
         await redis.delete(d_key)
         if w_key is not None:
-            new_val = await redis.decrby(w_key, daily_cost_limit)
-            if new_val < 0:
-                await redis.set(w_key, 0, keepttl=True)
+            await _decr_counter_floor_zero(redis, w_key, daily_cost_limit)
 
         logger.info("Reset daily usage for user %s", user_id[:8])
         return True
@@ -442,6 +440,23 @@ async def _incr_counter_atomic(redis, key: str, delta: int, ttl_seconds: int) ->
     pipe.incrby(key, delta)
     pipe.expire(key, ttl_seconds)
     await pipe.execute()
+
+
+# Atomic DECRBY + floor-to-zero so a concurrent INCRBY from record_cost_usage
+# cannot be lost. DELETE on underflow also avoids leaving a zero-valued key
+# with no TTL, which the non-atomic set-with-keepttl variant could do.
+_DECR_FLOOR_ZERO_SCRIPT = """
+local value = redis.call("DECRBY", KEYS[1], ARGV[1])
+if value < 0 then
+    redis.call("DEL", KEYS[1])
+    return 0
+end
+return value
+"""
+
+
+async def _decr_counter_floor_zero(redis, key: str, delta: int) -> None:
+    await redis.eval(_DECR_FLOOR_ZERO_SCRIPT, 1, key, delta)
 
 
 class _UserNotFoundError(Exception):

@@ -10,16 +10,14 @@ from redis.asyncio.cluster import RedisCluster as AsyncRedisCluster
 from redis.cluster import RedisCluster
 
 import backend.data.redis_client as redis_client
+from backend.util.cache import clear_thread_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset_module_caches() -> None:
     """Flush cached singletons between tests so each test sees a fresh connect."""
-    redis_client.get_redis.cache_clear()  # type: ignore[attr-defined]
-    try:
-        redis_client.get_redis_async.cache_clear()  # type: ignore[attr-defined]
-    except AttributeError:
-        pass
+    redis_client.get_redis.cache_clear()
+    clear_thread_cache(redis_client.get_redis_async)
 
 
 def test_connect_builds_redis_cluster() -> None:
