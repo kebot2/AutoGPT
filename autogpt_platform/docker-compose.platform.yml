@@ -71,6 +71,10 @@ services:
       retries: 3
       start_period: 5s
 
+  # 2-master Redis Cluster for local dev: keeps the footprint minimal while
+  # still exercising cross-slot routing (slots 0-8191 on redis, 8192-16383 on
+  # redis-2). Catches sharding bugs — e.g. cross-slot MULTI/EXEC — on a laptop
+  # rather than in prod. No replicas: local crash = re-bootstrap, acceptable.
   redis:
     image: redis:latest
     command:
@@ -83,6 +87,10 @@ services:
       - "5000"
       - --cluster-require-full-coverage
       - "no"
+      - --cluster-announce-hostname
+      - redis
+      - --cluster-preferred-endpoint-type
+      - hostname
       - --appendonly
       - "yes"
     ports:
@@ -101,22 +109,88 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot sidecar that bootstraps the single-node cluster on first boot.
-  # After ``cluster create`` succeeds the state is persisted to ``nodes.conf``
-  # on the ``redis-data`` volume, so subsequent restarts skip the create.
+  redis-2:
+    image: redis:latest
+    command:
+      - redis-server
+      - --cluster-enabled
+      - "yes"
+      - --cluster-config-file
+      - /data/nodes.conf
+      - --cluster-node-timeout
+      - "5000"
+      - --cluster-require-full-coverage
+      - "no"
+      - --cluster-announce-hostname
+      - redis-2
+      - --cluster-preferred-endpoint-type
+      - hostname
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-2-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test:
+        ["CMD-SHELL", "redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot sidecar that bootstraps the 2-master cluster on first boot.
+  # `redis-cli --cluster create` enforces a 3-node minimum; we go lower
+  # locally by issuing CLUSTER MEET + CLUSTER ADDSLOTSRANGE directly.
+  # Topology persists to each pod's nodes.conf, so subsequent restarts are
+  # no-ops (cluster_state:ok short-circuits the block).
   redis-init:
     image: redis:latest
     depends_on:
       redis:
+        condition: service_started
+      redis-2:
         condition: service_started
     command:
       - sh
       - -c
       - |
         until redis-cli -h redis ping; do sleep 1; done
-        if ! redis-cli -h redis cluster info 2>/dev/null | grep -q 'cluster_state:ok'; then
-          echo "yes" | redis-cli --cluster create redis:6379 --cluster-yes
+        until redis-cli -h redis-2 ping; do sleep 1; done
+        size=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_size/ {print $$2+0}' | tr -d '[:cntrl:]')
+        state=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_state/ {print $$2}' | tr -d '[:cntrl:]')
+        if [ "$$state" = "ok" ] && [ "$$size" = "2" ]; then
+          echo "cluster already bootstrapped"
+          exit 0
         fi
+        # Resolve peer IP via getent — CLUSTER MEET needs an IP/hostname that
+        # the seed node can dial, and short DNS names sometimes fail race on
+        # first boot.
+        peer_ip=""
+        for i in $$(seq 1 30); do
+          peer_ip=$$(getent hosts redis-2 | awk '{print $$1}' | head -1)
+          if [ -n "$$peer_ip" ]; then break; fi
+          sleep 1
+        done
+        if [ -z "$$peer_ip" ]; then
+          echo "could not resolve redis-2" >&2
+          exit 1
+        fi
+        redis-cli -h redis cluster addslotsrange 0 8191 || true
+        redis-cli -h redis-2 cluster addslotsrange 8192 16383 || true
+        redis-cli -h redis cluster meet "$$peer_ip" 6379
+        for i in $$(seq 1 30); do
+          size=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_size/ {print $$2+0}' | tr -d '[:cntrl:]')
+          state=$$(redis-cli -h redis cluster info | awk -F: '/^cluster_state/ {print $$2}' | tr -d '[:cntrl:]')
+          if [ "$$state" = "ok" ] && [ "$$size" = "2" ]; then
+            echo "cluster bootstrapped (2 masters, 16384 slots)"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "cluster failed to converge" >&2
+        redis-cli -h redis cluster info >&2
+        redis-cli -h redis cluster nodes >&2
+        exit 1
     networks:
       - app-network
     restart: "no"
