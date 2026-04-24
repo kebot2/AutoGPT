@@ -10,7 +10,6 @@ volumes:
   workspace-data:
   falkordb_data:
   redis-data:
-  redis-2-data:
 
 x-agpt-services:
   &agpt-services
@@ -38,18 +37,6 @@ services:
     extends:
       file: ./docker-compose.platform.yml
       service: redis
-
-  redis-2:
-    <<: *agpt-services
-    extends:
-      file: ./docker-compose.platform.yml
-      service: redis-2
-
-  redis-init:
-    <<: *agpt-services
-    extends:
-      file: ./docker-compose.platform.yml
-      service: redis-init
 
   falkordb:
     <<: *agpt-services

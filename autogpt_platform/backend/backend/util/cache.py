@@ -57,16 +57,19 @@ def _get_redis() -> RedisCluster:
     under ``RedisCluster``, so multi-key deletes across slots route
     individually rather than as a cross-slot MULTI/EXEC.
     """
+    host = settings.config.redis_host
     c = RedisCluster(
-        startup_nodes=[
-            ClusterNode(settings.config.redis_host, settings.config.redis_port)
-        ],
+        startup_nodes=[ClusterNode(host, settings.config.redis_port)],
         password=settings.config.redis_password or None,
         decode_responses=False,  # Binary mode for pickle
         max_connections=50,
         socket_keepalive=True,
         socket_connect_timeout=5,
         retry_on_timeout=True,
+        # See ``backend.data.redis_client._address_remap`` — pin every node
+        # back to the seed host so the same client works inside the compose
+        # network (HOST=redis) and from the laptop (HOST=localhost).
+        address_remap=lambda addr: (host, addr[1]),
     )
     c.ping()  # Verify connection
     return c
