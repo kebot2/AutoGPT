@@ -151,6 +151,36 @@ def test_disconnect_closes_cached_client() -> None:
     fake.close.assert_called_once()
 
 
+def test_disconnect_closes_cached_pubsub() -> None:
+    with (
+        patch.object(redis_client, "connect", autospec=True) as mock_connect,
+        patch.object(redis_client, "connect_pubsub", autospec=True) as mock_pubsub,
+    ):
+        fake = MagicMock(spec=RedisCluster)
+        fake_pubsub = MagicMock(spec=Redis)
+        mock_connect.return_value = fake
+        mock_pubsub.return_value = fake_pubsub
+        redis_client.get_redis()
+        redis_client.get_redis_pubsub()
+        redis_client.disconnect()
+
+    fake.close.assert_called_once()
+    fake_pubsub.close.assert_called_once()
+
+
+def test_disconnect_skips_unused_pubsub() -> None:
+    """Disconnect must not open a pub/sub connection just to close it."""
+    with (
+        patch.object(redis_client, "connect", autospec=True) as mock_connect,
+        patch.object(redis_client, "connect_pubsub", autospec=True) as mock_pubsub,
+    ):
+        mock_connect.return_value = MagicMock(spec=RedisCluster)
+        redis_client.get_redis()
+        redis_client.disconnect()
+
+    mock_pubsub.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_disconnect_async_closes_cached_client() -> None:
     with patch.object(redis_client, "connect_async", autospec=True) as mock_connect:
