@@ -4558,7 +4558,7 @@
       "get": {
         "tags": ["v1", "integrations"],
         "summary": "Get Ayrshare Sso Url",
-        "description": "Generate an SSO URL for Ayrshare social media integration.\n\nReturns:\n    dict: Contains the SSO URL for Ayrshare integration",
+        "description": "Generate a JWT SSO URL so the user can link their social accounts.\n\nThe per-user Ayrshare profile key is provisioned and persisted as a\nstandard ``is_managed=True`` credential by\n:class:`~backend.integrations.managed_providers.ayrshare.AyrshareManagedProvider`.\nThis endpoint only signs a short-lived JWT pointing at the Ayrshare-\nhosted social-linking page; all profile lifecycle logic lives with the\nmanaged provider.",
         "operationId": "getV1GetAyrshareSsoUrl",
         "responses": {
           "200": {
@@ -9819,7 +9819,12 @@
             "type": "object",
             "title": "Cost Filter"
           },
-          "cost_type": { "$ref": "#/components/schemas/BlockCostType" }
+          "cost_type": { "$ref": "#/components/schemas/BlockCostType" },
+          "cost_divisor": {
+            "type": "integer",
+            "title": "Cost Divisor",
+            "default": 1
+          }
         },
         "type": "object",
         "required": ["cost_amount", "cost_filter", "cost_type"],
@@ -9827,7 +9832,7 @@
       },
       "BlockCostType": {
         "type": "string",
-        "enum": ["run", "byte", "second"],
+        "enum": ["run", "byte", "second", "items", "cost_usd", "tokens"],
         "title": "BlockCostType"
       },
       "BlockDetails": {
@@ -10420,7 +10425,7 @@
           },
           "tier": {
             "$ref": "#/components/schemas/SubscriptionTier",
-            "default": "FREE"
+            "default": "BASIC"
           },
           "reset_cost": {
             "type": "integer",
@@ -16060,7 +16065,7 @@
         "properties": {
           "tier": {
             "type": "string",
-            "enum": ["FREE", "PRO", "BUSINESS", "ENTERPRISE"],
+            "enum": ["BASIC", "PRO", "MAX", "BUSINESS", "ENTERPRISE"],
             "title": "Tier"
           },
           "monthly_cost": { "type": "integer", "title": "Monthly Cost" },
@@ -16069,13 +16074,19 @@
             "type": "object",
             "title": "Tier Costs"
           },
+          "tier_multipliers": {
+            "additionalProperties": { "type": "number" },
+            "type": "object",
+            "title": "Tier Multipliers",
+            "description": "Tier → rate-limit multiplier. Covers the same tiers listed in ``tier_costs`` so the frontend can render rate-limit badges relative to the lowest visible tier without knowing backend defaults."
+          },
           "proration_credit_cents": {
             "type": "integer",
             "title": "Proration Credit Cents"
           },
           "pending_tier": {
             "anyOf": [
-              { "type": "string", "enum": ["FREE", "PRO", "BUSINESS"] },
+              { "type": "string", "enum": ["BASIC", "PRO", "MAX", "BUSINESS"] },
               { "type": "null" }
             ],
             "title": "Pending Tier"
@@ -16090,7 +16101,7 @@
           "url": {
             "type": "string",
             "title": "Url",
-            "description": "Populated only when POST /credits/subscription starts a Stripe Checkout Session (FREE → paid upgrade). Empty string in all other branches — the client redirects to this URL when non-empty.",
+            "description": "Populated only when POST /credits/subscription starts a Stripe Checkout Session (BASIC → paid upgrade). Empty string in all other branches — the client redirects to this URL when non-empty.",
             "default": ""
           }
         },
@@ -16105,7 +16116,7 @@
       },
       "SubscriptionTier": {
         "type": "string",
-        "enum": ["FREE", "PRO", "BUSINESS", "ENTERPRISE"],
+        "enum": ["BASIC", "PRO", "MAX", "BUSINESS", "ENTERPRISE"],
         "title": "SubscriptionTier",
         "description": "Subscription tiers with increasing cost allowances.\n\nMirrors the ``SubscriptionTier`` enum in ``schema.prisma``.\nOnce ``prisma generate`` is run, this can be replaced with::\n\n    from prisma.enums import SubscriptionTier"
       },
@@ -16113,7 +16124,7 @@
         "properties": {
           "tier": {
             "type": "string",
-            "enum": ["FREE", "PRO", "BUSINESS"],
+            "enum": ["BASIC", "PRO", "MAX", "BUSINESS"],
             "title": "Tier"
           },
           "success_url": {
