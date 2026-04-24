@@ -86,12 +86,6 @@ async def connect_async() -> AsyncRedisClient:
     return c
 
 
-@conn_retry("AsyncRedis", "Releasing connection")
-async def disconnect_async():
-    c = await get_redis_async()
-    await c.close()
-
-
 # Cache one AsyncRedisCluster per event loop. `AsyncRedisCluster` binds to the
 # loop it is first awaited on (unlike the sync `RedisCluster` client), so a
 # simple module-level singleton breaks when tests run on multiple loops — the
@@ -101,13 +95,23 @@ async def disconnect_async():
 # fast as the old `@thread_cached` singleton while making test harnesses that
 # spin up per-test loops safe.
 _async_clients: dict[int, AsyncRedisCluster] = {}
+_async_pubsub_clients: dict[int, AsyncRedis] = {}
+
+
+@conn_retry("AsyncRedis", "Releasing connection")
+async def disconnect_async():
+    loop = asyncio.get_running_loop()
+    c = _async_clients.pop(id(loop), None)
+    if c is None:
+        return
+    await c.close()
+    pubsub = _async_pubsub_clients.pop(id(loop), None)
+    if pubsub is not None:
+        await pubsub.close()
 
 
 async def get_redis_async() -> AsyncRedisClient:
     loop = asyncio.get_running_loop()
-    if loop.is_closed():
-        _async_clients.pop(id(loop), None)
-        raise RuntimeError("cannot obtain AsyncRedis client on a closed loop")
     client = _async_clients.get(id(loop))
     if client is None:
         client = await connect_async()
@@ -166,12 +170,14 @@ def get_redis_pubsub() -> Redis:
 async def get_redis_pubsub_async() -> AsyncRedis:
     """Async equivalent of :func:`get_redis_pubsub`.
 
-    Not cached: ``AsyncRedis`` clients bind to the event loop they are first
-    awaited on, and pub/sub callers (``event_bus``, ``notification_bus``,
-    ``copilot.pending_messages``) can be invoked from test fixtures that
-    teardown the loop — a cached connection bound to a dead loop raises
-    ``RuntimeError: Event loop is closed`` on next publish. A fresh client
-    per call is the simplest loop-safe pattern; publish cost dominates the
-    handshake cost for our traffic.
+    Cached per event loop: ``AsyncRedis`` clients bind to the loop they are
+    first awaited on, so a simple module-level singleton breaks across test
+    loops. Keying by ``id(loop)`` keeps one client per loop for the process
+    lifetime.
     """
-    return await connect_pubsub_async()
+    loop = asyncio.get_running_loop()
+    client = _async_pubsub_clients.get(id(loop))
+    if client is None:
+        client = await connect_pubsub_async()
+        _async_pubsub_clients[id(loop)] = client
+    return client
