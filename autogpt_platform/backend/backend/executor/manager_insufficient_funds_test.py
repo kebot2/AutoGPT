@@ -250,9 +250,9 @@ async def test_clear_insufficient_funds_notifications(server: SpinTestServer):
         # Keys span multiple graph IDs → different cluster slots, so DELETE
         # is called once per key (not a single bulk DELETE).
         assert mock_redis_client.delete.call_count == len(mock_keys)
-        assert {call.args[0] for call in mock_redis_client.delete.call_args_list} == set(
-            mock_keys
-        )
+        assert {
+            call.args[0] for call in mock_redis_client.delete.call_args_list
+        } == set(mock_keys)
 
         # Verify return value — sum of per-key DELETEs
         assert result == len(mock_keys)
