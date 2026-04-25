@@ -180,6 +180,47 @@ describe("useCopilotStream — reconnect debounce", () => {
       return next.length === 0;
     });
     expect(dropCall).toBeTruthy();
+
+    // Branch: when the trailing message is NOT a user bubble (e.g. an
+    // assistant turn already landed), the rollback updater must leave the
+    // list untouched so we don't clobber the assistant reply.
+    const updater = setMessagesMock.mock.calls
+      .map(([arg]) => arg)
+      .find(
+        (arg): arg is (p: UIMessage[]) => UIMessage[] =>
+          typeof arg === "function",
+      );
+    expect(updater).toBeDefined();
+    const assistantOnly: UIMessage[] = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [{ type: "text", text: "ok" }],
+      } as unknown as UIMessage,
+    ];
+    expect(updater!(assistantOnly)).toBe(assistantOnly);
+    expect(updater!([])).toEqual([]);
+  });
+
+  it("skips composer restore on 429 when there is no captured unsent text", async () => {
+    useCopilotUIStore.getState().setInitialPrompt(null);
+    renderStream();
+
+    await act(async () => {
+      lastUseChatArgs!.onError!(
+        new Error(JSON.stringify({ detail: "Daily usage limit exceeded" })),
+      );
+    });
+
+    // No sendMessage was called → lastSubmittedMsgRef stays null → restore
+    // branch must be skipped. The store stays untouched and setMessages is
+    // NOT invoked with a rollback updater.
+    expect(useCopilotUIStore.getState().initialPrompt).toBeNull();
+    expect(sdkSendMessageMock).not.toHaveBeenCalled();
+    const rollbackUpdaterCall = setMessagesMock.mock.calls.find(
+      ([arg]) => typeof arg === "function",
+    );
+    expect(rollbackUpdaterCall).toBeUndefined();
   });
 
   it("does not debounce a reconnect that arrives after the window closes", async () => {
