@@ -22,6 +22,8 @@ from backend.copilot.model import ChatMessage, ChatSession
 from backend.copilot.response_model import StreamToolOutputAvailable
 
 from .service import (
+    _classify_final_failure,
+    _FinalFailure,
     _flush_orphan_tool_uses_to_session,
     _HandledErrorInfo,
     _InterruptedAttempt,
@@ -49,7 +51,7 @@ def _adapter_with_unresolved(responses: list[StreamToolOutputAvailable]):
         out.extend(responses)
         adapter.has_unresolved_tool_calls = False
 
-    adapter._flush_unresolved_tool_calls.side_effect = _flush
+    adapter.flush_unresolved_tool_calls.side_effect = _flush
     state = MagicMock()
     state.adapter = adapter
     return state
@@ -147,8 +149,8 @@ class TestInterruptedAttemptFinalize:
         attempt = _InterruptedAttempt(
             partial=[ChatMessage(role="assistant", content="x")]
         )
-        attempt.finalize(None, state=None, display_msg="Boom", retryable=False)
-        # no raise = pass
+        events = attempt.finalize(None, state=None, display_msg="Boom", retryable=False)
+        assert events == []
 
     def test_flushes_unresolved_tools_between_partial_and_marker(self):
         session = _make_session([ChatMessage(role="user", content="hi")])
@@ -167,12 +169,20 @@ class TestInterruptedAttemptFinalize:
                 ),
             ]
         )
-        state = _adapter_with_unresolved([_tool_output("t1", "interrupted")])
-        attempt.finalize(session, state=state, display_msg="Boom", retryable=False)
+        flushed = [_tool_output("t1", "interrupted")]
+        state = _adapter_with_unresolved(flushed)
+        events = attempt.finalize(
+            session, state=state, display_msg="Boom", retryable=False
+        )
         roles = [m.role for m in session.messages]
         assert roles == ["user", "assistant", "tool", "assistant"]
         assert session.messages[2].tool_call_id == "t1"
         assert session.messages[2].content == "interrupted"
+        # The same events that were persisted to history are returned to the
+        # caller so the caller can yield them to the client — without this
+        # the frontend's spinner widgets stay open until refresh because the
+        # adapter's has_unresolved_tool_calls flag is already flipped to False.
+        assert events == flushed
 
     def test_clear_drops_both_partial_and_handled_error(self):
         attempt = _InterruptedAttempt(
@@ -189,27 +199,101 @@ class TestInterruptedAttemptFinalize:
 class TestFlushOrphanToolUses:
     def test_appends_synthetic_tool_results_for_unresolved(self):
         session = _make_session()
-        state = _adapter_with_unresolved(
-            [_tool_output("t1", "r1"), _tool_output("t2", {"ok": False})]
-        )
-        _flush_orphan_tool_uses_to_session(session, state)
+        flushed = [_tool_output("t1", "r1"), _tool_output("t2", {"ok": False})]
+        state = _adapter_with_unresolved(flushed)
+        events = _flush_orphan_tool_uses_to_session(session, state)
         assert [m.tool_call_id for m in session.messages] == ["t1", "t2"]
         # Dict outputs are JSON-encoded so structure survives the str-only
         # ChatMessage content field for the next-turn LLM read.
         assert session.messages[1].content == '{"ok": false}'
+        assert events == flushed
 
     def test_noop_when_state_is_none(self):
         session = _make_session()
-        _flush_orphan_tool_uses_to_session(session, None)
+        events = _flush_orphan_tool_uses_to_session(session, None)
         assert session.messages == []
+        assert events == []
 
     def test_noop_when_no_unresolved(self):
         adapter = MagicMock()
         adapter.has_unresolved_tool_calls = False
         state = MagicMock()
         state.adapter = adapter
-        _flush_orphan_tool_uses_to_session(_make_session(), state)
-        adapter._flush_unresolved_tool_calls.assert_not_called()
+        events = _flush_orphan_tool_uses_to_session(_make_session(), state)
+        adapter.flush_unresolved_tool_calls.assert_not_called()
+        assert events == []
+
+
+class TestClassifyFinalFailure:
+    """Ensures the history marker (via finalize) and the SSE StreamError yield
+    share one source of truth for display message + stream code — any drift
+    would let the chat bubble and the SSE event show different copy for the
+    same failure."""
+
+    def test_handled_error_wins(self):
+        interrupted = _InterruptedAttempt(
+            handled_error=_HandledErrorInfo(
+                error_msg="circuit tripped",
+                code="circuit_breaker",
+                retryable=False,
+                already_yielded=True,
+            )
+        )
+        result = _classify_final_failure(
+            interrupted,
+            attempts_exhausted=False,
+            transient_exhausted=False,
+            stream_err=RuntimeError("ignored"),
+        )
+        assert result == _FinalFailure(
+            display_msg="circuit tripped",
+            code="circuit_breaker",
+            retryable=False,
+        )
+
+    def test_attempts_exhausted(self):
+        result = _classify_final_failure(
+            _InterruptedAttempt(),
+            attempts_exhausted=True,
+            transient_exhausted=False,
+            stream_err=RuntimeError("x"),
+        )
+        assert result is not None
+        assert result.code == "all_attempts_exhausted"
+        assert result.retryable is False
+
+    def test_transient_exhausted(self):
+        result = _classify_final_failure(
+            _InterruptedAttempt(),
+            attempts_exhausted=False,
+            transient_exhausted=True,
+            stream_err=RuntimeError("x"),
+        )
+        assert result is not None
+        assert result.code == "transient_api_error"
+        assert result.retryable is True
+
+    def test_stream_err_fallback(self):
+        result = _classify_final_failure(
+            _InterruptedAttempt(),
+            attempts_exhausted=False,
+            transient_exhausted=False,
+            stream_err=RuntimeError("some sdk error"),
+        )
+        assert result is not None
+        assert result.code == "sdk_stream_error"
+        assert result.retryable is False
+
+    def test_returns_none_when_no_failure_recorded(self):
+        assert (
+            _classify_final_failure(
+                _InterruptedAttempt(),
+                attempts_exhausted=False,
+                transient_exhausted=False,
+                stream_err=None,
+            )
+            is None
+        )
 
 
 class TestRetryRollbackContract:
