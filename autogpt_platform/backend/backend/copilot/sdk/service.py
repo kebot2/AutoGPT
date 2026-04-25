@@ -3067,7 +3067,7 @@ async def _maybe_prepend_builder_context(
     return block + query_message if block else query_message
 
 
-async def stream_chat_completion_sdk(
+async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues]
     session_id: str,
     message: str | None = None,
     is_user_message: bool = True,
@@ -3080,6 +3080,12 @@ async def stream_chat_completion_sdk(
     request_arrival_at: float = 0.0,
     **_kwargs: Any,
 ) -> AsyncGenerator[StreamBaseResponse, None]:
+    # Pyright's complexity heuristic bails on this function (~1500 LoC, retry
+    # loop with context-overflow fallback + transient backoff + partial-work
+    # preservation). Splitting further would hurt readability — the branches
+    # share state (session, adapter, transcript builder, token accumulators)
+    # that's hard to pass cleanly through helpers. Suppress the bailout; real
+    # type errors elsewhere in the file remain surfaced.
     """Stream chat completion using Claude Agent SDK.
 
     Args:
@@ -3247,6 +3253,11 @@ async def stream_chat_completion_sdk(
     # failed attempt. On final-failure exit we re-attach these so the user sees
     # what the assistant produced before the error rather than an empty chat.
     last_attempt_partial: list[ChatMessage] = []
+    # Populated by the _HandledStreamError branch with (display_msg, code,
+    # already_yielded). Consumed once after the retry loop to re-attach the
+    # partial and, if the inner handler hadn't already emitted one, yield a
+    # single StreamError to the client.
+    handled_error_info: tuple[str, str, bool] | None = None
     # Defaults ensure the finally block can always reference these safely even when
     # an early return (e.g. sdk_cwd error) skips their normal assignment below.
     sdk_model: str | None = None
@@ -3965,28 +3976,12 @@ async def stream_chat_completion_sdk(
                 # attempt that no longer match session.messages.  Skip upload
                 # so a future --resume doesn't replay rolled-back content.
                 skip_transcript_upload = True
-                # Re-attach the rolled-back partial work + add error marker.
-                # Without partial restoration the user's UI streamed tokens
-                # live but a refresh shows nothing happened.
-                _restore_partial_with_error_marker(
-                    session,
-                    state,
-                    last_attempt_partial,
+                handled_error_info = (
                     exc.error_msg or FRIENDLY_TRANSIENT_MSG,
-                    retryable=True,
+                    exc.code or "transient_api_error",
+                    exc.already_yielded,
                 )
                 ended_with_stream_error = True
-                # For transient errors the StreamError was deliberately NOT
-                # yielded inside _run_stream_attempt (already_yielded=False)
-                # so the client didn't see a premature error flash.  Yield it
-                # now that we know retries are exhausted.
-                # For non-transient errors (circuit breaker, idle timeout)
-                # already_yielded=True — do NOT yield again.
-                if not exc.already_yielded:
-                    yield StreamError(
-                        errorText=exc.error_msg or FRIENDLY_TRANSIENT_MSG,
-                        code=exc.code or "transient_api_error",
-                    )
                 break
             except Exception as e:
                 stream_err = e
@@ -4020,19 +4015,6 @@ async def stream_chat_completion_sdk(
                         events_yielded,
                     )
                     skip_transcript_upload = True
-                    # Restore the streamed partial + add error marker — without
-                    # this the frontend would briefly show streamed text live
-                    # then a refresh would show an empty turn.
-                    safe_err = (
-                        str(stream_err).replace("\n", " ").replace("\r", "")[:500]
-                    )
-                    _restore_partial_with_error_marker(
-                        session,
-                        state,
-                        last_attempt_partial,
-                        _friendly_error_text(safe_err),
-                        retryable=False,
-                    )
                     ended_with_stream_error = True
                     break
                 # Transient API errors (ECONNRESET, 429, 5xx) — retry
@@ -4060,13 +4042,6 @@ async def stream_chat_completion_sdk(
                     # at line ~2310.
                     transient_exhausted = True
                     skip_transcript_upload = True
-                    _restore_partial_with_error_marker(
-                        session,
-                        state,
-                        last_attempt_partial,
-                        FRIENDLY_TRANSIENT_MSG,
-                        retryable=True,
-                    )
                     ended_with_stream_error = True
                     break
 
@@ -4074,16 +4049,6 @@ async def stream_chat_completion_sdk(
                     # Non-context, non-transient errors (auth, fatal)
                     # should not trigger compaction — surface immediately.
                     skip_transcript_upload = True
-                    safe_err = (
-                        str(stream_err).replace("\n", " ").replace("\r", "")[:500]
-                    )
-                    _restore_partial_with_error_marker(
-                        session,
-                        state,
-                        last_attempt_partial,
-                        _friendly_error_text(safe_err),
-                        retryable=False,
-                    )
                     ended_with_stream_error = True
                     break
                 attempt += 1  # advance to next context-level attempt
@@ -4100,17 +4065,39 @@ async def stream_chat_completion_sdk(
                 _MAX_STREAM_ATTEMPTS,
                 stream_err,
             )
-            # Restore the last attempt's partial work (rolled back by the
-            # exhausted context-level retry) so the user sees what was
-            # produced before the conversation hit the context ceiling.
-            _restore_partial_with_error_marker(
-                session,
-                state,
-                last_attempt_partial,
-                "Your conversation is too long. "
-                "Please start a new chat or clear some history.",
-                retryable=False,
-            )
+        # Restore the rolled-back partial work + add error marker exactly once
+        # per failure mode. Earlier revisions did this inline in each retry-loop
+        # branch; consolidating here keeps the retry loop itself simple enough
+        # for pyright to type-check.
+        if ended_with_stream_error:
+            if handled_error_info is not None:
+                final_msg, _, _ = handled_error_info
+                final_retryable = True
+            elif attempts_exhausted:
+                final_msg = (
+                    "Your conversation is too long. "
+                    "Please start a new chat or clear some history."
+                )
+                final_retryable = False
+            elif transient_exhausted:
+                final_msg = FRIENDLY_TRANSIENT_MSG
+                final_retryable = True
+            elif stream_err is not None:
+                final_msg = _friendly_error_text(
+                    str(stream_err).replace("\n", " ").replace("\r", "")[:500]
+                )
+                final_retryable = False
+            else:
+                final_msg = None
+                final_retryable = False
+            if final_msg is not None:
+                _restore_partial_with_error_marker(
+                    session,
+                    state,
+                    last_attempt_partial,
+                    final_msg,
+                    retryable=final_retryable,
+                )
 
         if ended_with_stream_error and state is not None:
             # Flush any unresolved tool calls so the frontend can close
@@ -4148,6 +4135,16 @@ async def stream_chat_completion_sdk(
                 error_text = _friendly_error_text(safe_err)
                 error_code = "sdk_stream_error"
             yield StreamError(errorText=error_text, code=error_code)
+
+        # _HandledStreamError exits the retry loop with stream_err unset, so
+        # the previous block doesn't fire. Emit the client-facing StreamError
+        # here when the inner handler chose not to (transient errors suppress
+        # the early flash so the client only sees the final error after all
+        # retries are exhausted).
+        if handled_error_info is not None:
+            handled_msg, handled_code, already_yielded = handled_error_info
+            if not already_yielded:
+                yield StreamError(errorText=handled_msg, code=handled_code)
 
         # Copy token usage from retry state to outer-scope accumulators
         # so the finally block can persist them.
