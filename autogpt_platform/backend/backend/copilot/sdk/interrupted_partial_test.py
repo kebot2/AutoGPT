@@ -1,14 +1,13 @@
 """Tests for partial-work preservation when an SDK turn is interrupted.
 
-Covers the regression path SECRT-2275 surfaced: when the SDK retry loop
-rolls back ``session.messages`` for a failed attempt (correct behavior so a
-successful retry doesn't duplicate content) it MUST re-attach the rolled-back
-work on final-failure exit. Otherwise the user's UI streamed tokens live but
+Covers the regression SECRT-2275 surfaced: when the SDK retry loop rolls
+back ``session.messages`` for a failed attempt (correct so a successful
+retry doesn't duplicate content) it MUST re-attach the rolled-back work on
+final-failure exit. Without that, the user's UI streamed tokens live then
 a refresh shows an empty turn — described by users as "the turn is gone".
 
-Tests target the helper functions directly (unit) plus the rollback-then-
-restore contract (state-driven). Full end-to-end coverage of the retry loop
-lives in retry_scenarios_test.py.
+Tests target the ``_InterruptedAttempt`` dataclass + the orphan-tool flush
+directly. Full retry-loop coverage lives in ``retry_scenarios_test.py``.
 """
 
 from __future__ import annotations
@@ -24,8 +23,8 @@ from backend.copilot.response_model import StreamToolOutputAvailable
 
 from .service import (
     _flush_orphan_tool_uses_to_session,
-    _restore_partial_with_error_marker,
-    _rollback_attempt_capturing_partial,
+    _HandledErrorInfo,
+    _InterruptedAttempt,
 )
 
 
@@ -35,21 +34,19 @@ def _make_session(messages: list[ChatMessage] | None = None) -> ChatSession:
     return session
 
 
-def _make_tool_output(tool_call_id: str, output) -> StreamToolOutputAvailable:
+def _tool_output(tool_call_id: str, output) -> StreamToolOutputAvailable:
     return StreamToolOutputAvailable(
-        toolCallId=tool_call_id,
-        toolName="t",
-        output=output,
+        toolCallId=tool_call_id, toolName="t", output=output
     )
 
 
-def _adapter_with_unresolved(unresolved_responses: list[StreamToolOutputAvailable]):
-    """Build a stub _RetryState whose adapter flushes the given responses."""
+def _adapter_with_unresolved(responses: list[StreamToolOutputAvailable]):
+    """Stub _RetryState whose adapter flushes the given responses."""
     adapter = MagicMock()
-    adapter.has_unresolved_tool_calls = bool(unresolved_responses)
+    adapter.has_unresolved_tool_calls = bool(responses)
 
-    def _flush(responses: list) -> None:
-        responses.extend(unresolved_responses)
+    def _flush(out: list) -> None:
+        out.extend(responses)
         adapter.has_unresolved_tool_calls = False
 
     adapter._flush_unresolved_tool_calls.side_effect = _flush
@@ -58,145 +55,29 @@ def _adapter_with_unresolved(unresolved_responses: list[StreamToolOutputAvailabl
     return state
 
 
-class TestRestorePartialWithErrorMarker:
-    def test_appends_partial_then_marker_when_partial_present(self):
-        session = _make_session([ChatMessage(role="user", content="hi")])
-        partial = [
-            ChatMessage(role="assistant", content="I was working on "),
-            ChatMessage(role="tool", content="result-1", tool_call_id="t1"),
-        ]
-        _restore_partial_with_error_marker(
-            session,
-            state=None,
-            partial=partial,
-            display_msg="Boom",
-            retryable=False,
-        )
-        # Pre-existing user msg + 2 partial msgs + error marker
-        assert len(session.messages) == 4
-        assert session.messages[1].content == "I was working on "
-        assert session.messages[2].role == "tool"
-        assert session.messages[3].content.startswith(COPILOT_ERROR_PREFIX)
-        # Partial list is consumed (cleared) so a stray follow-up call won't
-        # double-attach the same content.
-        assert partial == []
-
-    def test_only_marker_when_partial_empty(self):
-        session = _make_session([ChatMessage(role="user", content="hi")])
-        _restore_partial_with_error_marker(
-            session,
-            state=None,
-            partial=[],
-            display_msg="Boom",
-            retryable=True,
-        )
-        assert len(session.messages) == 2
-        assert session.messages[-1].content.startswith(COPILOT_RETRYABLE_ERROR_PREFIX)
-
-    def test_noop_when_session_is_none(self):
-        # Signature accepts None — must not raise.
-        _restore_partial_with_error_marker(
-            None,
-            state=None,
-            partial=[ChatMessage(role="assistant", content="x")],
-            display_msg="Boom",
-            retryable=False,
-        )
-
-    def test_flushes_unresolved_tools_between_partial_and_marker(self):
-        session = _make_session([ChatMessage(role="user", content="hi")])
-        partial = [
-            ChatMessage(
-                role="assistant",
-                content="calling tool",
-                tool_calls=[
-                    {
-                        "id": "t1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    }
-                ],
-            ),
-        ]
-        state = _adapter_with_unresolved([_make_tool_output("t1", "interrupted")])
-        _restore_partial_with_error_marker(
-            session,
-            state=state,
-            partial=partial,
-            display_msg="Boom",
-            retryable=False,
-        )
-        roles = [m.role for m in session.messages]
-        # user, assistant(partial), tool(synthetic), assistant(error marker)
-        assert roles == ["user", "assistant", "tool", "assistant"]
-        synthetic_tool = session.messages[2]
-        assert synthetic_tool.tool_call_id == "t1"
-        assert synthetic_tool.content == "interrupted"
+def _builder_stub() -> MagicMock:
+    builder = MagicMock()
+    builder.restore = MagicMock()
+    return builder
 
 
-class TestFlushOrphanToolUses:
-    def test_appends_synthetic_tool_results_for_unresolved(self):
-        session = _make_session()
-        state = _adapter_with_unresolved(
-            [
-                _make_tool_output("t1", "r1"),
-                _make_tool_output("t2", {"ok": False}),
-            ]
-        )
-        _flush_orphan_tool_uses_to_session(session, state)
-        assert [m.tool_call_id for m in session.messages] == ["t1", "t2"]
-        # Dict outputs are JSON-encoded so they survive the str-only ChatMessage
-        # content field without losing structure for the next-turn LLM read.
-        assert session.messages[1].content == '{"ok": false}'
-
-    def test_noop_when_state_is_none(self):
-        session = _make_session()
-        _flush_orphan_tool_uses_to_session(session, None)
-        assert session.messages == []
-
-    def test_noop_when_no_unresolved(self):
-        session = _make_session()
-        adapter = MagicMock()
-        adapter.has_unresolved_tool_calls = False
-        state = MagicMock()
-        state.adapter = adapter
-        _flush_orphan_tool_uses_to_session(session, state)
-        adapter._flush_unresolved_tool_calls.assert_not_called()
-
-
-class TestRollbackCapturingPartial:
-    """Direct tests of `_rollback_attempt_capturing_partial`.
-
-    The retry loop relies on this helper not to leak error markers that
-    `_run_stream_attempt` already appended to `session.messages` — otherwise
-    the post-loop restore replays a stale marker before adding its own,
-    leaving duplicate error bubbles.
-    """
-
-    def _builder_with_snap(self):
-        builder = MagicMock()
-        builder.restore = MagicMock()
-        return builder
-
-    def test_returns_partial_when_no_marker_present(self):
+class TestInterruptedAttemptCapture:
+    def test_keeps_partial_when_no_marker_present(self):
         session = _make_session(
             [
                 ChatMessage(role="user", content="hi"),
                 ChatMessage(role="assistant", content="part-1"),
             ]
         )
-        builder = self._builder_with_snap()
-        captured = _rollback_attempt_capturing_partial(
-            session, builder, transcript_snap=object(), pre_attempt_msg_count=1
-        )
-        assert [m.content for m in captured] == ["part-1"]
-        assert session.messages == [ChatMessage(role="user", content="hi")]
+        attempt = _InterruptedAttempt()
+        attempt.capture(session, _builder_stub(), object(), pre_attempt_msg_count=1)
+        assert [m.content for m in attempt.partial] == ["part-1"]
+        assert [m.content for m in session.messages] == ["hi"]
 
     def test_strips_trailing_error_marker(self):
-        # _run_stream_attempt appended a marker via _append_error_marker
-        # (e.g. idle timeout, circuit breaker) before raising
-        # _HandledStreamError. The rollback must NOT carry it forward, or
-        # the post-loop restore will replay the stale marker + add its own.
+        # _run_stream_attempt may append a marker (idle timeout, circuit
+        # breaker) before raising _HandledStreamError. Carrying it forward
+        # would let finalize() replay it and then add its own.
         marker = (
             f"{COPILOT_RETRYABLE_ERROR_PREFIX} The session has been idle "
             "for too long. Please try again."
@@ -208,66 +89,136 @@ class TestRollbackCapturingPartial:
                 ChatMessage(role="assistant", content=marker),
             ]
         )
-        captured = _rollback_attempt_capturing_partial(
-            session,
-            self._builder_with_snap(),
-            transcript_snap=object(),
-            pre_attempt_msg_count=1,
-        )
-        assert [m.content for m in captured] == ["part-1"]
+        attempt = _InterruptedAttempt()
+        attempt.capture(session, _builder_stub(), object(), pre_attempt_msg_count=1)
+        assert [m.content for m in attempt.partial] == ["part-1"]
 
     def test_strips_consecutive_error_markers(self):
-        # Defensive: if more than one marker landed back-to-back (legacy
-        # path or future regression), strip them all.
         session = _make_session(
             [
                 ChatMessage(role="user", content="hi"),
                 ChatMessage(role="assistant", content="part-1"),
                 ChatMessage(role="assistant", content=f"{COPILOT_ERROR_PREFIX} a"),
                 ChatMessage(
-                    role="assistant",
-                    content=f"{COPILOT_RETRYABLE_ERROR_PREFIX} b",
+                    role="assistant", content=f"{COPILOT_RETRYABLE_ERROR_PREFIX} b"
                 ),
             ]
         )
-        captured = _rollback_attempt_capturing_partial(
-            session,
-            self._builder_with_snap(),
-            transcript_snap=object(),
-            pre_attempt_msg_count=1,
-        )
-        assert [m.content for m in captured] == ["part-1"]
+        attempt = _InterruptedAttempt()
+        attempt.capture(session, _builder_stub(), object(), pre_attempt_msg_count=1)
+        assert [m.content for m in attempt.partial] == ["part-1"]
 
-    def test_does_not_strip_non_marker_assistant(self):
-        # Regular assistant text starting with similar-but-not-prefix
-        # content must be preserved — only the canonical error markers
-        # should be filtered.
+    def test_preserves_non_marker_assistant(self):
         session = _make_session(
             [
                 ChatMessage(role="user", content="hi"),
                 ChatMessage(role="assistant", content="Important note"),
             ]
         )
-        captured = _rollback_attempt_capturing_partial(
-            session,
-            self._builder_with_snap(),
-            transcript_snap=object(),
-            pre_attempt_msg_count=1,
+        attempt = _InterruptedAttempt()
+        attempt.capture(session, _builder_stub(), object(), pre_attempt_msg_count=1)
+        assert [m.content for m in attempt.partial] == ["Important note"]
+
+
+class TestInterruptedAttemptFinalize:
+    def test_appends_partial_then_marker(self):
+        session = _make_session([ChatMessage(role="user", content="hi")])
+        attempt = _InterruptedAttempt(
+            partial=[
+                ChatMessage(role="assistant", content="working"),
+                ChatMessage(role="tool", content="result", tool_call_id="t1"),
+            ]
         )
-        assert [m.content for m in captured] == ["Important note"]
+        attempt.finalize(session, state=None, display_msg="Boom", retryable=False)
+        roles = [m.role for m in session.messages]
+        assert roles == ["user", "assistant", "tool", "assistant"]
+        assert session.messages[-1].content.startswith(COPILOT_ERROR_PREFIX)
+        # partial consumed so a follow-up finalize() is a no-op for partial.
+        assert attempt.partial == []
+
+    def test_only_marker_when_partial_empty(self):
+        session = _make_session([ChatMessage(role="user", content="hi")])
+        attempt = _InterruptedAttempt()
+        attempt.finalize(session, state=None, display_msg="Boom", retryable=True)
+        assert len(session.messages) == 2
+        assert session.messages[-1].content.startswith(COPILOT_RETRYABLE_ERROR_PREFIX)
+
+    def test_noop_when_session_is_none(self):
+        attempt = _InterruptedAttempt(
+            partial=[ChatMessage(role="assistant", content="x")]
+        )
+        attempt.finalize(None, state=None, display_msg="Boom", retryable=False)
+        # no raise = pass
+
+    def test_flushes_unresolved_tools_between_partial_and_marker(self):
+        session = _make_session([ChatMessage(role="user", content="hi")])
+        attempt = _InterruptedAttempt(
+            partial=[
+                ChatMessage(
+                    role="assistant",
+                    content="calling",
+                    tool_calls=[
+                        {
+                            "id": "t1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        }
+                    ],
+                ),
+            ]
+        )
+        state = _adapter_with_unresolved([_tool_output("t1", "interrupted")])
+        attempt.finalize(session, state=state, display_msg="Boom", retryable=False)
+        roles = [m.role for m in session.messages]
+        assert roles == ["user", "assistant", "tool", "assistant"]
+        assert session.messages[2].tool_call_id == "t1"
+        assert session.messages[2].content == "interrupted"
+
+    def test_clear_drops_both_partial_and_handled_error(self):
+        attempt = _InterruptedAttempt(
+            partial=[ChatMessage(role="assistant", content="x")],
+            handled_error=_HandledErrorInfo(
+                error_msg="m", code="c", retryable=True, already_yielded=False
+            ),
+        )
+        attempt.clear()
+        assert attempt.partial == []
+        assert attempt.handled_error is None
+
+
+class TestFlushOrphanToolUses:
+    def test_appends_synthetic_tool_results_for_unresolved(self):
+        session = _make_session()
+        state = _adapter_with_unresolved(
+            [_tool_output("t1", "r1"), _tool_output("t2", {"ok": False})]
+        )
+        _flush_orphan_tool_uses_to_session(session, state)
+        assert [m.tool_call_id for m in session.messages] == ["t1", "t2"]
+        # Dict outputs are JSON-encoded so structure survives the str-only
+        # ChatMessage content field for the next-turn LLM read.
+        assert session.messages[1].content == '{"ok": false}'
+
+    def test_noop_when_state_is_none(self):
+        session = _make_session()
+        _flush_orphan_tool_uses_to_session(session, None)
+        assert session.messages == []
+
+    def test_noop_when_no_unresolved(self):
+        adapter = MagicMock()
+        adapter.has_unresolved_tool_calls = False
+        state = MagicMock()
+        state.adapter = adapter
+        _flush_orphan_tool_uses_to_session(_make_session(), state)
+        adapter._flush_unresolved_tool_calls.assert_not_called()
 
 
 class TestRetryRollbackContract:
-    """Property-style: a rolled-back attempt must be recoverable on final exit.
+    """End-to-end contract: capture on a rolled-back attempt + finalize yields
+    the exact content the user saw streaming live, plus the error marker."""
 
-    Simulates the retry loop's rollback by mirroring the exact slicing and
-    captured-list shape used in stream_chat_completion_sdk so that any drift
-    in that contract is caught here without needing the full SDK fixture.
-    """
-
-    def test_capture_slice_matches_rollback(self):
+    def test_capture_then_finalize_matches_streamed_sequence(self):
         session = _make_session([ChatMessage(role="user", content="hi")])
-        pre_attempt_msg_count = len(session.messages)
+        pre = len(session.messages)
         # Simulate incremental SDK appends during the attempt.
         session.messages.extend(
             [
@@ -275,18 +226,11 @@ class TestRetryRollbackContract:
                 ChatMessage(role="assistant", content="part-2"),
             ]
         )
-        captured = list(session.messages[pre_attempt_msg_count:])
-        session.messages = session.messages[:pre_attempt_msg_count]
-        # Final-failure restore.
-        _restore_partial_with_error_marker(
-            session,
-            state=None,
-            partial=captured,
-            display_msg="Boom",
-            retryable=False,
-        )
-        contents = [m.content for m in session.messages]
-        assert contents == [
+        attempt = _InterruptedAttempt()
+        attempt.capture(session, _builder_stub(), object(), pre)
+        # Final-failure path — no retry, no success clear().
+        attempt.finalize(session, state=None, display_msg="Boom", retryable=False)
+        assert [m.content for m in session.messages] == [
             "hi",
             "part-1",
             "part-2",
