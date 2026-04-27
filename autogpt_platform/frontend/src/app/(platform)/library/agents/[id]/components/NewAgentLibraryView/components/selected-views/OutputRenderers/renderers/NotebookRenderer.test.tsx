@@ -595,6 +595,30 @@ describe("notebookRenderer.render", () => {
     expect(container.innerHTML).not.toContain("onclick");
   });
 
+  it("keeps the output container when sanitization removes all markup", async () => {
+    const { container } = render(
+      notebookRenderer.render({
+        ...htmlOutputNotebook,
+        cells: [
+          {
+            ...htmlOutputNotebook.cells[0],
+            outputs: [
+              {
+                output_type: "display_data" as const,
+                data: { "text/html": "<script>alert(1)</script>" },
+              },
+            ],
+          },
+        ],
+      }) as React.ReactElement,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector(".overflow-x-auto")).not.toBeNull(),
+    );
+    expect(container.querySelector("script")).toBeNull();
+  });
+
   it("does not run DOMPurify during server rendering", () => {
     expect(() => {
       renderToString(

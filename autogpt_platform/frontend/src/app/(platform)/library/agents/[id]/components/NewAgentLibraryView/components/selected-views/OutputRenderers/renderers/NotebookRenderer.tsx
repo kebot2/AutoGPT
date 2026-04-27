@@ -182,13 +182,13 @@ function SanitizedNotebookMarkup({
   className: string;
   markup: string;
 }) {
-  const [sanitizedMarkup, setSanitizedMarkup] = useState("");
+  const [sanitizedMarkup, setSanitizedMarkup] = useState<string | null>(null);
 
   useEffect(() => {
     setSanitizedMarkup(sanitizeNotebookMarkup(markup));
   }, [markup]);
 
-  if (!sanitizedMarkup) return null;
+  if (sanitizedMarkup === null) return null;
 
   return (
     <div
