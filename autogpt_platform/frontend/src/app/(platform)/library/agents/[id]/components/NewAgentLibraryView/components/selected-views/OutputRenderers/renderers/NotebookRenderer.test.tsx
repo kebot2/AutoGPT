@@ -1,5 +1,6 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type React from "react";
+import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { notebookRenderer } from "./NotebookRenderer";
 
@@ -542,7 +543,7 @@ describe("notebookRenderer.render", () => {
     expect(img?.src).toContain("data:image/jpeg;base64,");
   });
 
-  it("renders display_data with sanitized image/svg+xml markup", () => {
+  it("renders display_data with sanitized image/svg+xml markup", async () => {
     const { container } = render(
       notebookRenderer.render({
         ...svgOutputNotebook,
@@ -562,13 +563,12 @@ describe("notebookRenderer.render", () => {
         ],
       }) as React.ReactElement,
     );
-    const svg = container.querySelector("svg");
-    expect(svg).not.toBeNull();
+    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
     expect(container.querySelector("script")).toBeNull();
     expect(container.innerHTML).not.toContain("onload");
   });
 
-  it("renders display_data with sanitized text/html markup", () => {
+  it("renders display_data with sanitized text/html markup", async () => {
     const { container } = render(
       notebookRenderer.render({
         ...htmlOutputNotebook,
@@ -588,10 +588,22 @@ describe("notebookRenderer.render", () => {
         ],
       }) as React.ReactElement,
     );
-    const table = container.querySelector("table");
-    expect(table).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("table")).not.toBeNull(),
+    );
     expect(container.querySelector("script")).toBeNull();
     expect(container.innerHTML).not.toContain("onclick");
+  });
+
+  it("does not run DOMPurify during server rendering", () => {
+    expect(() => {
+      renderToString(
+        notebookRenderer.render(htmlOutputNotebook) as React.ReactElement,
+      );
+      renderToString(
+        notebookRenderer.render(svgOutputNotebook) as React.ReactElement,
+      );
+    }).not.toThrow();
   });
 
   it("renders execute_result with text/plain fallback", () => {

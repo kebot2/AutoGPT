@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import DOMPurify from "dompurify";
 import remarkGfm from "remark-gfm";
@@ -175,6 +175,29 @@ function sanitizeNotebookMarkup(markup: string): string {
   });
 }
 
+function SanitizedNotebookMarkup({
+  className,
+  markup,
+}: {
+  className: string;
+  markup: string;
+}) {
+  const [sanitizedMarkup, setSanitizedMarkup] = useState("");
+
+  useEffect(() => {
+    setSanitizedMarkup(sanitizeNotebookMarkup(markup));
+  }, [markup]);
+
+  if (!sanitizedMarkup) return null;
+
+  return (
+    <div
+      className={className}
+      dangerouslySetInnerHTML={{ __html: sanitizedMarkup }}
+    />
+  );
+}
+
 function parseNotebook(value: unknown): Notebook | null {
   try {
     let obj: unknown = value;
@@ -293,23 +316,18 @@ function NotebookOutputBlock({ output }: { output: NotebookOutput }) {
     // image/svg+xml
     const svg = data["image/svg+xml"];
     if (svg) {
-      const sanitizedSVG = sanitizeNotebookMarkup(joinSource(svg));
       return (
-        <div
-          className="mt-1"
-          dangerouslySetInnerHTML={{ __html: sanitizedSVG }}
-        />
+        <SanitizedNotebookMarkup className="mt-1" markup={joinSource(svg)} />
       );
     }
 
     // text/html - render sanitized
     const html = data["text/html"];
     if (html) {
-      const sanitizedHTML = sanitizeNotebookMarkup(joinSource(html));
       return (
-        <div
+        <SanitizedNotebookMarkup
           className="mt-1 overflow-x-auto rounded bg-muted p-2 text-sm"
-          dangerouslySetInnerHTML={{ __html: sanitizedHTML }}
+          markup={joinSource(html)}
         />
       );
     }
