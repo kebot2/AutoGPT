@@ -223,14 +223,10 @@ function parseNotebook(value: unknown): Notebook | null {
 // canRender
 // ---------------------------------------------------------------------------
 
-function canRenderNotebook(value: unknown, metadata?: OutputMetadata): boolean {
-  if (
-    metadata?.type === "notebook" ||
-    metadata?.filename?.toLowerCase().endsWith(".ipynb") ||
-    metadata?.mimeType === "application/x-ipynb+json"
-  ) {
-    return parseNotebook(value) !== null;
-  }
+function canRenderNotebook(
+  value: unknown,
+  _metadata?: OutputMetadata,
+): boolean {
   return parseNotebook(value) !== null;
 }
 
