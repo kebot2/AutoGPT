@@ -24,7 +24,11 @@ const minimalNotebook = {
   nbformat: 4,
   nbformat_minor: 5,
   metadata: {
-    kernelspec: { language: "python", display_name: "Python 3", name: "python3" },
+    kernelspec: {
+      language: "python",
+      display_name: "Python 3",
+      name: "python3",
+    },
     language_info: { name: "python", version: "3.10.0" },
   },
   cells: [
@@ -157,7 +161,8 @@ const svgOutputNotebook = {
         {
           output_type: "display_data" as const,
           data: {
-            "image/svg+xml": '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>',
+            "image/svg+xml":
+              '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>',
           },
         },
       ],
@@ -324,32 +329,48 @@ const displayDataNoMatchNotebook = {
 // ---------------------------------------------------------------------------
 
 describe("notebookRenderer.canRender", () => {
-  it("matches metadata type 'notebook'", () => {
-    expect(notebookRenderer.canRender("anything", { type: "notebook" })).toBe(
-      true,
-    );
+  it("matches metadata type 'notebook' for valid notebook content", () => {
+    expect(
+      notebookRenderer.canRender(minimalNotebook, { type: "notebook" }),
+    ).toBe(true);
   });
 
-  it("matches .ipynb filename (case-insensitive)", () => {
+  it("matches .ipynb filename with valid notebook content", () => {
     expect(
-      notebookRenderer.canRender("anything", { filename: "analysis.ipynb" }),
+      notebookRenderer.canRender(minimalNotebook, {
+        filename: "analysis.ipynb",
+      }),
     ).toBe(true);
     expect(
-      notebookRenderer.canRender("anything", { filename: "REPORT.IPYNB" }),
+      notebookRenderer.canRender(minimalNotebook, { filename: "REPORT.IPYNB" }),
     ).toBe(true);
     expect(
-      notebookRenderer.canRender("anything", {
+      notebookRenderer.canRender(minimalNotebook, {
         filename: "data.Ipynb",
       }),
     ).toBe(true);
   });
 
-  it("matches application/x-ipynb+json mimeType", () => {
+  it("matches application/x-ipynb+json mimeType with valid notebook content", () => {
+    expect(
+      notebookRenderer.canRender(minimalNotebook, {
+        mimeType: "application/x-ipynb+json",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects notebook metadata when content is invalid", () => {
+    expect(notebookRenderer.canRender("anything", { type: "notebook" })).toBe(
+      false,
+    );
+    expect(
+      notebookRenderer.canRender("anything", { filename: "analysis.ipynb" }),
+    ).toBe(false);
     expect(
       notebookRenderer.canRender("anything", {
         mimeType: "application/x-ipynb+json",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("detects valid notebook object", () => {
@@ -371,9 +392,24 @@ describe("notebookRenderer.canRender", () => {
   });
 
   it("rejects object with non-array cells", () => {
-    expect(notebookRenderer.canRender({ nbformat: 4, cells: "not array" })).toBe(
-      false,
-    );
+    expect(
+      notebookRenderer.canRender({ nbformat: 4, cells: "not array" }),
+    ).toBe(false);
+  });
+
+  it("rejects notebook-shaped objects with invalid cells", () => {
+    expect(
+      notebookRenderer.canRender({
+        nbformat: 4,
+        cells: [{ source: "missing type" }],
+      }),
+    ).toBe(false);
+    expect(
+      notebookRenderer.canRender({
+        nbformat: 4,
+        cells: [{ cell_type: "code" }],
+      }),
+    ).toBe(false);
   });
 
   it("rejects invalid JSON string", () => {
@@ -415,40 +451,30 @@ describe("notebookRenderer.render", () => {
   });
 
   it("renders notebook header with language, version, nbformat, and cell count", () => {
-    render(
-      notebookRenderer.render(minimalNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(minimalNotebook) as React.ReactElement);
     expect(screen.getByText(/python 3\.10\.0/i)).toBeDefined();
     expect(screen.getByText("nbformat 4")).toBeDefined();
     expect(screen.getByText("1 cells")).toBeDefined();
   });
 
   it("renders code cell with execution count gutter", () => {
-    render(
-      notebookRenderer.render(minimalNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(minimalNotebook) as React.ReactElement);
     expect(screen.getByText("[1]:")).toBeDefined();
     expect(screen.getByText("print('hello')")).toBeDefined();
   });
 
   it("renders code cell with null execution count as [ ]:", () => {
-    render(
-      notebookRenderer.render(multiCellNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(multiCellNotebook) as React.ReactElement);
     expect(screen.getByText("[ ]:")).toBeDefined();
   });
 
   it("renders markdown cells", () => {
-    render(
-      notebookRenderer.render(multiCellNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(multiCellNotebook) as React.ReactElement);
     expect(screen.getByText("Hello World")).toBeDefined();
   });
 
   it("renders raw cells with content", () => {
-    render(
-      notebookRenderer.render(multiCellNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(multiCellNotebook) as React.ReactElement);
     expect(screen.getByText("raw content here")).toBeDefined();
   });
 
@@ -516,20 +542,56 @@ describe("notebookRenderer.render", () => {
     expect(img?.src).toContain("data:image/jpeg;base64,");
   });
 
-  it("renders display_data with image/svg+xml via dangerouslySetInnerHTML", () => {
+  it("renders display_data with sanitized image/svg+xml markup", () => {
     const { container } = render(
-      notebookRenderer.render(svgOutputNotebook) as React.ReactElement,
+      notebookRenderer.render({
+        ...svgOutputNotebook,
+        cells: [
+          {
+            ...svgOutputNotebook.cells[0],
+            outputs: [
+              {
+                output_type: "display_data" as const,
+                data: {
+                  "image/svg+xml":
+                    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle onload="alert(1)" r="10"/></svg>',
+                },
+              },
+            ],
+          },
+        ],
+      }) as React.ReactElement,
     );
     const svg = container.querySelector("svg");
     expect(svg).not.toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.innerHTML).not.toContain("onload");
   });
 
-  it("renders display_data with text/html via dangerouslySetInnerHTML", () => {
+  it("renders display_data with sanitized text/html markup", () => {
     const { container } = render(
-      notebookRenderer.render(htmlOutputNotebook) as React.ReactElement,
+      notebookRenderer.render({
+        ...htmlOutputNotebook,
+        cells: [
+          {
+            ...htmlOutputNotebook.cells[0],
+            outputs: [
+              {
+                output_type: "display_data" as const,
+                data: {
+                  "text/html":
+                    '<table onclick="alert(1)"><tr><td>cell</td></tr></table><script>alert(1)</script>',
+                },
+              },
+            ],
+          },
+        ],
+      }) as React.ReactElement,
     );
     const table = container.querySelector("table");
     expect(table).not.toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.innerHTML).not.toContain("onclick");
   });
 
   it("renders execute_result with text/plain fallback", () => {
@@ -540,17 +602,13 @@ describe("notebookRenderer.render", () => {
   });
 
   it("defaults to 'python' when no metadata is provided", () => {
-    render(
-      notebookRenderer.render(noMetadataNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(noMetadataNotebook) as React.ReactElement);
     const elements = screen.getAllByText("python");
     expect(elements.length).toBeGreaterThanOrEqual(1);
   });
 
   it("uses kernelspec language when language_info is absent", () => {
-    render(
-      notebookRenderer.render(kernelOnlyNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(kernelOnlyNotebook) as React.ReactElement);
     const elements = screen.getAllByText("R");
     expect(elements.length).toBeGreaterThanOrEqual(1);
   });
@@ -560,7 +618,8 @@ describe("notebookRenderer.render", () => {
       notebookRenderer.render(arraySourceNotebook) as React.ReactElement,
     );
     const codePre = Array.from(container.querySelectorAll("code")).find(
-      (el) => el.textContent?.includes("line1") && el.textContent?.includes("line2"),
+      (el) =>
+        el.textContent?.includes("line1") && el.textContent?.includes("line2"),
     );
     expect(codePre).toBeDefined();
   });
@@ -585,9 +644,7 @@ describe("notebookRenderer.render", () => {
   });
 
   it("renders cell count correctly for multiple cells", () => {
-    render(
-      notebookRenderer.render(multiCellNotebook) as React.ReactElement,
-    );
+    render(notebookRenderer.render(multiCellNotebook) as React.ReactElement);
     expect(screen.getByText("6 cells")).toBeDefined();
   });
 
@@ -610,7 +667,9 @@ describe("notebookRenderer.render", () => {
   it("returns null for display_data with no matching mime types", () => {
     expect(() =>
       render(
-        notebookRenderer.render(displayDataNoMatchNotebook) as React.ReactElement,
+        notebookRenderer.render(
+          displayDataNoMatchNotebook,
+        ) as React.ReactElement,
       ),
     ).not.toThrow();
   });
@@ -746,7 +805,7 @@ describe("notebookRenderer metadata", () => {
     expect(notebookRenderer.name).toBe("NotebookRenderer");
   });
 
-  it("has priority 33", () => {
-    expect(notebookRenderer.priority).toBe(33);
+  it("has priority 36", () => {
+    expect(notebookRenderer.priority).toBe(36);
   });
 });

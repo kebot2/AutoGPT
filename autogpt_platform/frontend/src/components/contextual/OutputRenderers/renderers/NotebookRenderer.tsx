@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
+import DOMPurify from "dompurify";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -69,6 +70,111 @@ function joinSource(source: string | string[]): string {
   return Array.isArray(source) ? source.join("") : source;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isSource(value: unknown): value is string | string[] {
+  return typeof value === "string" || isStringArray(value);
+}
+
+function isExecutionCount(value: unknown): value is number | null {
+  return value === null || typeof value === "number";
+}
+
+function isNotebookOutput(value: unknown): value is NotebookOutput {
+  if (!isRecord(value)) return false;
+
+  const outputType = value.output_type;
+  if (
+    outputType !== "stream" &&
+    outputType !== "display_data" &&
+    outputType !== "execute_result" &&
+    outputType !== "error"
+  ) {
+    return false;
+  }
+
+  if (
+    value.name !== undefined &&
+    value.name !== "stdout" &&
+    value.name !== "stderr"
+  ) {
+    return false;
+  }
+
+  if (value.text !== undefined && !isSource(value.text)) return false;
+
+  if (
+    value.data !== undefined &&
+    (!isRecord(value.data) || !Object.values(value.data).every(isSource))
+  ) {
+    return false;
+  }
+
+  if (
+    value.execution_count !== undefined &&
+    !isExecutionCount(value.execution_count)
+  ) {
+    return false;
+  }
+
+  if (value.ename !== undefined && typeof value.ename !== "string")
+    return false;
+  if (value.evalue !== undefined && typeof value.evalue !== "string") {
+    return false;
+  }
+  if (value.traceback !== undefined && !isStringArray(value.traceback)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isNotebookCell(value: unknown): value is NotebookCell {
+  if (!isRecord(value)) return false;
+
+  if (
+    value.cell_type !== "code" &&
+    value.cell_type !== "markdown" &&
+    value.cell_type !== "raw"
+  ) {
+    return false;
+  }
+
+  if (!isSource(value.source)) return false;
+
+  if (
+    value.outputs !== undefined &&
+    (!Array.isArray(value.outputs) || !value.outputs.every(isNotebookOutput))
+  ) {
+    return false;
+  }
+
+  if (
+    value.execution_count !== undefined &&
+    !isExecutionCount(value.execution_count)
+  ) {
+    return false;
+  }
+
+  if (value.metadata !== undefined && !isRecord(value.metadata)) return false;
+
+  return true;
+}
+
+function sanitizeNotebookMarkup(markup: string): string {
+  return DOMPurify.sanitize(markup, {
+    USE_PROFILES: { html: true, svg: true, svgFilters: true },
+  });
+}
+
 function parseNotebook(value: unknown): Notebook | null {
   try {
     let obj: unknown = value;
@@ -76,13 +182,13 @@ function parseNotebook(value: unknown): Notebook | null {
       obj = JSON.parse(value);
     }
     if (
-      obj !== null &&
-      typeof obj === "object" &&
-      "nbformat" in obj &&
-      "cells" in obj &&
-      Array.isArray((obj as any).cells)
+      isRecord(obj) &&
+      typeof obj.nbformat === "number" &&
+      Array.isArray(obj.cells) &&
+      obj.cells.every(isNotebookCell) &&
+      (obj.metadata === undefined || isRecord(obj.metadata))
     ) {
-      return obj as Notebook;
+      return obj as unknown as Notebook;
     }
   } catch {
     // not a notebook
@@ -95,9 +201,13 @@ function parseNotebook(value: unknown): Notebook | null {
 // ---------------------------------------------------------------------------
 
 function canRenderNotebook(value: unknown, metadata?: OutputMetadata): boolean {
-  if (metadata?.type === "notebook") return true;
-  if (metadata?.filename?.toLowerCase().endsWith(".ipynb")) return true;
-  if (metadata?.mimeType === "application/x-ipynb+json") return true;
+  if (
+    metadata?.type === "notebook" ||
+    metadata?.filename?.toLowerCase().endsWith(".ipynb") ||
+    metadata?.mimeType === "application/x-ipynb+json"
+  ) {
+    return parseNotebook(value) !== null;
+  }
   return parseNotebook(value) !== null;
 }
 
@@ -183,21 +293,23 @@ function NotebookOutputBlock({ output }: { output: NotebookOutput }) {
     // image/svg+xml
     const svg = data["image/svg+xml"];
     if (svg) {
+      const sanitizedSVG = sanitizeNotebookMarkup(joinSource(svg));
       return (
         <div
           className="mt-1"
-          dangerouslySetInnerHTML={{ __html: joinSource(svg) }}
+          dangerouslySetInnerHTML={{ __html: sanitizedSVG }}
         />
       );
     }
 
-    // text/html — render sanitised
+    // text/html - render sanitized
     const html = data["text/html"];
     if (html) {
+      const sanitizedHTML = sanitizeNotebookMarkup(joinSource(html));
       return (
         <div
           className="mt-1 overflow-x-auto rounded bg-muted p-2 text-sm"
-          dangerouslySetInnerHTML={{ __html: joinSource(html) }}
+          dangerouslySetInnerHTML={{ __html: sanitizedHTML }}
         />
       );
     }
@@ -397,7 +509,7 @@ function isConcatenableNotebook(
 
 export const notebookRenderer: OutputRenderer = {
   name: "NotebookRenderer",
-  priority: 33, // Between MarkdownRenderer (35) and CodeRenderer (30)
+  priority: 36,
   canRender: canRenderNotebook,
   render: renderNotebook,
   getCopyContent: getCopyContentNotebook,
