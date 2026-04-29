@@ -12,6 +12,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Step, useOnboardingWizardStore } from "./store";
 
+const LD_INIT_TIMEOUT_SECONDS = 5;
+
 function parseStep(value: string | null, maxStep: number): Step {
   const n = Number(value);
   if (Number.isInteger(n) && n >= 1 && n <= maxStep) return n as Step;
@@ -37,8 +39,11 @@ export function useOnboardingPage() {
   useEffect(() => {
     if (!ldEnabled || !ldClient || areFlagsReady) return;
     let cancelled = false;
+    // Use the same 5s timeout as LDProvider so the wizard never hangs
+    // when LaunchDarkly is unreachable; on timeout we fall back to the
+    // default flag values that useGetFlag already returns.
     ldClient
-      .waitForInitialization()
+      .waitForInitialization(LD_INIT_TIMEOUT_SECONDS)
       .catch(() => undefined)
       .finally(() => {
         if (!cancelled) setAreFlagsReady(true);
