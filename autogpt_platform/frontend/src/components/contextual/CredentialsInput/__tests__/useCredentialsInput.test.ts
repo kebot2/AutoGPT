@@ -217,4 +217,50 @@ describe("useCredentialsInput – handleScopeUpgrade", () => {
       undefined,
     );
   });
+
+  it("accepts wildcard scopes returned from OAuth callback", async () => {
+    const oAuthLoginMock = vi.fn().mockResolvedValue({
+      login_url: "https://accounts.google.com/o/oauth2/auth",
+      state_token: "state-wild",
+    });
+    mockUseBackendAPI.mockReturnValue({ oAuthLogin: oAuthLoginMock });
+
+    const oAuthCallback = vi.fn().mockResolvedValue(
+      makeCred({
+        id: "wildcard-cred",
+        scopes: ["*"],
+      }),
+    );
+
+    mockUseCredentials.mockReturnValue(
+      makeCredentialsReturn({ oAuthCallback }),
+    );
+
+    mockOpenOAuthPopup.mockReturnValue({
+      promise: Promise.resolve({ code: "wild-code", state: "state-wild" }),
+      cleanup: { abort: vi.fn() },
+    });
+
+    const onSelect = vi.fn();
+    const { result } = renderHook(() =>
+      useCredentialsInput({
+        schema: baseSchema,
+        onSelectCredential: onSelect,
+      }),
+    );
+
+    expect(result.current.isLoading).toBe(false);
+    if (result.current.isLoading) return;
+
+    await act(async () => {
+      await result.current.handleOAuthLogin!();
+    });
+
+    expect(onSelect).toHaveBeenCalledWith({
+      id: "wildcard-cred",
+      type: "oauth2",
+      title: "Test",
+      provider: "google",
+    });
+  });
 });

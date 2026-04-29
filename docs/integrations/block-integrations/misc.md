@@ -1408,9 +1408,9 @@ Unbans a user from a subreddit. Requires 'modcontributors' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-This block opens the subreddit with moderator credentials and removes the named user from the banned list via `sub.banned.remove(username)`. It requires the `modcontributors` scope because it changes moderator-managed contributor and ban state.
+This block opens the target subreddit with moderator credentials and calls `sub.banned.remove(username)` to remove the user from the community ban list. It requires the `modcontributors` scope, and on success it returns the `username`, `subreddit`, and `success=True` so the unban can be audited or chained into follow-up actions such as notifications.
 
-The outputs pass through the `username` and `subreddit` alongside `success=True`, making it straightforward to audit an appeal workflow or chain the result into notification and record-keeping steps.
+Reddit is responsible for validating the username, subreddit, and moderator permissions. If the username is malformed, the subreddit is missing, or the credential does not have sufficient moderator access, the Reddit API error is surfaced through the block's standard `error` output. In practice, repeated unban attempts are typically safe to treat as idempotent workflow steps: if another moderator already removed the ban, the operation should be logged as a no-op for auditability, while transient API failures or rate limits should be retried with normal backoff before escalating to a human moderator.
 <!-- END MANUAL -->
 
 ### Inputs
