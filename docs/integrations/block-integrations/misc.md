@@ -45,7 +45,9 @@ Approves a Reddit post or comment from the mod queue. Requires 'modposts' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block normalizes the incoming `post_id`, accepting either a bare submission ID or a Reddit fullname such as `t3_...` or `t1_...`. It then loads the correct PRAW object for a submission or comment and calls the moderator `approve()` action with credentials that include the `modposts` scope.
+
+On success, the block returns the original `post_id` and `success=True`, which makes it easy to chain directly from `Mod Queue` output without losing whether the item started as a comment or a submission.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -64,7 +66,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**False Positive Cleanup**: Approve items from the mod queue after an external classifier determines they are safe.
+
+**Appeal Handling**: Restore a previously filtered post or comment after a moderator reviews a user appeal.
+
+**Hybrid Moderation**: Combine automated queue scoring with a final approval step for borderline content.
 <!-- END MANUAL -->
 
 ---
@@ -124,7 +130,9 @@ Bans a user from a subreddit. Requires 'modcontributors' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block validates the optional `duration` before sending the request, rejects non-positive values, and truncates the internal `reason` and `mod_note` fields to Reddit's moderation limits. It then calls `sub.banned.add(...)`, optionally including a temporary duration and a user-facing `ban_message`.
+
+The outputs echo the target user and subreddit, plus `success` and a derived `permanent` flag so downstream steps can branch on temporary versus permanent bans. Use `reason` and `mod_note` for internal moderation context, and reserve `ban_message` for the explanation shown to the banned user.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -150,7 +158,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Escalation Workflow**: Ban repeat offenders automatically after multiple confirmed moderation violations.
+
+**Temporary Cooldown**: Apply short bans during heated incidents while moderators review the situation.
+
+**Policy Enforcement**: Pair user reporting or detection blocks with standardized ban actions and messaging.
 <!-- END MANUAL -->
 
 ---
@@ -813,7 +825,9 @@ Locks or unlocks a Reddit post or comment to prevent or allow replies. Requires 
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block resolves the target `post_id` to the correct Reddit object, so both submissions and comments can be locked or unlocked from the same input field. It then calls `lock()` when `lock=True` or `unlock()` when `lock=False`, using moderator credentials with the `modposts` scope.
+
+The block returns the original `post_id` plus the resulting `locked` state, which makes it useful in review pipelines where the moderation decision and final state need to be recorded explicitly.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -833,7 +847,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Thread Freeze**: Lock a post when discussion becomes abusive or starts attracting brigading.
+
+**Post-Resolution Cleanup**: Unlock a thread again after moderators have resolved the incident and want to reopen discussion.
+
+**Incident Playbooks**: Trigger lock or unlock actions automatically from moderation decision trees.
 <!-- END MANUAL -->
 
 ---
@@ -845,7 +863,9 @@ Fetches the mod queue for a subreddit. Requires moderator access.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block calls `sub.mod.modqueue(...)` for the target subreddit, forwarding the optional `only` filter and `limit` value to Reddit. Each returned PRAW item is normalized into a predictable dictionary with a fullname ID, detected item type, title fallback for comments, author, permalink, and moderator reason.
+
+The block emits every queue entry individually for fan-out workflows and also emits the full `items` list for batch processing. Because the `post_id` output keeps the Reddit fullname (`t1_...` or `t3_...`), downstream moderation blocks can safely act on comments and submissions without extra type checks.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -871,7 +891,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Queue Triage**: Pull the latest subreddit queue and route each item into approve, remove, or lock actions.
+
+**Moderator Dashboards**: Feed queued items into summaries, alerts, or external review systems for human moderators.
+
+**Policy Automation**: Filter only comments or only submissions when building specialized moderation pipelines.
 <!-- END MANUAL -->
 
 ---
@@ -1035,7 +1059,9 @@ Removes a Reddit post or comment as a moderator. Requires 'modposts' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block accepts either bare submission IDs or full Reddit thing IDs and resolves them to the correct submission or comment object before moderation. It calls `thing.mod.remove(...)`, forwarding the `spam` flag and truncating the optional `mod_note` to Reddit's 250-character moderator-note limit.
+
+The block returns the original `post_id` and a success flag so workflows can record or branch on the removal decision. Passing through fullnames from `Mod Queue` lets the same flow moderate queued comments and submissions without extra conversion.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -1056,7 +1082,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Spam Cleanup**: Remove obvious spam and optionally train Reddit's spam filter by marking it as spam.
+
+**Comment Moderation**: Use fullnames from `Mod Queue` to remove problematic comments without additional lookup steps.
+
+**Human-in-the-Loop Review**: Attach an internal moderator note when an automated rule removes borderline content.
 <!-- END MANUAL -->
 
 ---
@@ -1222,7 +1252,9 @@ Sends a modmail message from a subreddit to a user. Requires 'modmail' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block opens the target subreddit and creates a modmail conversation via `sub.modmail.create(...)` using the provided recipient, subject, and body. Because it uses the subreddit modmail endpoint, the credential must include the `modmail` scope and moderator access to that community.
+
+On success, the block returns the new conversation ID and `success=True`, which gives later steps a stable reference for logging or follow-up actions. Any Reddit API failure is surfaced through the standard `error` output.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -1244,7 +1276,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Appeal Responses**: Send official moderator replies when a user asks why content was removed or locked.
+
+**Proactive Outreach**: Notify a user about rule issues before escalating to stronger moderation actions.
+
+**Case Management**: Create modmail threads that can be referenced by later audit or follow-up steps.
 <!-- END MANUAL -->
 
 ---
@@ -1372,7 +1408,9 @@ Unbans a user from a subreddit. Requires 'modcontributors' scope.
 
 ### How it works
 <!-- MANUAL: how_it_works -->
-_Add technical explanation here._
+This block opens the subreddit with moderator credentials and removes the named user from the banned list via `sub.banned.remove(username)`. It requires the `modcontributors` scope because it changes moderator-managed contributor and ban state.
+
+The outputs pass through the `username` and `subreddit` alongside `success=True`, making it straightforward to audit an appeal workflow or chain the result into notification and record-keeping steps.
 <!-- END MANUAL -->
 
 ### Inputs
@@ -1393,7 +1431,11 @@ _Add technical explanation here._
 
 ### Possible use case
 <!-- MANUAL: use_case -->
-_Add practical use case examples here._
+**Appeal Resolution**: Restore access after a moderator approves a user's ban appeal.
+
+**Temporary Ban Expiry**: Pair scheduled workflows with unban actions when a manual review confirms the restriction should end.
+
+**Moderator Remediation**: Correct mistaken bans and immediately hand the result to a notification step.
 <!-- END MANUAL -->
 
 ---
