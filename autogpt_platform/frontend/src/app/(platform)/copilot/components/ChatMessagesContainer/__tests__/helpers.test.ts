@@ -237,6 +237,16 @@ describe("splitReasoningAndResponse", () => {
         types: parts.map((p) => p.type),
         toolPartIsInteractive: isInteractiveToolPart(parts[1]),
         responseTypeImport: ResponseType.task_decomposition,
+        flliCb: parts.findLastIndex((p) => p.type.startsWith("tool-")),
+        manualLastIdx: (() => {
+          for (let i = parts.length - 1; i >= 0; i--) {
+            if (parts[i].type.startsWith("tool-")) return i;
+          }
+          return -1;
+        })(),
+        startsWith1: parts[1].type.startsWith("tool-"),
+        type1typeof: typeof parts[1].type,
+        type1len: parts[1].type.length,
       }),
     );
     const { reasoning, response } = splitReasoningAndResponse(parts);
