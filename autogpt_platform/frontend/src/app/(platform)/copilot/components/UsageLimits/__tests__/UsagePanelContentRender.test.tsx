@@ -182,4 +182,73 @@ describe("UsagePanelContent", () => {
     render(<UsagePanelContent usage={makeUsage()} />);
     expect(screen.queryByText("File storage")).toBeNull();
   });
+
+  it("hides file storage bar when limit is zero", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 0,
+        limit_bytes: 0,
+        used_percent: 0,
+        file_count: 0,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.queryByText("File storage")).toBeNull();
+  });
+
+  it("shows orange bar when storage usage is at or above 80%", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 210 * 1024 * 1024,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 84,
+        file_count: 3,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText("File storage")).toBeDefined();
+    expect(screen.getByText("84% used")).toBeDefined();
+  });
+
+  it("shows singular 'file' for single file", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 1024,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 0,
+        file_count: 1,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText(/1 file$/)).toBeDefined();
+  });
+
+  it("shows storage '<1% used' when usage is tiny", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 100,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 0.001,
+        file_count: 1,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText("File storage")).toBeDefined();
+  });
+
+  it("renders header with tier label", () => {
+    render(<UsagePanelContent usage={makeUsage({ tier: "PRO" })} />);
+    expect(screen.getByText("Pro plan")).toBeDefined();
+  });
+
+  it("hides header when showHeader is false", () => {
+    render(
+      <UsagePanelContent usage={makeUsage()} showHeader={false} />,
+    );
+    expect(screen.queryByText("Usage limits")).toBeNull();
+  });
 });
