@@ -38,6 +38,37 @@ Input and output schemas define the expected data structure for communication be
 
 ---
 
+## Approve Reddit Post
+
+### What it is
+Approves a Reddit post or comment from the mod queue. Requires 'modposts' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| post_id | ID or fullname of the post/comment to approve, such as 't3_abc123', 't1_xyz789', or bare submission ID 'abc123' | str | Yes |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| post_id | ID of the approved post (pass-through) | str |
+| success | Whether the approval succeeded | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
+<!-- END MANUAL -->
+
+---
+
 ## AutoPilot
 
 ### What it is
@@ -82,6 +113,44 @@ Tool and block identifiers provided in `tools` and `blocks` are validated at run
 **Multi-Step AI Workflows**: Chain autopilot blocks where one gathers data and another analyzes it, enabling complex AI pipelines within the graph editor.
 
 **Sub-Agent Delegation**: Delegate a research or formatting task to a sub-autopilot while the parent agent handles orchestration.
+<!-- END MANUAL -->
+
+---
+
+## Ban Subreddit User
+
+### What it is
+Bans a user from a subreddit. Requires 'modcontributors' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| subreddit | Subreddit to ban the user from, excluding the /r/ prefix | str | Yes |
+| username | Reddit username to ban (without the u/ prefix) | str | Yes |
+| duration | Ban duration in days. Leave blank for a permanent ban. | int | No |
+| reason | Internal moderator-only ban reason (max 100 chars). Use ban_message to explain the ban to the user. | str | No |
+| mod_note | Internal moderator note (not shown to the user) | str | No |
+| ban_message | Optional custom message sent to the user explaining the ban | str | No |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| username | Banned username (pass-through) | str |
+| subreddit | Subreddit (pass-through) | str |
+| success | Whether the ban was applied | bool |
+| permanent | True if the ban is permanent | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
 <!-- END MANUAL -->
 
 ---
@@ -737,6 +806,76 @@ The sandbox persists until its timeout expires or it's explicitly disposed. Use 
 
 ---
 
+## Lock Reddit Post
+
+### What it is
+Locks or unlocks a Reddit post or comment to prevent or allow replies. Requires 'modposts' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| post_id | ID or fullname of the post/comment to lock or unlock | str | Yes |
+| lock | True to lock (disable comments/replies), False to unlock | bool | No |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| post_id | ID of the post (pass-through) | str |
+| locked | Current lock state after the action | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
+<!-- END MANUAL -->
+
+---
+
+## Mod Queue
+
+### What it is
+Fetches the mod queue for a subreddit. Requires moderator access.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| subreddit | Subreddit name, excluding the /r/ prefix | str | Yes |
+| limit | Maximum number of items to fetch from the mod queue | int | No |
+| only | Filter to only submissions or only comments. Leave blank for both. | "submissions" \| "comments" | No |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| post_id | Full Reddit thing ID of a queued item, such as 't3_abc123' or 't1_xyz789' | str |
+| item_type | Whether the queued item is a comment or submission | "comment" \| "submission" |
+| post_title | Title of the queued item | str |
+| author | Username of the author | str |
+| permalink | Full Reddit permalink | str |
+| reason | Mod queue reason (if any) | str |
+| items | All queued items as a list | List[Dict[str, Any]] |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
+<!-- END MANUAL -->
+
+---
+
 ## Post Reddit Comment
 
 ### What it is
@@ -885,6 +1024,39 @@ This block uses the Reddit API via PRAW to fetch posts you've submitted to Reddi
 **Content Management**: Review and manage your Reddit posting history.
 
 **Performance Tracking**: Analyze the engagement of your previous posts.
+<!-- END MANUAL -->
+
+---
+
+## Remove Reddit Post
+
+### What it is
+Removes a Reddit post or comment as a moderator. Requires 'modposts' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| post_id | ID or fullname of the post/comment to remove, such as 't3_abc123', 't1_xyz789', or bare submission ID 'abc123' | str | Yes |
+| spam | Mark as spam (True) or just remove (False). Spam trains the filter. | bool | No |
+| mod_note | Optional internal moderator note visible only to mods | str | No |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| post_id | ID of the removed post (pass-through) | str |
+| success | Whether the removal succeeded | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
 <!-- END MANUAL -->
 
 ---
@@ -1043,6 +1215,40 @@ The block handles connection, authentication, and message delivery, returning a 
 
 ---
 
+## Send Mod Mail
+
+### What it is
+Sends a modmail message from a subreddit to a user. Requires 'modmail' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| subreddit | Subreddit to send modmail from, excluding the /r/ prefix | str | Yes |
+| to_username | Username to send the modmail to (without u/ prefix) | str | Yes |
+| subject | Subject line of the modmail message | str | Yes |
+| body | Body of the modmail message | str | Yes |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| conversation_id | ID of the created modmail conversation | str |
+| success | Whether the modmail was sent | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
+<!-- END MANUAL -->
+
+---
+
 ## Send Reddit Message
 
 ### What it is
@@ -1155,6 +1361,39 @@ The transcript text is returned as a single string, suitable for summarization, 
 **Content Repurposing**: Convert YouTube content into written articles, social posts, or documentation.
 
 **Research Automation**: Transcribe educational or informational videos for analysis and note-taking.
+<!-- END MANUAL -->
+
+---
+
+## Unban Subreddit User
+
+### What it is
+Unbans a user from a subreddit. Requires 'modcontributors' scope.
+
+### How it works
+<!-- MANUAL: how_it_works -->
+_Add technical explanation here._
+<!-- END MANUAL -->
+
+### Inputs
+
+| Input | Description | Type | Required |
+|-------|-------------|------|----------|
+| subreddit | Subreddit to unban the user from, excluding the /r/ prefix | str | Yes |
+| username | Reddit username to unban (without the u/ prefix) | str | Yes |
+
+### Outputs
+
+| Output | Description | Type |
+|--------|-------------|------|
+| error | Error message if the operation failed | str |
+| username | Unbanned username (pass-through) | str |
+| subreddit | Subreddit (pass-through) | str |
+| success | Whether the unban succeeded | bool |
+
+### Possible use case
+<!-- MANUAL: use_case -->
+_Add practical use case examples here._
 <!-- END MANUAL -->
 
 ---
