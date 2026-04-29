@@ -87,6 +87,26 @@ describe("UsagePanelContent", () => {
     expect(screen.getByText("No usage limits configured")).toBeDefined();
   });
 
+  it("still renders file storage when usage windows are null", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 100 * 1024 * 1024,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 40,
+        file_count: 5,
+      },
+    });
+
+    render(
+      <UsagePanelContent
+        usage={makeUsage({ dailyPercent: null, weeklyPercent: null })}
+      />,
+    );
+
+    expect(screen.getByText("No usage limits configured")).toBeDefined();
+    expect(screen.getByText("File storage")).toBeDefined();
+  });
+
   it("renders the reset button when daily limit is exhausted", () => {
     render(
       <UsagePanelContent

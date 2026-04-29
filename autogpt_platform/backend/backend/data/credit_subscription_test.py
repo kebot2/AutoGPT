@@ -205,6 +205,68 @@ async def test_sync_subscription_from_stripe_cancelled():
 
 
 @pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_cancelled_applies_no_tier_storage_limit():
+    """After unsubscribe takes effect, workspace storage resolves against NO_TIER."""
+    from backend.copilot.rate_limit import get_workspace_storage_limit_bytes
+
+    mock_user = _make_user(tier=SubscriptionTier.PRO)
+    stripe_sub = {
+        "id": "sub_old",
+        "customer": "cus_123",
+        "status": "canceled",
+        "items": {"data": []},
+    }
+    empty_list = MagicMock()
+    empty_list.data = []
+    empty_list.has_more = False
+
+    async def _set_tier(_user_id: str, tier: SubscriptionTier) -> None:
+        mock_user.subscriptionTier = tier
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            return_value=empty_list,
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier",
+            new_callable=AsyncMock,
+            side_effect=_set_tier,
+        ),
+        patch(
+            "backend.copilot.rate_limit.get_user_tier",
+            new_callable=AsyncMock,
+            side_effect=lambda _user_id: mock_user.subscriptionTier,
+        ),
+        patch(
+            "backend.copilot.rate_limit.get_workspace_storage_limits_mb",
+            new_callable=AsyncMock,
+            return_value={
+                "NO_TIER": 250,
+                "BASIC": 500,
+                "PRO": 1024,
+                "MAX": 5 * 1024,
+                "BUSINESS": 15 * 1024,
+                "ENTERPRISE": 15 * 1024,
+            },
+        ),
+        patch.object(
+            get_pending_subscription_change,
+            "cache_delete",
+        ) as mock_pending_cache_delete,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        result = await get_workspace_storage_limit_bytes("user-1")
+
+    assert result == 250 * 1024 * 1024
+    mock_pending_cache_delete.assert_called_once_with("user-1")
+
+
+@pytest.mark.asyncio
 async def test_sync_subscription_from_stripe_cancelled_but_other_active_sub_exists():
     """Cancelling sub_old must NOT downgrade the user if sub_new is still active.
 

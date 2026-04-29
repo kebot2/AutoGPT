@@ -208,6 +208,38 @@ async def test_write_file_quota_exceeded_raises_value_error(
 
 
 @pytest.mark.asyncio
+async def test_write_file_rejects_upload_when_usage_already_exceeds_downgraded_limit(
+    manager, mock_storage, mock_db
+):
+    """Downgrading below current usage should block further uploads until usage drops."""
+    mock_db.get_workspace_file_by_path.return_value = None
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch(
+            "backend.util.workspace.scan_content_safe", new_callable=AsyncMock
+        ) as mock_scan,
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=250 * 1024 * 1024,
+        ),
+        patch(
+            "backend.util.workspace.get_workspace_total_size",
+            return_value=300 * 1024 * 1024,
+        ),
+    ):
+        with pytest.raises(ValueError, match="Storage limit exceeded"):
+            await manager.write_file(filename="test.txt", content=b"hello")
+
+    mock_scan.assert_not_called()
+    mock_storage.store.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_write_file_80pct_warning_logged(manager, mock_storage, mock_db, caplog):
     """write_file logs a warning when workspace usage crosses 80%."""
     created_file = _make_workspace_file()
