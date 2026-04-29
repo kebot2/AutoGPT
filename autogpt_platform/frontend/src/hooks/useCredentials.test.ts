@@ -71,6 +71,20 @@ describe("classifyCredentials", () => {
     expect(upgradeableCredentials).toEqual([]);
   });
 
+  it("classifies wildcard-scoped OAuth2 creds as saved", () => {
+    const schema = makeSchema({
+      credentials_scopes: ["modposts", "modcontributors"],
+    });
+    const { savedCredentials, upgradeableCredentials } = classifyCredentials(
+      [makeCred({ id: "wildcard", scopes: ["*"] })],
+      schema,
+      undefined,
+    );
+
+    expect(savedCredentials.map((c) => c.id)).toEqual(["wildcard"]);
+    expect(upgradeableCredentials).toEqual([]);
+  });
+
   it("classifies OAuth2 creds missing a scope as upgradeable (not discarded)", () => {
     // Regression coverage for the incremental-OAuth flow: a credential
     // that's missing only one scope must land in upgradeableCredentials so

@@ -66,13 +66,21 @@ class RedditOAuthHandler(BaseOAuthHandler):
         return f"{self.AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
 
     @staticmethod
-    def _get_granted_scopes(tokens: dict) -> list[str]:
+    def _get_granted_scopes(
+        tokens: dict, fallback_scopes: list[str] | None = None
+    ) -> list[str]:
         raw_scopes = tokens.get("scope", "")
         if isinstance(raw_scopes, str):
-            return raw_scopes.split()
-        if isinstance(raw_scopes, list):
-            return [scope for scope in raw_scopes if isinstance(scope, str)]
-        return []
+            granted_scopes = raw_scopes.split()
+        elif isinstance(raw_scopes, list):
+            granted_scopes = [scope for scope in raw_scopes if isinstance(scope, str)]
+        else:
+            granted_scopes = []
+
+        if not granted_scopes or "*" in granted_scopes:
+            return list(fallback_scopes or [])
+
+        return granted_scopes
 
     async def exchange_code_for_tokens(
         self, code: str, scopes: list[str], code_verifier: Optional[str]
@@ -110,7 +118,7 @@ class RedditOAuthHandler(BaseOAuthHandler):
             raise ValueError(f"Reddit OAuth error: {tokens.get('error')}")
 
         username = await self._get_username(tokens["access_token"])
-        granted_scopes = self._get_granted_scopes(tokens) or scopes
+        granted_scopes = self._get_granted_scopes(tokens, scopes)
 
         return OAuth2Credentials(
             provider=self.PROVIDER_NAME,
@@ -174,7 +182,7 @@ class RedditOAuthHandler(BaseOAuthHandler):
 
         username = await self._get_username(tokens["access_token"])
 
-        granted_scopes = self._get_granted_scopes(tokens) or credentials.scopes
+        granted_scopes = self._get_granted_scopes(tokens, credentials.scopes)
 
         # Reddit may or may not return a new refresh token
         new_refresh_token = tokens.get("refresh_token")

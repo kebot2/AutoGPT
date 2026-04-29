@@ -10,6 +10,7 @@ import { GraphExecutionMeta } from "@/app/api/__generated__/models/graphExecutio
 import { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import { LibraryAgentPreset } from "@/app/api/__generated__/models/libraryAgentPreset";
 import { useToast } from "@/components/molecules/Toast/use-toast";
+import { hasRequiredCredentialScopes } from "@/lib/credentials/hasRequiredCredentialScopes";
 import { isEmpty } from "@/lib/utils";
 import { CredentialsProvidersContext } from "@/providers/agent-credentials/credentials-provider";
 import { analytics } from "@/services/analytics";
@@ -110,9 +111,9 @@ export function useAgentRunModal(
               requiredScopes &&
               requiredScopes.length > 0
             ) {
-              const grantedScopes = new Set(cred.scopes || []);
-              const hasAllRequiredScopes = requiredScopes.every(
-                (scope: string) => grantedScopes.has(scope),
+              const hasAllRequiredScopes = hasRequiredCredentialScopes(
+                cred.scopes,
+                requiredScopes,
               );
               if (!hasAllRequiredScopes) return false;
             }

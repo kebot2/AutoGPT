@@ -353,6 +353,17 @@ class TestFindMatchingOAuth2Credential:
         result = find_matching_credential([cred], field_info)
         assert result is not None
 
+    def test_matches_credential_with_wildcard_scope(self):
+        """An OAuth2 credential with wildcard scope should satisfy any scope requirement."""
+        cred = self._make_oauth2_cred("reddit", scopes=["*"])
+        field_info = self._make_field_info(
+            ProviderName.REDDIT,
+            required_scopes=frozenset(["modposts"]),
+        )
+
+        result = find_matching_credential([cred], field_info)
+        assert result is not None
+
     def test_rejects_credential_with_insufficient_scopes(self):
         """An OAuth2 credential missing required scopes should not match."""
         cred = self._make_oauth2_cred(
