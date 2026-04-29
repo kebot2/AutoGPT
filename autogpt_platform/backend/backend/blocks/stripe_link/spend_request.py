@@ -4,15 +4,10 @@ Stripe Link — Spend Request blocks.
 These blocks interact with the Link API (api.link.com) to create, retrieve,
 and approve spend requests. A spend request provisions a one-time-use virtual
 card or shared payment token from the user's Link wallet.
-
-IMPORTANT: These are SKELETON implementations for exploration. The HTTP client
-logic (calling api.link.com) needs to be fleshed out, and the device-code auth
-flow needs to land before these can actually run.
 """
 
 import logging
 from typing import Any
-
 
 from backend.blocks.stripe_link._auth import (
     TEST_CREDENTIALS,
@@ -83,7 +78,7 @@ class StripeLinkListPaymentMethodsBlock(Block):
 
     def __init__(self):
         super().__init__(
-            id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",  # placeholder UUID
+            id="6eacc954-2218-4dc7-a485-5bf21549ecbe",
             description="List payment methods from a Stripe Link wallet",
             categories=set(),
             input_schema=self.Input,
@@ -204,7 +199,7 @@ class StripeLinkCreateSpendRequestBlock(Block):
 
     def __init__(self):
         super().__init__(
-            id="b2c3d4e5-f6a7-8901-bcde-f12345678901",  # placeholder UUID
+            id="932c3c12-1e80-4392-8fb3-37824eb8a427",
             description="Create a Stripe Link spend request for a one-time payment credential",
             categories=set(),
             input_schema=self.Input,
@@ -317,7 +312,7 @@ class StripeLinkRetrieveSpendRequestBlock(Block):
 
     def __init__(self):
         super().__init__(
-            id="c3d4e5f6-a7b8-9012-cdef-123456789012",  # placeholder UUID
+            id="1aff59ef-e8a2-413e-9410-4ce7e4849337",
             description="Retrieve a Stripe Link spend request and card credentials",
             categories=set(),
             input_schema=self.Input,

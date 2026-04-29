@@ -1,14 +1,16 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 from pydantic import BaseModel
 
 from backend.integrations.oauth.todoist import TodoistOAuthHandler
 
+from .device_base import BaseDeviceAuthHandler
 from .discord import DiscordOAuthHandler
 from .github import GitHubOAuthHandler
 from .google import GoogleOAuthHandler
 from .notion import NotionOAuthHandler
 from .reddit import RedditOAuthHandler
+from .stripe_link import StripeLinkDeviceAuthHandler
 from .twitter import TwitterOAuthHandler
 
 if TYPE_CHECKING:
@@ -227,4 +229,64 @@ HANDLERS_BY_NAME: dict[str, type["BaseOAuthHandler"]] = SDKAwareHandlersDict()
 CREDENTIALS_BY_PROVIDER: dict[str, SDKAwareCredentials] = SDKAwareCredentialsDict()
 # --8<-- [end:HANDLERS_BY_NAMEExample]
 
-__all__ = ["HANDLERS_BY_NAME"]
+# ------------------------------------------------------------------ #
+# Device Code Grant handlers (RFC 8628)
+# ------------------------------------------------------------------ #
+_ORIGINAL_DEVICE_HANDLERS: list[type[BaseDeviceAuthHandler]] = [
+    StripeLinkDeviceAuthHandler,
+]
+
+_device_handlers_dict: dict[str, type[BaseDeviceAuthHandler]] = {
+    (
+        handler.PROVIDER_NAME.value
+        if hasattr(handler.PROVIDER_NAME, "value")
+        else str(handler.PROVIDER_NAME)
+    ): handler
+    for handler in _ORIGINAL_DEVICE_HANDLERS
+}
+
+
+class DeviceHandlersDict(dict):
+    """Dictionary for device-code auth handlers."""
+
+    def __getitem__(self, key):
+        if key in _device_handlers_dict:
+            return _device_handlers_dict[key]
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        return _device_handlers_dict.get(key, default)
+
+    def __contains__(self, key):
+        return key in _device_handlers_dict
+
+    def keys(self):
+        return _device_handlers_dict.keys()
+
+    def values(self):
+        return _device_handlers_dict.values()
+
+    def items(self):
+        return _device_handlers_dict.items()
+
+
+DEVICE_HANDLERS_BY_NAME: dict[str, type[BaseDeviceAuthHandler]] = DeviceHandlersDict()
+
+# Unified lookup: any handler type for a given provider
+AnyAuthHandler = Union[type["BaseOAuthHandler"], type[BaseDeviceAuthHandler]]
+
+
+def get_any_handler(provider_key: str) -> AnyAuthHandler | None:
+    """Resolve an auth handler (auth-code or device-code) for a provider."""
+    if provider_key in HANDLERS_BY_NAME:
+        return HANDLERS_BY_NAME[provider_key]
+    if provider_key in DEVICE_HANDLERS_BY_NAME:
+        return DEVICE_HANDLERS_BY_NAME[provider_key]
+    return None
+
+
+__all__ = [
+    "HANDLERS_BY_NAME",
+    "DEVICE_HANDLERS_BY_NAME",
+    "get_any_handler",
+]

@@ -12,13 +12,18 @@ from backend.integrations.credentials_store import (
     IntegrationCredentialsStore,
     provider_matches,
 )
-from backend.integrations.oauth import CREDENTIALS_BY_PROVIDER, HANDLERS_BY_NAME
+from backend.integrations.oauth import (
+    CREDENTIALS_BY_PROVIDER,
+    DEVICE_HANDLERS_BY_NAME,
+    HANDLERS_BY_NAME,
+)
 from backend.integrations.providers import ProviderName
 from backend.util.exceptions import MissingConfigError
 from backend.util.settings import Settings
 
 if TYPE_CHECKING:
-    from backend.integrations.oauth import BaseOAuthHandler
+    from backend.integrations.oauth.base import BaseOAuthHandler
+    from backend.integrations.oauth.device_base import BaseDeviceAuthHandler
 
 logger = logging.getLogger(__name__)
 settings = Settings()
@@ -198,10 +203,21 @@ class IntegrationCredentialsManager:
 
     async def _get_oauth_handler(
         self, credentials: OAuth2Credentials
-    ) -> "BaseOAuthHandler":
+    ) -> "BaseOAuthHandler | BaseDeviceAuthHandler":
         """Resolve the appropriate OAuth handler for the given credentials."""
         if provider_matches(credentials.provider, ProviderName.MCP.value):
             return create_mcp_oauth_handler(credentials)
+
+        # Try device handlers first (they don't need client_id/secret lookup)
+        provider_key = (
+            credentials.provider.value
+            if hasattr(credentials.provider, "value")
+            else str(credentials.provider)
+        )
+        if provider_key in DEVICE_HANDLERS_BY_NAME:
+            handler_class = DEVICE_HANDLERS_BY_NAME[provider_key]
+            return handler_class()
+
         return await _get_provider_oauth_handler(credentials.provider)
 
     async def _refresh_locked(

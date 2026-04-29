@@ -55,7 +55,12 @@ from backend.integrations.managed_providers.ayrshare import AyrshareManagedProvi
 from backend.integrations.managed_providers.ayrshare import (
     settings_available as ayrshare_settings_available,
 )
-from backend.integrations.oauth import CREDENTIALS_BY_PROVIDER, HANDLERS_BY_NAME
+from backend.integrations.oauth import (
+    CREDENTIALS_BY_PROVIDER,
+    DEVICE_HANDLERS_BY_NAME,
+    HANDLERS_BY_NAME,
+)
+from backend.integrations.oauth.device_base import BaseDeviceAuthHandler
 from backend.integrations.providers import ProviderName
 from backend.integrations.webhooks import get_webhook_manager
 from backend.util.exceptions import (
@@ -248,6 +253,161 @@ async def callback(
     )
 
     return to_meta_response(credentials)
+
+
+# ================================================================== #
+# Device Code Grant endpoints (RFC 8628)
+# ================================================================== #
+
+
+class DeviceAuthInitiateResponse(BaseModel):
+    state_token: str
+    device_code: str
+    user_code: str
+    verification_url: str
+    verification_url_complete: str | None = None
+    expires_in: int
+    interval: int
+
+
+class DeviceAuthPollRequest(BaseModel):
+    state_token: str
+
+
+class DeviceAuthPollResponse(BaseModel):
+    status: str
+    credentials: CredentialsMetaResponse | None = None
+
+
+def _get_device_auth_handler(provider: ProviderName) -> BaseDeviceAuthHandler:
+    provider_key = provider.value if hasattr(provider, "value") else str(provider)
+    if provider_key not in DEVICE_HANDLERS_BY_NAME:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No device-auth handler for provider '{provider_key}'",
+        )
+    handler_class = DEVICE_HANDLERS_BY_NAME[provider_key]
+    return handler_class()
+
+
+@router.post(
+    "/{provider}/device-auth/initiate",
+    summary="Initiate device code OAuth flow",
+)
+async def device_auth_initiate(
+    provider: Annotated[
+        ProviderName,
+        Path(title="The provider to initiate device auth for"),
+    ],
+    user_id: Annotated[str, Security(get_user_id)],
+    scopes: Annotated[
+        str, Query(title="Comma-separated list of authorization scopes")
+    ] = "",
+) -> DeviceAuthInitiateResponse:
+    handler = _get_device_auth_handler(provider)
+    requested_scopes = scopes.split(",") if scopes else []
+    requested_scopes = handler.handle_default_scopes(requested_scopes)
+
+    try:
+        initiation = await handler.initiate_device_auth(requested_scopes)
+    except Exception as e:
+        logger.error(f"Device auth initiation failed for {provider}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to initiate device auth: {str(e)}",
+        )
+
+    # Store state with the provider's expiry (not hardcoded 10 min)
+    state_token, _ = await creds_manager.store.store_state_token(
+        user_id=user_id,
+        provider=provider.value if hasattr(provider, "value") else str(provider),
+        scopes=requested_scopes,
+        state_metadata={
+            "flow_type": "device_code",
+            "device_code": initiation.device_code,
+            "interval": initiation.interval,
+            "user_code": initiation.user_code,
+        },
+    )
+
+    return DeviceAuthInitiateResponse(
+        state_token=state_token,
+        device_code=initiation.device_code,
+        user_code=initiation.user_code,
+        verification_url=initiation.verification_url,
+        verification_url_complete=initiation.verification_url_complete,
+        expires_in=initiation.expires_in,
+        interval=initiation.interval,
+    )
+
+
+@router.post(
+    "/{provider}/device-auth/poll",
+    summary="Poll device code OAuth flow for completion",
+)
+async def device_auth_poll(
+    provider: Annotated[
+        ProviderName,
+        Path(title="The provider to poll device auth for"),
+    ],
+    body: DeviceAuthPollRequest,
+    user_id: Annotated[str, Security(get_user_id)],
+) -> DeviceAuthPollResponse:
+    handler = _get_device_auth_handler(provider)
+
+    # Non-consuming read — state survives across many polls
+    valid_state = await creds_manager.store.peek_state_token(
+        user_id, body.state_token, provider
+    )
+    if not valid_state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired state token",
+        )
+
+    device_code = valid_state.state_metadata.get("device_code")
+    if not device_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="State token is not for a device code flow",
+        )
+
+    try:
+        result = await handler.poll_for_tokens(device_code)
+    except Exception as e:
+        logger.error(f"Device auth poll failed for {provider}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Device auth poll failed: {str(e)}",
+        )
+
+    if result.status in ("pending", "slow_down"):
+        return DeviceAuthPollResponse(status=result.status)
+
+    # Terminal state — consume the token so it can't be reused
+    await creds_manager.store.consume_state_token(user_id, body.state_token, provider)
+
+    if result.status == "approved" and result.credentials:
+        credentials = result.credentials
+        credentials.scopes = handler.handle_default_scopes(credentials.scopes)
+
+        if len(credentials.scopes) == 1 and " " in credentials.scopes[0]:
+            credentials.scopes = credentials.scopes[0].split(" ")
+
+        credentials = await _merge_or_create_credential(
+            user_id, provider, credentials, valid_state.credential_id
+        )
+
+        logger.debug(
+            f"Device auth approved for user {user_id} " f"and provider {provider.value}"
+        )
+        return DeviceAuthPollResponse(
+            status="approved",
+            credentials=to_meta_response(credentials),
+        )
+
+    # denied / expired
+    return DeviceAuthPollResponse(status=result.status)
 
 
 # Bound the first-time sweep so a slow upstream (e.g. Ayrshare) can't hang

@@ -6,6 +6,7 @@ import {
   type ConnectableProvider,
 } from "../../helpers";
 import { ApiKeyConnectForm } from "./ApiKeyConnectForm";
+import { DeviceAuthConnectButton } from "./DeviceAuthConnectButton";
 import { OAuthConnectButton } from "./OAuthConnectButton";
 import { UnsupportedNotice } from "./UnsupportedNotice";
 
@@ -14,6 +15,7 @@ const TAB_LABEL: Record<AuthMethod, string> = {
   [AuthType.api_key]: "API key",
   [AuthType.user_password]: "User / password",
   [AuthType.host_scoped]: "Host",
+  [AuthType.device_code]: "Device auth",
 };
 
 interface Props {
@@ -35,6 +37,15 @@ export function MethodPanel({ method, provider, onSuccess }: Props) {
   if (method === AuthType.api_key) {
     return (
       <ApiKeyConnectForm
+        provider={provider.id}
+        providerName={provider.name}
+        onSuccess={onSuccess}
+      />
+    );
+  }
+  if (method === AuthType.device_code) {
+    return (
+      <DeviceAuthConnectButton
         provider={provider.id}
         providerName={provider.name}
         onSuccess={onSuccess}
