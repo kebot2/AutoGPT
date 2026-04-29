@@ -307,3 +307,210 @@ async def test_write_file_overwrite_not_double_counted(manager, mock_storage, mo
             filename="test.txt", content=content, overwrite=True
         )
     assert result == created_file
+
+
+@pytest.mark.asyncio
+async def test_write_file_zero_limit_bypasses_quota_check(
+    manager, mock_storage, mock_db
+):
+    """When limit is 0 (internal sentinel, not reachable via LD), quota is skipped."""
+    created_file = _make_workspace_file()
+    mock_db.get_workspace_file_by_path.return_value = None
+    mock_db.create_workspace_file.return_value = created_file
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=0,  # Zero limit → uncapped
+        ),
+        patch(
+            "backend.util.workspace.get_workspace_total_size",
+            return_value=999_999_999,  # Huge existing usage
+        ),
+    ):
+        # Should NOT raise — zero limit means no enforcement
+        result = await manager.write_file(filename="big.txt", content=b"data")
+    assert result == created_file
+
+
+@pytest.mark.asyncio
+async def test_write_file_exactly_at_limit_is_rejected(manager, mock_storage, mock_db):
+    """Writing a file that puts usage at exactly the limit should be rejected
+    because projected_usage > storage_limit (not >=)."""
+    mock_db.get_workspace_file_by_path.return_value = None
+
+    limit = 100
+    current = 95
+    content = b"x" * 6  # 95 + 6 = 101 > 100
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=limit,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=current),
+    ):
+        with pytest.raises(ValueError, match="Storage limit exceeded"):
+            await manager.write_file(filename="test.txt", content=content)
+
+
+@pytest.mark.asyncio
+async def test_write_file_exactly_at_limit_boundary_succeeds(
+    manager, mock_storage, mock_db
+):
+    """Writing a file that puts usage at exactly the limit should succeed
+    because the guard is > not >=."""
+    created_file = _make_workspace_file()
+    mock_db.get_workspace_file_by_path.return_value = None
+    mock_db.create_workspace_file.return_value = created_file
+
+    limit = 100
+    current = 95
+    content = b"x" * 5  # 95 + 5 = 100 == limit → NOT > limit → passes
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=limit,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=current),
+    ):
+        result = await manager.write_file(filename="test.txt", content=content)
+    assert result == created_file
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_larger_replacement_rejected(
+    manager, mock_storage, mock_db
+):
+    """Replacing a small file with a much larger one near quota is rejected."""
+    existing_file = _make_workspace_file(size_bytes=10)
+    mock_db.get_workspace_file_by_path.return_value = existing_file
+
+    limit = 100
+    current = 90  # 90 bytes used, existing file is 10 of those
+    content = b"x" * 25  # net: 90 - 10 + 25 = 105 > 100
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=limit,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=current),
+    ):
+        with pytest.raises(ValueError, match="Storage limit exceeded"):
+            await manager.write_file(
+                filename="test.txt", content=content, overwrite=True
+            )
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_smaller_replacement_succeeds(
+    manager, mock_storage, mock_db
+):
+    """Replacing a large file with a smaller one near quota succeeds."""
+    existing_file = _make_workspace_file(size_bytes=40)
+    created_file = _make_workspace_file()
+    mock_db.get_workspace_file_by_path.return_value = existing_file
+    mock_db.create_workspace_file.return_value = created_file
+
+    limit = 100
+    current = 90  # 90 bytes used, existing file is 40 of those
+    content = b"x" * 30  # net: 90 - 40 + 30 = 80 < 100
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=limit,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=current),
+    ):
+        result = await manager.write_file(
+            filename="test.txt", content=content, overwrite=True
+        )
+    assert result == created_file
+
+
+@pytest.mark.asyncio
+async def test_write_file_quota_rejection_skips_virus_scan_and_storage(
+    manager, mock_storage, mock_db
+):
+    """Quota rejection must short-circuit BEFORE expensive virus scan and storage."""
+    mock_db.get_workspace_file_by_path.return_value = None
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch(
+            "backend.util.workspace.scan_content_safe", new_callable=AsyncMock
+        ) as mock_scan,
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=100,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=100),
+    ):
+        with pytest.raises(ValueError, match="Storage limit exceeded"):
+            await manager.write_file(filename="test.txt", content=b"data")
+
+    mock_scan.assert_not_called()
+    mock_storage.store.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_write_file_empty_content_near_limit_succeeds(
+    manager, mock_storage, mock_db
+):
+    """Empty file (0 bytes) should always fit even when at the limit."""
+    created_file = _make_workspace_file()
+    mock_db.get_workspace_file_by_path.return_value = None
+    mock_db.create_workspace_file.return_value = created_file
+
+    with (
+        patch(
+            "backend.util.workspace.get_workspace_storage",
+            return_value=mock_storage,
+        ),
+        patch("backend.util.workspace.workspace_db", return_value=mock_db),
+        patch("backend.util.workspace.scan_content_safe", new_callable=AsyncMock),
+        patch(
+            "backend.util.workspace.get_workspace_storage_limit_bytes",
+            return_value=100,
+        ),
+        patch("backend.util.workspace.get_workspace_total_size", return_value=100),
+    ):
+        result = await manager.write_file(filename="empty.txt", content=b"")
+    assert result == created_file

@@ -255,9 +255,10 @@ async def _fetch_workspace_storage_limits_flag() -> dict[SubscriptionTier, int] 
     :data:`_DEFAULT_TIER_WORKSPACE_STORAGE_MB`.
 
     The LD value is expected to be a JSON object keyed by tier enum name
-    (``{"NO_TIER": 250, "PRO": 1024, "BUSINESS": 15360}``). Non-int or
-    negative values are skipped so a broken key degrades to the code default
-    instead of wiping out the limit.
+    (``{"NO_TIER": 250, "PRO": 1024, "BUSINESS": 15360}``). Non-int,
+    negative, or zero values are skipped so a broken key degrades to the
+    code default instead of wiping out the limit.  Zero is rejected because
+    downstream guards treat ``storage_limit == 0`` as "uncapped".
     """
     # Lazy import: rate_limit -> feature_flag -> settings -> ... -> rate_limit.
     from backend.util.feature_flag import Flag, get_feature_flag_value
@@ -288,9 +289,9 @@ async def _fetch_workspace_storage_limits_flag() -> dict[SubscriptionTier, int] 
                 value,
             )
             continue
-        if value < 0:
+        if value <= 0:
             logger.warning(
-                "Negative LD value for copilot-tier-workspace-storage-limits[%s]: %r",
+                "Non-positive LD value for copilot-tier-workspace-storage-limits[%s]: %r",
                 key,
                 value,
             )

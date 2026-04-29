@@ -75,6 +75,29 @@ describe("formatBytes", () => {
   ])("formats %d bytes as %s", (input, expected) => {
     expect(formatBytes(input)).toBe(expected);
   });
+
+  // Adversarial edge cases
+  it("handles 1 byte", () => {
+    expect(formatBytes(1)).toBe("1 B");
+  });
+
+  it("handles exactly 1023 bytes (just under 1 KB)", () => {
+    expect(formatBytes(1023)).toBe("1023 B");
+  });
+
+  it("auto-promotes 1 MB - 1 byte to MB (rounds up to 1024 KB → 1.0 MB)", () => {
+    // 1048575 / 1024 = 1023.999 → Math.round = 1024 → kb >= 1024 → promotes to MB
+    expect(formatBytes(1048575)).toBe("1.0 MB");
+  });
+
+  it("auto-promotes 1 GB - 1 byte to GB (rounds up to 1024 MB → 1.0 GB)", () => {
+    // 1073741823 / (1024*1024) = 1023.999 → Math.round = 1024 → promotes to GB
+    expect(formatBytes(1073741823)).toBe("1.0 GB");
+  });
+
+  it("handles very large values (1 TB)", () => {
+    expect(formatBytes(1024 * 1024 * 1024 * 1024)).toBe("1024.0 GB");
+  });
 });
 
 describe("UsagePanelContent", () => {
@@ -246,9 +269,108 @@ describe("UsagePanelContent", () => {
   });
 
   it("hides header when showHeader is false", () => {
-    render(
-      <UsagePanelContent usage={makeUsage()} showHeader={false} />,
-    );
+    render(<UsagePanelContent usage={makeUsage()} showHeader={false} />);
     expect(screen.queryByText("Usage limits")).toBeNull();
+  });
+
+  // Adversarial edge cases
+
+  it("hides storage bar when limit is negative", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 100,
+        limit_bytes: -1,
+        used_percent: 0,
+        file_count: 1,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.queryByText("File storage")).toBeNull();
+  });
+
+  it("handles storage at exactly 100% used", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 250 * 1024 * 1024,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 100,
+        file_count: 10,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText("100% used")).toBeDefined();
+    expect(screen.getByText(/250 MB of 250 MB/)).toBeDefined();
+  });
+
+  it("clamps storage above 100% to 100% display", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 300 * 1024 * 1024,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 120,
+        file_count: 15,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    // Should show "100% used", not "120% used"
+    expect(screen.getByText("100% used")).toBeDefined();
+    expect(screen.getByText("File storage")).toBeDefined();
+  });
+
+  it("handles zero files with zero usage", () => {
+    mockStorageData.mockReturnValue({
+      data: {
+        used_bytes: 0,
+        limit_bytes: 250 * 1024 * 1024,
+        used_percent: 0,
+        file_count: 0,
+      },
+    });
+
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText("File storage")).toBeDefined();
+    expect(screen.getByText("0% used")).toBeDefined();
+    expect(screen.getByText(/0 files/)).toBeDefined();
+  });
+
+  it("renders billing link by default", () => {
+    render(<UsagePanelContent usage={makeUsage()} />);
+    expect(screen.getByText("Learn more about usage limits")).toBeDefined();
+  });
+
+  it("hides billing link when showBillingLink is false", () => {
+    render(<UsagePanelContent usage={makeUsage()} showBillingLink={false} />);
+    expect(screen.queryByText("Learn more about usage limits")).toBeNull();
+  });
+
+  it("renders only daily bar when weekly is null", () => {
+    render(
+      <UsagePanelContent
+        usage={makeUsage({ dailyPercent: 50, weeklyPercent: null })}
+      />,
+    );
+    expect(screen.getByText("Today")).toBeDefined();
+    expect(screen.queryByText("This week")).toBeNull();
+  });
+
+  it("renders only weekly bar when daily is null", () => {
+    render(
+      <UsagePanelContent
+        usage={makeUsage({ dailyPercent: null, weeklyPercent: 30 })}
+      />,
+    );
+    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.getByText("This week")).toBeDefined();
+  });
+
+  it("does not show tier label when tier is missing", () => {
+    const usage = makeUsage();
+    (usage as Record<string, unknown>).tier = null;
+    render(<UsagePanelContent usage={usage} />);
+    expect(screen.queryByText(/plan$/)).toBeNull();
+    expect(screen.getByText("Usage limits")).toBeDefined();
   });
 });

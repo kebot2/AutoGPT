@@ -1955,3 +1955,204 @@ class TestWorkspaceStorageLimits:
         ):
             result = await get_workspace_storage_limit_bytes("user-1")
         assert result == 250 * 1024 * 1024
+
+
+class TestWorkspaceStorageLimitsAdversarial:
+    """Adversarial edge-case tests for workspace storage limit resolution."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_flag_cache(self):
+        _fetch_workspace_storage_limits_flag.cache_clear()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_ld_zero_values_are_rejected(self):
+        """LD zero values must be rejected — 0 is the 'uncapped' sentinel downstream."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={"BASIC": 0, "PRO": 0},
+        ):
+            result = await get_workspace_storage_limits_mb()
+        # Zero rejected → falls back to code defaults
+        assert (
+            result["BASIC"]
+            == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.BASIC]
+        )
+        assert result["PRO"] == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.PRO]
+
+    @pytest.mark.asyncio
+    async def test_ld_zero_override_does_not_bypass_quota(self):
+        """A zero LD override must not result in 0 bytes (which bypasses quota)."""
+        _fetch_workspace_storage_limits_flag.cache_clear()  # type: ignore[attr-defined]
+        with (
+            patch(
+                "backend.copilot.rate_limit.get_user_tier",
+                return_value=SubscriptionTier.BASIC,
+            ),
+            patch(
+                "backend.util.feature_flag.get_feature_flag_value",
+                new_callable=AsyncMock,
+                return_value={"BASIC": 0},
+            ),
+        ):
+            result = await get_workspace_storage_limit_bytes("user-1")
+        # Zero rejected → falls back to default 250 MB in bytes
+        assert result == 250 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    async def test_ld_bool_values_are_rejected(self):
+        """Booleans masquerading as ints (True=1, False=0) must be rejected."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={"PRO": True, "MAX": False},
+        ):
+            result = await get_workspace_storage_limits_mb()
+        # PRO and MAX should keep their defaults, not become 1 and 0
+        assert result["PRO"] == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.PRO]
+        assert result["MAX"] == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.MAX]
+
+    @pytest.mark.asyncio
+    async def test_ld_float_values_are_rejected(self):
+        """Floats in LD payload should be rejected — must be int."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={"PRO": 1024.5},
+        ):
+            result = await get_workspace_storage_limits_mb()
+        assert result["PRO"] == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.PRO]
+
+    @pytest.mark.asyncio
+    async def test_ld_empty_object_falls_back_to_defaults(self):
+        """Empty LD payload {} → parsed is empty → None → defaults."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={},
+        ):
+            result = await get_workspace_storage_limits_mb()
+        assert result == {
+            t.value: mb for t, mb in _DEFAULT_TIER_WORKSPACE_STORAGE_MB.items()
+        }
+
+    @pytest.mark.asyncio
+    async def test_ld_list_instead_of_dict_falls_back(self):
+        """LD returns a list instead of dict → rejected → defaults."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value=[250, 1024, 5120],
+        ):
+            result = await get_workspace_storage_limits_mb()
+        assert result == {
+            t.value: mb for t, mb in _DEFAULT_TIER_WORKSPACE_STORAGE_MB.items()
+        }
+
+    @pytest.mark.asyncio
+    async def test_ld_extremely_large_values_accepted(self):
+        """Very large LD values shouldn't be clipped — trust LD config."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={"ENTERPRISE": 999_999_999},
+        ):
+            result = await get_workspace_storage_limits_mb()
+        assert result["ENTERPRISE"] == 999_999_999
+
+    @pytest.mark.asyncio
+    async def test_ld_mixed_valid_and_garbage_keys(self):
+        """Mixed payload: valid overrides applied, garbage ignored."""
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            return_value={
+                "PRO": 2048,
+                "": 100,
+                "null": 100,
+                "NO_TIER": -5,
+                "BASIC": "abc",
+                "MAX": True,
+                "ENTERPRISE": 30720,
+            },
+        ):
+            result = await get_workspace_storage_limits_mb()
+        # Only PRO and ENTERPRISE should be overridden
+        assert result["PRO"] == 2048
+        assert result["ENTERPRISE"] == 30720
+        # Everything else keeps defaults
+        assert (
+            result["BASIC"]
+            == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.BASIC]
+        )
+        assert (
+            result["NO_TIER"]
+            == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.NO_TIER]
+        )
+        assert result["MAX"] == _DEFAULT_TIER_WORKSPACE_STORAGE_MB[SubscriptionTier.MAX]
+
+    @pytest.mark.asyncio
+    async def test_tier_transition_pro_to_no_tier_reduces_limit(self):
+        """Simulating unsubscribe: PRO user → NO_TIER gets lower limit."""
+        _fetch_workspace_storage_limits_flag.cache_clear()  # type: ignore[attr-defined]
+        # PRO tier
+        with patch(
+            "backend.copilot.rate_limit.get_user_tier",
+            return_value=SubscriptionTier.PRO,
+        ):
+            pro_limit = await get_workspace_storage_limit_bytes("user-1")
+        # Unsubscribe → NO_TIER
+        _fetch_workspace_storage_limits_flag.cache_clear()  # type: ignore[attr-defined]
+        with patch(
+            "backend.copilot.rate_limit.get_user_tier",
+            return_value=SubscriptionTier.NO_TIER,
+        ):
+            no_tier_limit = await get_workspace_storage_limit_bytes("user-1")
+        assert pro_limit == 1024 * 1024 * 1024  # 1 GB
+        assert no_tier_limit == 250 * 1024 * 1024  # 250 MB
+        assert no_tier_limit < pro_limit
+
+    @pytest.mark.asyncio
+    async def test_all_tiers_are_monotonically_increasing(self):
+        """Storage limits should be monotonically non-decreasing across tiers."""
+        tier_order = [
+            SubscriptionTier.NO_TIER,
+            SubscriptionTier.BASIC,
+            SubscriptionTier.PRO,
+            SubscriptionTier.MAX,
+            SubscriptionTier.BUSINESS,
+            SubscriptionTier.ENTERPRISE,
+        ]
+        limits = [_DEFAULT_TIER_WORKSPACE_STORAGE_MB[t] for t in tier_order]
+        for i in range(1, len(limits)):
+            assert limits[i] >= limits[i - 1], (
+                f"{tier_order[i].name} ({limits[i]} MB) < "
+                f"{tier_order[i - 1].name} ({limits[i - 1]} MB)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_flag_fetches_share_cache(self):
+        """Multiple concurrent calls should only hit LD once (caching)."""
+        call_count = 0
+
+        async def counting_flag(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"PRO": 2048}
+
+        with patch(
+            "backend.util.feature_flag.get_feature_flag_value",
+            new_callable=AsyncMock,
+            side_effect=counting_flag,
+        ):
+            import asyncio
+
+            results = await asyncio.gather(
+                get_workspace_storage_limits_mb(),
+                get_workspace_storage_limits_mb(),
+                get_workspace_storage_limits_mb(),
+            )
+        # All results should be identical
+        assert all(r == results[0] for r in results)
+        # Flag should have been fetched at most once due to caching
+        assert call_count <= 1
