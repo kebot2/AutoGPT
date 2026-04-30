@@ -56,9 +56,12 @@ export function ExportCreditTransactionsButton() {
     }
     setExporting(true);
     try {
+      const startDate = dateInputToUtcIso(start);
+      const endDate = dateInputToUtcIsoEnd(end);
+      if (!startDate || !endDate) return;
       const response = await getV2ExportCreditTransactions({
-        start: dateInputToUtcIso(start) as unknown as Date,
-        end: dateInputToUtcIsoEnd(end) as unknown as Date,
+        start: startDate,
+        end: endDate,
         transaction_type:
           typeFilter === "ALL"
             ? undefined

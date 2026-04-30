@@ -720,8 +720,8 @@ async def get_platform_cost_logs(
 EXPORT_MAX_ROWS = 100_000
 
 # Caps for the copilot weekly-usage CSV export.  Window cap matches the credit
-# transactions export so finance has a consistent shape; row cap protects the
-# API from a wildcard query that would scan an entire production cohort.
+# transactions export (CREDIT_EXPORT_MAX_DAYS in backend/data/credit.py) so
+# finance has a consistent shape across both exports — keep them in sync.
 COPILOT_USAGE_EXPORT_MAX_DAYS = 90
 COPILOT_USAGE_EXPORT_MAX_ROWS = 100_000
 
@@ -786,12 +786,15 @@ async def get_copilot_weekly_usage_for_export(
     # transitively imports back into this module at startup.
     from backend.copilot.config import ChatConfig
     from backend.copilot.rate_limit import (
-        _DEFAULT_TIER_MULTIPLIERS,
         DEFAULT_TIER,
         SubscriptionTier,
+        get_tier_multipliers,
     )
 
     base_weekly = ChatConfig().weekly_cost_limit_microdollars
+    # Use the LD-aware multipliers so percent_used reflects the limit that's
+    # actually enforced for each user, not the static default.
+    tier_multipliers = await get_tier_multipliers()
 
     out: list[CopilotWeeklyUsageRow] = []
     for r in rows:
@@ -805,7 +808,7 @@ async def get_copilot_weekly_usage_for_export(
             tier_enum = SubscriptionTier(tier_str)
         except ValueError:
             tier_enum = DEFAULT_TIER
-        multiplier = _DEFAULT_TIER_MULTIPLIERS.get(tier_enum, 1.0)
+        multiplier = tier_multipliers.get(tier_enum.value, 1.0)
         weekly_limit = int(base_weekly * multiplier)
         if weekly_limit > 0:
             percent_used = round(100.0 * cost / weekly_limit, 2)

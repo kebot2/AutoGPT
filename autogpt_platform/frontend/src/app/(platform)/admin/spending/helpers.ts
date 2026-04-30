@@ -84,20 +84,24 @@ export function downloadCsv(csv: string, filename: string): void {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // Defer revoke so the browser has time to start the download stream —
+  // some browsers (older Firefox/Edge, mobile WebViews) cancel the download
+  // if the object URL is revoked synchronously after click().
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-// "YYYY-MM-DD" -> ISO timestamp at UTC midnight.
-export function dateInputToUtcIso(input: string): string {
-  if (!input) return "";
-  return new Date(`${input}T00:00:00Z`).toISOString();
+// "YYYY-MM-DD" -> Date at UTC midnight.  Returning a real Date lets orval's
+// generated client serialize via toISOString() in the URL builder.
+export function dateInputToUtcIso(input: string): Date | null {
+  if (!input) return null;
+  return new Date(`${input}T00:00:00Z`);
 }
 
 // Same conversion but pinned to end-of-day so the inclusive `end` filter
 // covers the entire selected day.
-export function dateInputToUtcIsoEnd(input: string): string {
-  if (!input) return "";
-  return new Date(`${input}T23:59:59.999Z`).toISOString();
+export function dateInputToUtcIsoEnd(input: string): Date | null {
+  if (!input) return null;
+  return new Date(`${input}T23:59:59.999Z`);
 }
 
 export function defaultStartDate(): string {

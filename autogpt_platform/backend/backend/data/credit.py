@@ -2633,7 +2633,7 @@ async def admin_export_user_history(
     async def _resolve_admin_email(admin_id: str) -> str:
         if admin_id in admin_id_to_email:
             return admin_id_to_email[admin_id]
-        email = await get_user_email_by_id(admin_id) or f"Unknown Admin: {admin_id}"
+        email = await get_user_email_by_id(admin_id) or ""
         admin_id_to_email[admin_id] = email
         return email
 
