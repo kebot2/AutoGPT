@@ -2577,3 +2577,83 @@ async def admin_get_user_history(
             page_size=page_size,
         ),
     )
+
+
+# Limits for credit-transaction CSV export. Window cap matches a typical
+# finance-month query; row cap protects the API from accidental wide pulls
+# (one big tenant can easily exceed 100k rows in 90 days).
+CREDIT_EXPORT_MAX_DAYS = 90
+CREDIT_EXPORT_MAX_ROWS = 100_000
+
+
+async def admin_export_user_history(
+    start: datetime,
+    end: datetime,
+    transaction_type: CreditTransactionType | None = None,
+    user_id: str | None = None,
+) -> list[UserTransaction]:
+    """Return all CreditTransactions in the [start, end] window for export.
+
+    Caps the window at CREDIT_EXPORT_MAX_DAYS and the row count at
+    CREDIT_EXPORT_MAX_ROWS — callers should validate the window before calling
+    so the user sees a 4xx instead of a silently truncated CSV.
+    """
+    if end < start:
+        raise ValueError("end must be >= start")
+    if (end - start).days > CREDIT_EXPORT_MAX_DAYS:
+        raise ValueError(
+            f"Export window must be <= {CREDIT_EXPORT_MAX_DAYS} days "
+            f"(got {(end - start).days} days)"
+        )
+
+    where: CreditTransactionWhereInput = {
+        "createdAt": {"gte": start, "lte": end},
+    }
+    if transaction_type:
+        where["type"] = transaction_type
+    if user_id:
+        where["userId"] = user_id
+
+    total = await CreditTransaction.prisma().count(where=where)
+    if total > CREDIT_EXPORT_MAX_ROWS:
+        raise ValueError(
+            f"Export would return {total} rows (cap is {CREDIT_EXPORT_MAX_ROWS}); "
+            "narrow the window or add filters."
+        )
+
+    transactions = await CreditTransaction.prisma().find_many(
+        where=where,
+        include={"User": True},
+        order={"createdAt": "desc"},
+        take=CREDIT_EXPORT_MAX_ROWS,
+    )
+
+    admin_id_to_email: dict[str, str] = {}
+
+    async def _resolve_admin_email(admin_id: str) -> str:
+        if admin_id in admin_id_to_email:
+            return admin_id_to_email[admin_id]
+        email = await get_user_email_by_id(admin_id) or f"Unknown Admin: {admin_id}"
+        admin_id_to_email[admin_id] = email
+        return email
+
+    history: list[UserTransaction] = []
+    for tx in transactions:
+        metadata: dict = cast(dict, tx.metadata) or {}
+        admin_id = metadata.get("admin_id") or ""
+        admin_email = await _resolve_admin_email(admin_id) if admin_id else ""
+        reason = metadata.get("reason", "") if metadata else ""
+        history.append(
+            UserTransaction(
+                transaction_key=tx.transactionKey,
+                transaction_time=tx.createdAt,
+                transaction_type=tx.type,
+                amount=tx.amount,
+                running_balance=tx.runningBalance or 0,
+                user_id=tx.userId,
+                user_email=tx.User.email if tx.User else None,
+                reason=reason,
+                admin_email=admin_email,
+            )
+        )
+    return history

@@ -719,6 +719,112 @@ async def get_platform_cost_logs(
 
 EXPORT_MAX_ROWS = 100_000
 
+# Caps for the copilot weekly-usage CSV export.  Window cap matches the credit
+# transactions export so finance has a consistent shape; row cap protects the
+# API from a wildcard query that would scan an entire production cohort.
+COPILOT_USAGE_EXPORT_MAX_DAYS = 90
+COPILOT_USAGE_EXPORT_MAX_ROWS = 100_000
+
+
+class CopilotWeeklyUsageRow(BaseModel):
+    user_id: str
+    user_email: str | None = None
+    week_start: datetime
+    week_end: datetime
+    copilot_cost_microdollars: int
+    tier: str
+    weekly_limit_microdollars: int
+    percent_used: float
+
+
+async def get_copilot_weekly_usage_for_export(
+    start: datetime,
+    end: datetime,
+) -> list[CopilotWeeklyUsageRow]:
+    """Aggregate copilot:* PlatformCostLog rows by (user, ISO week) for export.
+
+    Joins User to surface the email and subscription tier in a single query,
+    then computes the per-tier weekly limit using the same defaults
+    `get_global_rate_limits` falls back to (LaunchDarkly overrides aren't
+    materialised here — finance pulls the **steady-state** allowance, which
+    is what they need to size limits against).
+    """
+    if end < start:
+        raise ValueError("end must be >= start")
+    if (end - start).days > COPILOT_USAGE_EXPORT_MAX_DAYS:
+        raise ValueError(
+            f"Export window must be <= {COPILOT_USAGE_EXPORT_MAX_DAYS} days "
+            f"(got {(end - start).days} days)"
+        )
+
+    rows = await query_raw_with_schema(
+        'SELECT log."userId" AS user_id,'
+        '  u."email" AS user_email,'
+        '  u."subscriptionTier" AS tier,'
+        "  date_trunc('week', log.\"createdAt\") AS week_start,"
+        '  SUM(COALESCE(log."costMicrodollars", 0))::bigint AS cost_microdollars'
+        ' FROM {schema_prefix}"PlatformCostLog" log'
+        ' LEFT JOIN {schema_prefix}"User" u ON u."id" = log."userId"'
+        ' WHERE log."createdAt" >= $1::timestamptz'
+        '   AND log."createdAt" <= $2::timestamptz'
+        "   AND log.\"blockName\" ILIKE 'copilot:%'"
+        ' GROUP BY log."userId", u."email", u."subscriptionTier",'
+        "   date_trunc('week', log.\"createdAt\")"
+        " ORDER BY week_start ASC, cost_microdollars DESC"
+        f" LIMIT {COPILOT_USAGE_EXPORT_MAX_ROWS + 1}",
+        start,
+        end,
+    )
+
+    if len(rows) > COPILOT_USAGE_EXPORT_MAX_ROWS:
+        raise ValueError(
+            f"Export would return {len(rows)} rows (cap is "
+            f"{COPILOT_USAGE_EXPORT_MAX_ROWS}); narrow the window."
+        )
+
+    # Lazy import: backend.copilot.config and rate_limit pull settings which
+    # transitively imports back into this module at startup.
+    from backend.copilot.config import ChatConfig
+    from backend.copilot.rate_limit import (
+        _DEFAULT_TIER_MULTIPLIERS,
+        DEFAULT_TIER,
+        SubscriptionTier,
+    )
+
+    base_weekly = ChatConfig().weekly_cost_limit_microdollars
+
+    out: list[CopilotWeeklyUsageRow] = []
+    for r in rows:
+        week_start: datetime = r["week_start"]
+        if week_start.tzinfo is None:
+            week_start = week_start.replace(tzinfo=timezone.utc)
+        week_end = week_start + timedelta(days=7)
+        cost = int(r.get("cost_microdollars") or 0)
+        tier_str = r.get("tier") or DEFAULT_TIER.value
+        try:
+            tier_enum = SubscriptionTier(tier_str)
+        except ValueError:
+            tier_enum = DEFAULT_TIER
+        multiplier = _DEFAULT_TIER_MULTIPLIERS.get(tier_enum, 1.0)
+        weekly_limit = int(base_weekly * multiplier)
+        if weekly_limit > 0:
+            percent_used = round(100.0 * cost / weekly_limit, 2)
+        else:
+            percent_used = 0.0
+        out.append(
+            CopilotWeeklyUsageRow(
+                user_id=r["user_id"],
+                user_email=r.get("user_email"),
+                week_start=week_start,
+                week_end=week_end,
+                copilot_cost_microdollars=cost,
+                tier=tier_enum.value,
+                weekly_limit_microdollars=weekly_limit,
+                percent_used=percent_used,
+            )
+        )
+    return out
+
 
 async def get_platform_cost_logs_for_export(
     start: datetime | None = None,
