@@ -2682,6 +2682,13 @@ async def admin_export_user_history(
     balance).  Pass `include_inactive=True` to surface them when debugging
     why a checkout never completed.
     """
+    # Normalize naive datetimes to UTC so direct API callers that send
+    # `2026-01-01T00:00:00` (no tz) don't trip a TypeError when subtracted
+    # against an aware `2026-01-31T00:00:00Z` partner.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     if end < start:
         raise ValueError("end must be >= start")
     # Compare timedeltas directly so 90d + any sub-day remainder still trips
