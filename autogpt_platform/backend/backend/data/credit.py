@@ -883,15 +883,11 @@ class UserCredit(UserCreditBase):
         if not metadata.get("reason"):
             match top_up_type:
                 case TopUpType.MANUAL:
-                    metadata["reason"] = {"reason": f"Top up credits for {user_id}"}
+                    metadata["reason"] = f"Top up credits for {user_id}"
                 case TopUpType.AUTO:
-                    metadata["reason"] = {
-                        "reason": f"Auto top up credits for {user_id}"
-                    }
+                    metadata["reason"] = f"Auto top up credits for {user_id}"
                 case _:
-                    metadata["reason"] = {
-                        "reason": f"Top up reason unknown for {user_id}"
-                    }
+                    metadata["reason"] = f"Top up reason unknown for {user_id}"
 
         if amount < 0:
             raise ValueError(f"Top up amount must not be negative: {amount}")

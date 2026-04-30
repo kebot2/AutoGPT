@@ -3127,6 +3127,53 @@ async def test_top_up_intent_writes_top_up_with_reason_metadata():
 
 
 @pytest.mark.asyncio
+async def test_top_up_credits_writes_flat_reason_string():
+    """_top_up_credits used to wrap reason as {"reason": {"reason": "..."}}.
+    Confirm the metadata reason is now a flat string for all TopUpType
+    branches so downstream readers (export, dashboard) don't have to unwrap."""
+    from backend.data.credit import TopUpType, UserCredit
+    from backend.util.json import SafeJson
+
+    credit_system = UserCredit()
+
+    for top_up_type, expected_substring in (
+        (TopUpType.MANUAL, "Top up credits for"),
+        (TopUpType.AUTO, "Auto top up credits for"),
+        (TopUpType.UNCATEGORIZED, "Top up reason unknown for"),
+    ):
+        add_tx_mock = AsyncMock(return_value=(0, "txkey"))
+        with (
+            patch(
+                "backend.data.credit.get_stripe_customer_id",
+                new_callable=AsyncMock,
+                return_value="cus_123",
+            ),
+            # Force the no-payment-method path so the function raises after
+            # _add_transaction — we only need to inspect the metadata it wrote.
+            patch(
+                "backend.data.credit.stripe.PaymentMethod.list",
+                new=MagicMock(return_value=[]),
+            ),
+            patch.object(credit_system, "_add_transaction", add_tx_mock),
+        ):
+            with pytest.raises(ValueError, match="No payment method found"):
+                await credit_system._top_up_credits(
+                    user_id="user-1",
+                    amount=100,
+                    top_up_type=top_up_type,
+                )
+
+        kwargs = add_tx_mock.await_args.kwargs
+        metadata = kwargs["metadata"]
+        assert isinstance(metadata, SafeJson)
+        assert isinstance(metadata.data["reason"], str), (
+            f"reason must be a flat string for {top_up_type}, "
+            f"got {type(metadata.data['reason'])}"
+        )
+        assert expected_substring in metadata.data["reason"]
+
+
+@pytest.mark.asyncio
 async def test_grant_credits_writes_grant_not_top_up():
     """grant_credits writes a GRANT row and never touches Stripe — TOP_UP is
     reserved for actual user-initiated Stripe checkouts."""
