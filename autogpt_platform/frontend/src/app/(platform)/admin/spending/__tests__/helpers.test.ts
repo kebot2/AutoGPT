@@ -140,14 +140,11 @@ describe("dateInputToUtcIso / dateInputToUtcIsoEnd", () => {
   });
 
   test("anchors start to UTC midnight of the input date", () => {
-    const d = dateInputToUtcIso("2026-03-15");
-    expect(d).toBeInstanceOf(Date);
-    expect(d?.toISOString()).toBe("2026-03-15T00:00:00.000Z");
+    expect(dateInputToUtcIso("2026-03-15")).toBe("2026-03-15T00:00:00.000Z");
   });
 
   test("anchors end to UTC end-of-day so the inclusive filter covers the day", () => {
-    const d = dateInputToUtcIsoEnd("2026-03-15");
-    expect(d?.toISOString()).toBe("2026-03-15T23:59:59.999Z");
+    expect(dateInputToUtcIsoEnd("2026-03-15")).toBe("2026-03-15T23:59:59.999Z");
   });
 });
 

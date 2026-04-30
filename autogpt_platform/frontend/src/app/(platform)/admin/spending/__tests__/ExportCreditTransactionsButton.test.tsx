@@ -6,6 +6,7 @@ import {
   cleanup,
 } from "@/tests/integrations/test-utils";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { ExportCreditTransactionsButton } from "../components/ExportCreditTransactionsButton";
 
 const toastSpy = vi.fn();
@@ -46,10 +47,11 @@ describe("ExportCreditTransactionsButton", () => {
   });
 
   test("surfaces a 400 detail in the toast when the API rejects the window", async () => {
-    exportSpy.mockResolvedValue({
-      status: 400,
-      data: { detail: "Export window must be <= 90 days (got 200.00 days)" },
-    });
+    exportSpy.mockRejectedValue(
+      new ApiError("Export window must be <= 90 days (got 200.00 days)", 400, {
+        detail: "Export window must be <= 90 days (got 200.00 days)",
+      }),
+    );
     render(<ExportCreditTransactionsButton />);
     fireEvent.click(screen.getByRole("button", { name: /Export CSV/i }));
     await waitFor(() => screen.getByLabelText(/Start date/i));

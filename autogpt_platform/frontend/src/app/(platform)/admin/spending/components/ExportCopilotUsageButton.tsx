@@ -6,7 +6,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { getV2ExportCopilotWeeklyUsageVsRateLimit } from "@/app/api/__generated__/endpoints/admin/admin";
-import { okData } from "@/app/api/helpers";
+import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import {
   buildCopilotUsageCsv,
   dateInputToUtcIso,
@@ -44,26 +44,16 @@ export function ExportCopilotUsageButton() {
     }
     setExporting(true);
     try {
-      const startDate = dateInputToUtcIso(start);
-      const endDate = dateInputToUtcIsoEnd(end);
-      if (!startDate || !endDate) return;
+      const startIso = dateInputToUtcIso(start);
+      const endIso = dateInputToUtcIsoEnd(end);
+      if (!startIso || !endIso) return;
+      // Pass ISO strings as-is — orval calls .toString() on Date params, which
+      // produces a localised string FastAPI rejects (422). Strings round-trip.
       const response = await getV2ExportCopilotWeeklyUsageVsRateLimit({
-        start: startDate,
-        end: endDate,
+        start: startIso as unknown as Date,
+        end: endIso as unknown as Date,
       });
-      const data = okData(response);
-      if (!data) {
-        const status = (response as { status?: number }).status;
-        const detail =
-          (response as { data?: { detail?: string } }).data?.detail ??
-          "Export failed";
-        toast({
-          title: status === 400 ? "Window too large" : "Export failed",
-          description: detail,
-          variant: "destructive",
-        });
-        return;
-      }
+      const data = response.data;
       const csv = buildCopilotUsageCsv(data.rows);
       downloadCsv(csv, `copilot_weekly_usage_${start}_${end}.csv`);
       toast({
@@ -71,6 +61,25 @@ export function ExportCopilotUsageButton() {
         description: `${data.total_rows} (user, week) rows downloaded.`,
       });
       setOpen(false);
+    } catch (err) {
+      // customMutator throws ApiError on non-2xx. Surface backend cap-exceed
+      // detail (400) so the operator can narrow their range without a refresh.
+      if (err instanceof ApiError) {
+        const detail =
+          (err.response as { detail?: string } | undefined)?.detail ??
+          err.message;
+        toast({
+          title: err.status === 400 ? "Window too large" : "Export failed",
+          description: detail,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Export failed",
+          description: err instanceof Error ? err.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
     } finally {
       setExporting(false);
     }

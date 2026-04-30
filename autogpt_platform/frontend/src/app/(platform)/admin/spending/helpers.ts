@@ -86,18 +86,19 @@ export function downloadCsv(csv: string, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-// "YYYY-MM-DD" -> Date at UTC midnight.  Returning a real Date lets orval's
-// generated client serialize via toISOString() in the URL builder.
-export function dateInputToUtcIso(input: string): Date | null {
+// "YYYY-MM-DD" -> ISO 8601 UTC string. The orval URL builder calls .toString()
+// on params, which on a Date produces a localised string FastAPI rejects (422);
+// returning a string keeps .toString() a no-op and the ISO format intact.
+export function dateInputToUtcIso(input: string): string | null {
   if (!input) return null;
-  return new Date(`${input}T00:00:00Z`);
+  return new Date(`${input}T00:00:00Z`).toISOString();
 }
 
 // Same conversion but pinned to end-of-day so the inclusive `end` filter
 // covers the entire selected day.
-export function dateInputToUtcIsoEnd(input: string): Date | null {
+export function dateInputToUtcIsoEnd(input: string): string | null {
   if (!input) return null;
-  return new Date(`${input}T23:59:59.999Z`);
+  return new Date(`${input}T23:59:59.999Z`).toISOString();
 }
 
 // Use UTC arithmetic so the default 30-day window matches the UI's UTC label

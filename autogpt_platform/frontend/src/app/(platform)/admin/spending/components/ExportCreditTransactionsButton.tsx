@@ -13,7 +13,7 @@ import {
 } from "@/components/__legacy__/ui/select";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { getV2ExportCreditTransactions } from "@/app/api/__generated__/endpoints/admin/admin";
-import { okData } from "@/app/api/helpers";
+import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { CreditTransactionType } from "@/app/api/__generated__/models/creditTransactionType";
 import {
   buildCreditTransactionsCsv,
@@ -66,31 +66,21 @@ export function ExportCreditTransactionsButton() {
     }
     setExporting(true);
     try {
-      const startDate = dateInputToUtcIso(start);
-      const endDate = dateInputToUtcIsoEnd(end);
-      if (!startDate || !endDate) return;
+      const startIso = dateInputToUtcIso(start);
+      const endIso = dateInputToUtcIsoEnd(end);
+      if (!startIso || !endIso) return;
+      // Pass ISO strings as-is — orval calls .toString() on Date params, which
+      // produces a localised string FastAPI rejects (422). Strings round-trip.
       const response = await getV2ExportCreditTransactions({
-        start: startDate,
-        end: endDate,
+        start: startIso as unknown as Date,
+        end: endIso as unknown as Date,
         transaction_type:
           typeFilter === "ALL"
             ? undefined
             : (typeFilter as CreditTransactionType),
         user_id: userId.trim() || undefined,
       });
-      const data = okData(response);
-      if (!data) {
-        const status = (response as { status?: number }).status;
-        const detail =
-          (response as { data?: { detail?: string } }).data?.detail ??
-          "Export failed";
-        toast({
-          title: status === 400 ? "Window too large" : "Export failed",
-          description: detail,
-          variant: "destructive",
-        });
-        return;
-      }
+      const data = response.data;
       const csv = buildCreditTransactionsCsv(data.transactions);
       downloadCsv(csv, `credit_transactions_${start}_${end}.csv`);
       toast({
@@ -98,6 +88,25 @@ export function ExportCreditTransactionsButton() {
         description: `${data.total_rows} transactions downloaded.`,
       });
       setOpen(false);
+    } catch (err) {
+      // customMutator throws ApiError on non-2xx. Surface backend cap-exceed
+      // detail (400) so the operator can narrow their range without a refresh.
+      if (err instanceof ApiError) {
+        const detail =
+          (err.response as { detail?: string } | undefined)?.detail ??
+          err.message;
+        toast({
+          title: err.status === 400 ? "Window too large" : "Export failed",
+          description: detail,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Export failed",
+          description: err instanceof Error ? err.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
     } finally {
       setExporting(false);
     }

@@ -6,6 +6,7 @@ import {
   cleanup,
 } from "@/tests/integrations/test-utils";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { ExportCopilotUsageButton } from "../components/ExportCopilotUsageButton";
 
 const toastSpy = vi.fn();
@@ -94,10 +95,11 @@ describe("ExportCopilotUsageButton", () => {
   });
 
   test("surfaces 400 detail as a toast when the window is too large", async () => {
-    exportSpy.mockResolvedValue({
-      status: 400,
-      data: { detail: "Export window must be <= 90 days (got 200.00 days)" },
-    });
+    exportSpy.mockRejectedValue(
+      new ApiError("Export window must be <= 90 days (got 200.00 days)", 400, {
+        detail: "Export window must be <= 90 days (got 200.00 days)",
+      }),
+    );
     render(<ExportCopilotUsageButton />);
     fireEvent.click(screen.getByRole("button", { name: /Copilot Usage CSV/i }));
     await waitFor(() => screen.getByLabelText(/Start date/i));
