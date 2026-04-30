@@ -2,10 +2,10 @@ name: Repo - Pull Request auto-label
 
 on:
   # So that PRs touching the same files as the push are updated.
-  # Only `master` — that's the long-lived branch with most open PRs targeting it.
-  # Push to dev/release-* would re-fan-out across all open PRs and rack up minutes.
+  # Only `dev` — that's the active integration branch most PRs target.
+  # Push to master/release-* would re-fan-out across all open PRs for marginal value.
   push:
-    branches: [ master ]
+    branches: [ dev ]
     paths-ignore:
       - 'classic/forge/tests/vcr_cassettes/**'
       - 'classic/benchmark/reports/**'
