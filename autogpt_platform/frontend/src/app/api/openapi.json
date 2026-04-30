@@ -3183,6 +3183,18 @@
               "anyOf": [{ "type": "string" }, { "type": "null" }],
               "title": "User Id"
             }
+          },
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include inactive rows (e.g. abandoned Stripe checkouts). Off by default so phantom rows aren't surfaced in normal exports.",
+              "default": false,
+              "title": "Include Inactive"
+            },
+            "description": "Include inactive rows (e.g. abandoned Stripe checkouts). Off by default so phantom rows aren't surfaced in normal exports."
           }
         ],
         "responses": {

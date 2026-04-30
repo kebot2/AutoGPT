@@ -110,6 +110,13 @@ async def export_credit_transactions(
     ),
     transaction_type: typing.Optional[CreditTransactionType] = Query(None),
     user_id: typing.Optional[str] = Query(None),
+    include_inactive: bool = Query(
+        False,
+        description=(
+            "Include inactive rows (e.g. abandoned Stripe checkouts). "
+            "Off by default so phantom rows aren't surfaced in normal exports."
+        ),
+    ),
     admin_user_id: str = Security(get_user_id),
 ) -> CreditTransactionsExportResponse:
     """Export CreditTransaction rows in [start, end] for finance reporting.
@@ -123,12 +130,13 @@ async def export_credit_transactions(
             status_code=400, detail="start and end query params are required"
         )
     logger.info(
-        "Admin %s exporting credit transactions [%s..%s] type=%s user=%s",
+        "Admin %s exporting credit transactions [%s..%s] type=%s user=%s incl_inactive=%s",
         admin_user_id,
         start.isoformat(),
         end.isoformat(),
         transaction_type.value if transaction_type else None,
         user_id,
+        include_inactive,
     )
     try:
         history = await admin_export_user_history(
@@ -136,6 +144,7 @@ async def export_credit_transactions(
             end=end,
             transaction_type=transaction_type,
             user_id=user_id,
+            include_inactive=include_inactive,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -2591,12 +2591,18 @@ async def admin_export_user_history(
     end: datetime,
     transaction_type: CreditTransactionType | None = None,
     user_id: str | None = None,
+    include_inactive: bool = False,
 ) -> list[UserTransaction]:
     """Return all CreditTransactions in the [start, end] window for export.
 
     Caps the window at CREDIT_EXPORT_MAX_DAYS and the row count at
     CREDIT_EXPORT_MAX_ROWS — callers should validate the window before calling
     so the user sees a 4xx instead of a silently truncated CSV.
+
+    By default filters out `isActive=False` rows (e.g. abandoned Stripe
+    checkouts whose `runningBalance` snapshot never advanced the user's real
+    balance).  Pass `include_inactive=True` to surface them when debugging
+    why a checkout never completed.
     """
     if end < start:
         raise ValueError("end must be >= start")
@@ -2615,6 +2621,8 @@ async def admin_export_user_history(
         where["type"] = transaction_type
     if user_id:
         where["userId"] = user_id
+    if not include_inactive:
+        where["isActive"] = True
 
     # Fetch one over the cap and reject — avoids the TOCTOU race a separate
     # count() + take=cap pair would have if rows land between the two queries.
