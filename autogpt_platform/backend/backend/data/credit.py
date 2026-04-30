@@ -2614,19 +2614,19 @@ async def admin_export_user_history(
     if user_id:
         where["userId"] = user_id
 
-    total = await CreditTransaction.prisma().count(where=where)
-    if total > CREDIT_EXPORT_MAX_ROWS:
-        raise ValueError(
-            f"Export would return {total} rows (cap is {CREDIT_EXPORT_MAX_ROWS}); "
-            "narrow the window or add filters."
-        )
-
+    # Fetch one over the cap and reject — avoids the TOCTOU race a separate
+    # count() + take=cap pair would have if rows land between the two queries.
     transactions = await CreditTransaction.prisma().find_many(
         where=where,
         include={"User": True},
         order={"createdAt": "desc"},
-        take=CREDIT_EXPORT_MAX_ROWS,
+        take=CREDIT_EXPORT_MAX_ROWS + 1,
     )
+    if len(transactions) > CREDIT_EXPORT_MAX_ROWS:
+        raise ValueError(
+            f"Export would return more than {CREDIT_EXPORT_MAX_ROWS} rows; "
+            "narrow the window or add filters."
+        )
 
     admin_id_to_email: dict[str, str] = {}
 

@@ -17,7 +17,6 @@ const CREDIT_CSV_HEADERS = [
   "type",
   "amount_usd",
   "running_balance_usd",
-  "admin_user_id",
   "admin_email",
   "reason",
 ];
@@ -33,9 +32,6 @@ export function buildCreditTransactionsCsv(rows: UserTransaction[]): string {
       tx.transaction_type,
       ((tx.amount ?? 0) / CREDIT_CENTS_PER_USD).toFixed(2),
       ((tx.running_balance ?? 0) / CREDIT_CENTS_PER_USD).toFixed(2),
-      // admin_user_id is not surfaced separately; admin_email already encodes the
-      // identity, so leave the column blank rather than duplicating data.
-      "",
       tx.admin_email,
       tx.reason,
     ]
