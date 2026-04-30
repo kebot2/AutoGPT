@@ -671,8 +671,9 @@ class GraphModel(Graph, GraphMeta):
         for node in graph.nodes:
             node.id = id_map[node.id]
 
-        # Reassign Link IDs
+        # Reassign Link IDs (regenerate id and remap source/sink to new node IDs)
         for link in graph.links:
+            link.id = new_uuid()
             if link.source_id in id_map:
                 link.source_id = id_map[link.source_id]
             if link.sink_id in id_map:
@@ -1708,7 +1709,7 @@ async def __create_graph(tx, graph: Graph, user_id: str):
     await AgentNodeLink.prisma(tx).create_many(
         data=[
             AgentNodeLinkCreateInput(
-                id=new_uuid(),
+                id=link.id,
                 sourceName=link.source_name,
                 sinkName=link.sink_name,
                 agentNodeSourceId=link.source_id,

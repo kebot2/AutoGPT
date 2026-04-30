@@ -3,12 +3,12 @@ import os
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-from uuid import uuid4
 
 from dotenv import load_dotenv
 from prisma import Prisma
 from pydantic import BaseModel, Field, field_validator
 
+from backend.util.ids import new_uuid
 from backend.util.retry import conn_retry
 
 load_dotenv()
@@ -212,9 +212,9 @@ async def execute_raw_with_schema(
 
 
 class BaseDbModel(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=new_uuid)
 
     @field_validator("id", mode="before")
     def set_model_id(cls, id: str) -> str:
         # In case an empty ID is submitted
-        return id or str(uuid4())
+        return id or new_uuid()
