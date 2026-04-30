@@ -1,6 +1,6 @@
 import logging
 import typing
-from datetime import datetime
+from datetime import datetime, timezone
 
 from autogpt_libs.auth import get_user_id, requires_admin_user
 from fastapi import APIRouter, Body, HTTPException, Query, Security
@@ -129,6 +129,13 @@ async def export_credit_transactions(
         raise HTTPException(
             status_code=400, detail="start and end query params are required"
         )
+    # Coerce naive datetimes to UTC at the boundary so neither the data layer
+    # nor the response builder hits a TypeError on (end - start) when callers
+    # send mixed naive/aware shapes.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     logger.info(
         "Admin %s exporting credit transactions [%s..%s] type=%s user=%s incl_inactive=%s",
         admin_user_id,
@@ -187,6 +194,13 @@ async def export_copilot_weekly_usage(
         raise HTTPException(
             status_code=400, detail="start and end query params are required"
         )
+    # Coerce naive datetimes to UTC at the boundary so neither the data layer
+    # nor the response builder hits a TypeError on (end - start) when callers
+    # send mixed naive/aware shapes.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     logger.info(
         "Admin %s exporting copilot weekly usage [%s..%s]",
         admin_user_id,
