@@ -933,6 +933,72 @@ def test_stripe_webhook_dispatches_invoice_payment_failed(
     failure_mock.assert_awaited_once_with(invoice_obj)
 
 
+def test_stripe_webhook_dispatches_checkout_session_expired(
+    client: fastapi.testclient.TestClient,
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """POST /credits/stripe_webhook routes checkout.session.expired to the cleanup handler."""
+    event = {
+        "type": "checkout.session.expired",
+        "data": {"object": {"id": "cs_expired_test"}},
+    }
+
+    mocker.patch(
+        "backend.api.features.v1.settings.secrets.stripe_webhook_secret",
+        new="whsec_test",
+    )
+    mocker.patch(
+        "backend.api.features.v1.stripe.Webhook.construct_event",
+        return_value=event,
+    )
+    expire_mock = mocker.patch(
+        "backend.api.features.v1.UserCredit.expire_checkout",
+        new_callable=AsyncMock,
+    )
+
+    response = client.post(
+        "/credits/stripe_webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=abc"},
+    )
+
+    assert response.status_code == 200
+    expire_mock.assert_awaited_once_with(session_id="cs_expired_test")
+
+
+def test_stripe_webhook_checkout_session_expired_missing_id_ignored(
+    client: fastapi.testclient.TestClient,
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """A malformed checkout.session.expired payload returns 200 without invoking the handler."""
+    event = {
+        "type": "checkout.session.expired",
+        "data": {"object": {}},
+    }
+
+    mocker.patch(
+        "backend.api.features.v1.settings.secrets.stripe_webhook_secret",
+        new="whsec_test",
+    )
+    mocker.patch(
+        "backend.api.features.v1.stripe.Webhook.construct_event",
+        return_value=event,
+    )
+    expire_mock = mocker.patch(
+        "backend.api.features.v1.UserCredit.expire_checkout",
+        new_callable=AsyncMock,
+    )
+
+    response = client.post(
+        "/credits/stripe_webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=abc"},
+    )
+
+    assert response.status_code == 200
+    expire_mock.assert_not_awaited()
+
+
 def test_update_subscription_tier_paid_to_paid_modifies_subscription(
     client: fastapi.testclient.TestClient,
     mocker: pytest_mock.MockFixture,

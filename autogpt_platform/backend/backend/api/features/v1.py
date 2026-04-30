@@ -1160,6 +1160,15 @@ async def stripe_webhook(request: Request):
             return Response(status_code=200)
         await UserCredit().fulfill_checkout(session_id=session_id)
 
+    if event_type == "checkout.session.expired":
+        session_id = data_object.get("id")
+        if not session_id:
+            logger.warning(
+                "stripe_webhook: %s missing data.object.id; ignoring", event_type
+            )
+            return Response(status_code=200)
+        await UserCredit().expire_checkout(session_id=session_id)
+
     if event_type in (
         "customer.subscription.created",
         "customer.subscription.updated",

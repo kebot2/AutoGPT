@@ -1098,6 +1098,30 @@ class UserCredit(UserCreditBase):
                 metadata=SafeJson(checkout_session),
             )
 
+    async def expire_checkout(self, *, session_id: str) -> None:
+        """Drop the inactive TOP_UP placeholder for an expired Checkout session.
+
+        Stripe sends ``checkout.session.expired`` ~24h after an unredeemed
+        session; no payment is taken on that path, so a hard delete is correct.
+        Filtering ``isActive=False`` makes the operation safe against
+        out-of-order webhook delivery — a late ``expired`` event can never
+        delete a row that ``fulfill_checkout`` already activated.
+        """
+        if not session_id.startswith("cs_"):
+            return
+        deleted = await CreditTransaction.prisma().delete_many(
+            where={
+                "transactionKey": session_id,
+                "type": CreditTransactionType.TOP_UP,
+                "isActive": False,
+            },
+        )
+        if deleted:
+            logger.info(
+                f"expire_checkout: removed {deleted} inactive TOP_UP row(s) "
+                f"for session {session_id}"
+            )
+
     async def get_credits(self, user_id: str) -> int:
         balance, _ = await self._get_credits(user_id)
         return balance
@@ -2588,7 +2612,12 @@ async def admin_get_user_history(
     if page < 1 or page_size < 1:
         raise ValueError("Invalid pagination input")
 
-    where_clause: CreditTransactionWhereInput = {}
+    # Mirror the user-facing get_transaction_history filter: only ledger-applied
+    # rows. Inactive rows are pre-Stripe placeholders whose runningBalance is
+    # the unchanged current balance — surfacing them here makes the admin UI
+    # render phantom "before balance" gaps (running_balance - amount) for
+    # transactions that never moved any credits.
+    where_clause: CreditTransactionWhereInput = {"isActive": True}
     if transaction_filter:
         where_clause["type"] = transaction_filter
     if search:

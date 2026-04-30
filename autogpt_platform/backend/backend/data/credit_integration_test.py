@@ -13,6 +13,8 @@ from backend.data.credit import (
     AutoTopUpConfig,
     BetaUserCredit,
     UsageTransactionMetadata,
+    UserCredit,
+    admin_get_user_history,
     get_auto_top_up,
     set_auto_top_up,
 )
@@ -275,3 +277,118 @@ async def test_auto_top_up_configuration_storage(cleanup_test_user, monkeypatch)
     # Should only have the initial GRANT transaction
     assert len(transactions) == 1
     assert transactions[0].type == CreditTransactionType.GRANT
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_admin_get_user_history_filters_inactive(cleanup_test_user):
+    """Admin spending UI must hide inactive (pre-Stripe placeholder) rows.
+
+    Inactive top-ups store ``runningBalance = current_balance`` (unchanged) and
+    ``amount = $X``. The admin frontend renders ``before = running_balance -
+    amount``, which produces a fake "$X drop" preceding a "$X restore" — the
+    silent-drop bug observed in production. Surface only ledger-applied rows.
+    """
+    user_id = cleanup_test_user
+
+    await CreditTransaction.prisma().create(
+        data={
+            "userId": user_id,
+            "amount": 1000,
+            "type": CreditTransactionType.TOP_UP,
+            "transactionKey": f"cs_test_active_{user_id}",
+            "isActive": True,
+            "runningBalance": 1000,
+        }
+    )
+    await CreditTransaction.prisma().create(
+        data={
+            "userId": user_id,
+            "amount": 500,
+            "type": CreditTransactionType.TOP_UP,
+            "transactionKey": f"cs_test_orphan_{user_id}",
+            "isActive": False,
+            "runningBalance": 1000,
+        }
+    )
+
+    resp = await admin_get_user_history(search=user_id)
+
+    keys = {tx.transaction_key for tx in resp.history}
+    assert f"cs_test_active_{user_id}" in keys
+    assert f"cs_test_orphan_{user_id}" not in keys
+    assert resp.pagination.total_items == 1
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_expire_checkout_deletes_inactive_then_idempotent(cleanup_test_user):
+    user_id = cleanup_test_user
+    sid = f"cs_test_expire_{user_id}"
+
+    await CreditTransaction.prisma().create(
+        data={
+            "userId": user_id,
+            "amount": 500,
+            "type": CreditTransactionType.TOP_UP,
+            "transactionKey": sid,
+            "isActive": False,
+            "runningBalance": 0,
+        }
+    )
+
+    await UserCredit().expire_checkout(session_id=sid)
+    assert (
+        await CreditTransaction.prisma().find_first(where={"transactionKey": sid})
+        is None
+    )
+
+    # Second call must be a no-op, not an error.
+    await UserCredit().expire_checkout(session_id=sid)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_expire_checkout_skips_active_row(cleanup_test_user):
+    """Out-of-order webhook delivery must not delete a fulfilled top-up."""
+    user_id = cleanup_test_user
+    sid = f"cs_test_active_skip_{user_id}"
+
+    await CreditTransaction.prisma().create(
+        data={
+            "userId": user_id,
+            "amount": 500,
+            "type": CreditTransactionType.TOP_UP,
+            "transactionKey": sid,
+            "isActive": True,
+            "runningBalance": 500,
+        }
+    )
+
+    await UserCredit().expire_checkout(session_id=sid)
+
+    row = await CreditTransaction.prisma().find_first(where={"transactionKey": sid})
+    assert row is not None
+    assert row.isActive is True
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_expire_checkout_ignores_non_checkout_keys(cleanup_test_user):
+    """Guard against accidentally deleting non-Checkout inactive rows."""
+    user_id = cleanup_test_user
+    non_cs_key = f"pi_test_{user_id}"
+
+    await CreditTransaction.prisma().create(
+        data={
+            "userId": user_id,
+            "amount": 500,
+            "type": CreditTransactionType.TOP_UP,
+            "transactionKey": non_cs_key,
+            "isActive": False,
+            "runningBalance": 0,
+        }
+    )
+
+    await UserCredit().expire_checkout(session_id=non_cs_key)
+
+    row = await CreditTransaction.prisma().find_first(
+        where={"transactionKey": non_cs_key}
+    )
+    assert row is not None
