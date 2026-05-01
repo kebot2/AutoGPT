@@ -18,9 +18,10 @@ from openai.types.chat.chat_completion_message_tool_call_param import (
     ChatCompletionMessageToolCallParam,
     Function,
 )
+from prisma.errors import UniqueViolationError
 from prisma.models import ChatMessage as PrismaChatMessage
 from prisma.models import ChatSession as PrismaChatSession
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 from backend.data.db_accessors import chat_db, library_db
 from backend.data.graph import GraphSettings
@@ -63,6 +64,14 @@ class ChatSessionMetadata(BaseModel):
 
 
 class ChatMessage(BaseModel):
+    id: str | None = None
+    """Stable per-send id.  When supplied by the caller (e.g. AI SDK's
+    ``messageId`` plumbed from the frontend's ``crypto.randomUUID()`` per
+    user click), it becomes the Prisma row's ``id`` — the PK uniqueness
+    constraint then makes the INSERT itself the atomic dedup primitive
+    for retransmits / RMQ redeliveries / browser auto-retries.  ``None``
+    leaves Prisma to generate via ``@default(uuid())``."""
+
     role: str
     content: str | None = None
     name: str | None = None
@@ -72,11 +81,13 @@ class ChatMessage(BaseModel):
     function_call: dict | None = None
     sequence: int | None = None
     duration_ms: int | None = None
+    created_at: datetime | None = None
 
     @staticmethod
     def from_db(prisma_message: PrismaChatMessage) -> "ChatMessage":
         """Convert a Prisma ChatMessage to a Pydantic ChatMessage."""
         return ChatMessage(
+            id=prisma_message.id,
             role=prisma_message.role,
             content=prisma_message.content,
             name=prisma_message.name,
@@ -86,6 +97,7 @@ class ChatMessage(BaseModel):
             function_call=_parse_json_field(prisma_message.functionCall),
             sequence=prisma_message.sequence,
             duration_ms=prisma_message.durationMs,
+            created_at=prisma_message.createdAt,
         )
 
 
@@ -205,6 +217,15 @@ class ChatSessionInfo(BaseModel):
 
 class ChatSession(ChatSessionInfo):
     messages: list[ChatMessage]
+    # In-flight tool-call names for the CURRENT turn.  Not persisted to
+    # DB and not serialised on the wire — ``PrivateAttr`` keeps this a
+    # process-local scratch buffer that's invisible to ``model_dump`` /
+    # ``model_dump_json`` / the redis cache path.  Populated by the
+    # baseline tool executor the moment a tool is dispatched so in-turn
+    # guards (e.g. ``require_guide_read``) can see the call before it
+    # lands in ``messages`` at turn-end.  Cleared when the turn
+    # completes.
+    _inflight_tool_calls: set[str] = PrivateAttr(default_factory=set)
 
     @classmethod
     def new(
@@ -241,6 +262,56 @@ class ChatSession(ChatSessionInfo):
             **ChatSessionInfo.from_db(prisma_session).model_dump(),
             messages=[ChatMessage.from_db(m) for m in prisma_session.Messages],
         )
+
+    def announce_inflight_tool_call(self, tool_name: str) -> None:
+        """Record that *tool_name* is being dispatched in the current turn.
+
+        Called by the baseline tool executor **before** the tool actually
+        runs (the announcement is about dispatch, not success).  If the
+        tool raises, the name stays in the buffer for the rest of the
+        turn — that matches the guide-read gate's contract ("was the tool
+        called?") but means any future gate wanting *successful*
+        dispatches would need its own tracking.
+
+        Lets in-turn guards (see
+        ``copilot/tools/helpers.py::require_guide_read``) see a tool
+        call the moment it's issued, instead of waiting for the
+        ``session.messages`` flush at turn end — fixing a loop where a
+        second tool in the same turn re-fires a guard despite the
+        guarding tool having already been called (seen on Kimi K2.6 in
+        particular because its aggressive tool-call chaining exercises
+        this path much more than Sonnet does).  The buffer is cleared by
+        :meth:`clear_inflight_tool_calls` at turn end.
+        """
+        self._inflight_tool_calls.add(tool_name)
+
+    def clear_inflight_tool_calls(self) -> None:
+        """Reset the in-flight tool-call announcement buffer."""
+        self._inflight_tool_calls.clear()
+
+    def has_tool_been_called(self, tool_name: str) -> bool:
+        """True when *tool_name* has been called in this session.
+
+        Checks the in-flight announcement buffer (for calls dispatched
+        in the *current* turn but not yet flushed into ``messages``) and
+        the durable ``messages`` history (for past turns + prior rounds
+        within this turn whose writes already landed).  The durable
+        scan is session-wide, not turn-scoped: a matching tool call
+        anywhere in ``messages`` counts.  This matches the guide-read
+        contract — once the guide has been read in the session, the
+        agent doesn't need to re-read it for later create/edit/fix
+        tools.
+        """
+        if tool_name in self._inflight_tool_calls:
+            return True
+        for msg in reversed(self.messages):
+            if msg.role != "assistant" or not msg.tool_calls:
+                continue
+            for tc in msg.tool_calls:
+                name = tc.get("function", {}).get("name") or tc.get("name")
+                if name == tool_name:
+                    return True
+        return False
 
     def add_tool_call_to_current_turn(self, tool_call: dict) -> None:
         """Attach a tool_call to the current turn's assistant message.
@@ -636,6 +707,13 @@ async def _save_session_to_db(
         for msg in new_messages:
             messages_data.append(
                 {
+                    # ``id`` is optional — when the caller supplies one
+                    # (frontend-provided per-click UUID) it becomes the
+                    # Prisma row's PK and a duplicate POST raises
+                    # ``UniqueViolationError`` we catch as the dedup
+                    # signal.  When None, Prisma generates via
+                    # ``@default(uuid())`` (existing behaviour).
+                    "id": msg.id,
                     "role": msg.role,
                     "content": msg.content,
                     "name": msg.name,
@@ -686,22 +764,35 @@ async def append_and_save_message(
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
-        # Idempotency: skip if the trailing block of same-role messages already
-        # contains this content. Uses is_message_duplicate which checks all
+        # Idempotency layer 1: caller-supplied id collision.  The frontend
+        # sends a per-click UUID as ``message.id``; AI SDK / network / RMQ
+        # retransmits of the *same* logical send carry the same id.  Catch
+        # the dup before the DB round-trip when we already see it cached
+        # in-memory.  The DB INSERT below is the authoritative atomic
+        # check (PK uniqueness on ``ChatMessage.id``) — this is just the
+        # fast path.
+        if message.id is not None and any(
+            existing.id == message.id for existing in session.messages
+        ):
+            return None  # duplicate — caller should skip enqueue
+
+        # Idempotency layer 2: trailing same-role-and-content collapse.
+        # Catches retransmits from older clients that don't supply
+        # ``message.id``, plus mid-turn re-sends of identical text from
+        # the same role.  Uses is_message_duplicate which checks all
         # consecutive trailing messages of the same role, not just [-1].
         #
-        # This collapses infra/nginx retries whether they land on the same pod
-        # (serialised by the Redis lock) or a different pod.
+        # Legit same-text messages across turns are distinguished by the
+        # intervening assistant reply: if the user said "yes", got a
+        # response, and says "yes" again, ``messages[-1]`` is the
+        # assistant reply, so the role check fails and the second
+        # message goes through normally.
         #
-        # Legit same-text messages are distinguished by the assistant turn
-        # between them: if the user said "yes", got a response, and says
-        # "yes" again, session.messages[-1] is the assistant reply, so the
-        # role check fails and the second message goes through normally.
-        #
-        # Edge case: if a turn dies without writing any assistant message,
-        # the user's next send of the same text is blocked here permanently.
-        # The fix is to ensure failed turns always write an error/timeout
-        # assistant message so the session always ends on an assistant turn.
+        # Edge case: if a turn dies without writing any assistant
+        # message, the user's next send of the same text is blocked here
+        # permanently.  The fix is to ensure failed turns always write
+        # an error/timeout assistant message so the session always ends
+        # on an assistant turn.
         if message.content is not None and is_message_duplicate(
             session.messages, message.role, message.content
         ):
@@ -713,6 +804,19 @@ async def append_and_save_message(
         try:
             await _save_session_to_db(session, existing_message_count)
         except Exception as e:
+            # Any save failure rolls back the optimistic append so the
+            # in-memory ``session.messages`` stays consistent with what's
+            # persisted (the function-scoped session is fresh per call,
+            # but the cache write below would otherwise persist the
+            # phantom row).
+            session.messages.pop()
+            # PK collision is the dedup signal — caller short-circuits to
+            # subscribe-only.  Other ``UniqueViolationError`` (e.g. a
+            # ``(sessionId, sequence)`` race that exhausted the retry
+            # loop in ``add_chat_messages_batch``) and unrelated
+            # exceptions surface as ``DatabaseError``.
+            if isinstance(e, UniqueViolationError) and "ChatMessage_pkey" in str(e):
+                return None
             raise DatabaseError(
                 f"Failed to persist message to session {session_id}"
             ) from e

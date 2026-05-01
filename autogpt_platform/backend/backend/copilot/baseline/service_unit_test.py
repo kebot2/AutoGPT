@@ -10,9 +10,12 @@ import pytest
 from openai.types.chat import ChatCompletionToolParam
 
 from backend.copilot.baseline.service import (
+    _BUDGET_EXHAUSTED_FALLBACK_TEXT,
     _baseline_conversation_updater,
     _baseline_llm_caller,
     _BaselineStreamState,
+    _budget_exhausted_notice_text,
+    _build_budget_exhausted_fallback_events,
     _build_cached_system_message,
     _compress_session_messages,
     _extract_cache_creation_tokens,
@@ -21,6 +24,7 @@ from backend.copilot.baseline.service import (
     _is_anthropic_model,
     _mark_system_message_with_cache_control,
     _mark_tools_with_cache_control,
+    _supports_prompt_cache_markers,
 )
 from backend.copilot.model import ChatMessage
 from backend.copilot.response_model import (
@@ -39,7 +43,10 @@ from backend.util.tool_call_loop import LLMLoopResponse, LLMToolCall, ToolCallRe
 class TestBaselineStreamState:
     def test_defaults(self):
         state = _BaselineStreamState()
-        assert state.pending_events == []
+        # ``pending_events`` is an asyncio.Queue now (live SSE channel).
+        # The durable inspection view is ``emitted_events``.
+        assert state.pending_events.empty()
+        assert state.emitted_events == []
         assert state.assistant_text == ""
         assert state.text_started is False
         assert state.turn_prompt_tokens == 0
@@ -1404,6 +1411,16 @@ class TestApplyPromptCacheMarkers:
         assert not _is_anthropic_model("xai/grok-4")
         assert not _is_anthropic_model("meta-llama/llama-3.3-70b-instruct")
 
+    def test_is_anthropic_model_rejects_kimi_routes(self):
+        """Regression guard: Kimi K2.6 is a reasoning route (reasoning
+        extra_body is sent) but NOT an Anthropic route — Moonshot does
+        its own auto prompt caching, so ``cache_control`` markers must
+        NOT be applied. OpenRouter silently drops them today, but if
+        they ever start failing fast we'd want the gate tight."""
+        assert not _is_anthropic_model("moonshotai/kimi-k2.6")
+        assert not _is_anthropic_model("moonshotai/kimi-k2-thinking")
+        assert not _is_anthropic_model("kimi-k2-instruct")
+
     def test_cache_control_uses_configured_ttl(self, monkeypatch):
         """TTL comes from ChatConfig.baseline_prompt_cache_ttl — defaults
         to 1h so the static prefix (system + tools) stays warm across
@@ -1677,7 +1694,7 @@ class TestBaselineReasoningStreaming:
                 state=state,
             )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningDelta" in types
         assert "StreamReasoningEnd" in types
@@ -1692,14 +1709,14 @@ class TestBaselineReasoningStreaming:
         # a fresh id after the reasoning-end rotation.
         reasoning_ids = {
             e.id
-            for e in state.pending_events
+            for e in state.emitted_events
             if isinstance(
                 e, (StreamReasoningStart, StreamReasoningDelta, StreamReasoningEnd)
             )
         }
         text_ids = {
             e.id
-            for e in state.pending_events
+            for e in state.emitted_events
             if isinstance(e, (StreamTextStart, StreamTextDelta, StreamTextEnd))
         }
         assert len(reasoning_ids) == 1
@@ -1707,7 +1724,7 @@ class TestBaselineReasoningStreaming:
         assert reasoning_ids.isdisjoint(text_ids)
 
         combined = "".join(
-            e.delta for e in state.pending_events if isinstance(e, StreamReasoningDelta)
+            e.delta for e in state.emitted_events if isinstance(e, StreamReasoningDelta)
         )
         assert combined == "thinking... more"
 
@@ -1749,7 +1766,7 @@ class TestBaselineReasoningStreaming:
 
         # A reasoning-end must have been emitted — this is the tool_calls
         # branch's responsibility, not the stream-end cleanup.
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningEnd" in types
 
@@ -1792,7 +1809,7 @@ class TestBaselineReasoningStreaming:
                     state=state,
                 )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         # The reasoning block was opened, the exception fired, and the
         # finally block must have closed it before emitting the finish
         # step.
@@ -1829,7 +1846,7 @@ class TestBaselineReasoningStreaming:
 
     @pytest.mark.asyncio
     async def test_reasoning_param_absent_on_non_anthropic_routes(self):
-        """Non-Anthropic routes (e.g. OpenAI) must not receive ``reasoning``."""
+        """Non-reasoning routes (e.g. OpenAI) must not receive ``reasoning``."""
         state = _BaselineStreamState(model="openai/gpt-4o")
 
         mock_client = MagicMock()
@@ -1849,6 +1866,70 @@ class TestBaselineReasoningStreaming:
 
         extra_body = mock_client.chat.completions.create.call_args[1]["extra_body"]
         assert "reasoning" not in extra_body
+
+    @pytest.mark.asyncio
+    async def test_kimi_route_sends_reasoning_and_cache_control(self):
+        """Kimi K2.6 (Moonshot via OpenRouter's Anthropic-compat endpoint)
+        accepts ``cache_control: {type: ephemeral}`` on the system block
+        and the last tool — the endpoint honours the marker and lifts
+        cache hit rate on continuation turns from near-zero (Moonshot's
+        auto-caching drifts) to the Anthropic ~60-95% ballpark.  The
+        ``anthropic-beta`` header stays off because Moonshot doesn't need
+        it; OpenRouter would strip the unknown header anyway."""
+        state = _BaselineStreamState(model="moonshotai/kimi-k2.6")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_make_stream_mock()
+        )
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            await _baseline_llm_caller(
+                messages=[
+                    {"role": "system", "content": "you are a helpful assistant"},
+                    {"role": "user", "content": "hi"},
+                ],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "echo", "parameters": {}},
+                    }
+                ],
+                state=state,
+            )
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        extra_body = call_kwargs["extra_body"]
+        # Reasoning param on — the whole point of picking Kimi is the
+        # cheap-but-still-reasoning-capable path.
+        assert "reasoning" in extra_body
+        assert extra_body["reasoning"]["max_tokens"] > 0
+        # No ``anthropic-beta`` header — that beta is specifically for
+        # native Anthropic endpoints; Moonshot's shim accepts
+        # ``cache_control`` without it, and sending it would be wasted
+        # bytes (OR strips it before forwarding to Moonshot).
+        assert "extra_headers" not in call_kwargs or not call_kwargs.get(
+            "extra_headers"
+        )
+        # System block MUST carry ``cache_control`` so Moonshot's cache
+        # breakpoint is honoured.  The cached system-message builder
+        # emits list-shape content with the marker on the first (and
+        # only) block — assert on that shape.
+        sys_msg = call_kwargs["messages"][0]
+        sys_content = sys_msg.get("content")
+        assert isinstance(
+            sys_content, list
+        ), "Cached system message should be a list-shape content block"
+        assert any(
+            "cache_control" in block for block in sys_content if isinstance(block, dict)
+        ), "Kimi system message should now carry cache_control markers"
+        # Tool-level cache marking is applied by ``stream_chat_completion_baseline``
+        # (see ``_mark_tools_with_cache_control``) before tools reach
+        # ``_baseline_llm_caller``, so this unit test doesn't exercise
+        # that path — covered by the outer integration test.
 
     @pytest.mark.asyncio
     async def test_reasoning_only_stream_still_closes_block(self):
@@ -1877,7 +1958,7 @@ class TestBaselineReasoningStreaming:
                 state=state,
             )
 
-        types = [type(e).__name__ for e in state.pending_events]
+        types = [type(e).__name__ for e in state.emitted_events]
         assert "StreamReasoningStart" in types
         assert "StreamReasoningEnd" in types
         # No text was produced — no text events should be emitted.
@@ -1948,3 +2029,117 @@ class TestBaselineReasoningStreaming:
         reasoning_rows = [m for m in state.session_messages if m.role == "reasoning"]
         assert len(reasoning_rows) == 1
         assert reasoning_rows[0].content == "first thought"
+
+
+class TestSupportsPromptCacheMarkers:
+    """``_supports_prompt_cache_markers`` is the widened gate for
+    emitting ``cache_control`` markers on message content.  It's a
+    superset of ``_is_anthropic_model`` that ALSO admits Moonshot
+    (whose Anthropic-compat endpoint honours the marker) while keeping
+    the False answer for OpenAI / Grok / Gemini (which 400 on the
+    unknown field)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-sonnet-4-6",
+            "claude-3-5-sonnet-20241022",
+            "anthropic.claude-3-5-sonnet",
+            "ANTHROPIC/Claude-Opus",
+        ],
+    )
+    def test_anthropic_routes_are_supported(self, model):
+        assert _supports_prompt_cache_markers(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "moonshotai/kimi-k2.6",
+            "moonshotai/kimi-k2-thinking",
+            "moonshotai/kimi-k2.5",
+            "moonshotai/kimi-k3.0",  # future SKU
+        ],
+    )
+    def test_moonshot_routes_are_supported(self, model):
+        """The whole reason this predicate exists — Moonshot must be
+        True even though ``_is_anthropic_model`` is False for it."""
+        assert _supports_prompt_cache_markers(model) is True
+        # Verify this is strictly wider than the anthropic-only check.
+        assert _is_anthropic_model(model) is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai/gpt-4o",
+            "google/gemini-2.5-pro",
+            "xai/grok-4",
+            "meta-llama/llama-3.3-70b-instruct",
+            "deepseek/deepseek-v3",
+        ],
+    )
+    def test_other_providers_still_rejected(self, model):
+        """Regression guard: OpenAI/Grok/Gemini still 400 on
+        ``cache_control``, so the widened gate must keep them out."""
+        assert _supports_prompt_cache_markers(model) is False
+
+
+class TestBudgetExhaustedNoticeText:
+    """Tests for the fallback-notice decision used when the tool-round
+    budget is exhausted without a natural finish."""
+
+    def test_empty_text_returns_fallback(self):
+        assert _budget_exhausted_notice_text("") == _BUDGET_EXHAUSTED_FALLBACK_TEXT
+
+    def test_whitespace_only_returns_fallback(self):
+        """A string of only whitespace is still "no visible response"."""
+        assert (
+            _budget_exhausted_notice_text("   \n\t  ")
+            == _BUDGET_EXHAUSTED_FALLBACK_TEXT
+        )
+
+    def test_non_empty_text_returns_none(self):
+        """When the model already summarised, stay quiet — no extra notice."""
+        assert _budget_exhausted_notice_text("Here is what I did...") is None
+
+    def test_fallback_text_is_user_facing(self):
+        """Guard against accidentally shipping an empty / internal string."""
+        assert _BUDGET_EXHAUSTED_FALLBACK_TEXT.strip()
+        assert "tool-call budget" in _BUDGET_EXHAUSTED_FALLBACK_TEXT
+        assert "follow-up" in _BUDGET_EXHAUSTED_FALLBACK_TEXT
+
+
+class TestBuildBudgetExhaustedFallbackEvents:
+    """Tests for the helper that produces the stream events + text mutation
+    for a budget-exhausted turn with no terminal-round text."""
+
+    def test_empty_terminal_text_emits_three_events(self):
+        events, to_append = _build_budget_exhausted_fallback_events("")
+        assert to_append == _BUDGET_EXHAUSTED_FALLBACK_TEXT
+        assert len(events) == 3
+        assert isinstance(events[0], StreamTextStart)
+        assert isinstance(events[1], StreamTextDelta)
+        assert isinstance(events[2], StreamTextEnd)
+        # All three events share the same block id so the frontend groups
+        # them into a single text bubble.
+        assert events[0].id == events[1].id == events[2].id
+        # The delta carries the user-facing notice verbatim.
+        assert events[1].delta == _BUDGET_EXHAUSTED_FALLBACK_TEXT
+
+    def test_non_empty_terminal_text_returns_empty(self):
+        """Model already produced visible final text → no fallback."""
+        events, to_append = _build_budget_exhausted_fallback_events(
+            "Here's what I did so far..."
+        )
+        assert events == []
+        assert to_append == ""
+
+    def test_whitespace_only_still_emits_fallback(self):
+        events, to_append = _build_budget_exhausted_fallback_events("   \n\t  ")
+        assert len(events) == 3
+        assert to_append == _BUDGET_EXHAUSTED_FALLBACK_TEXT
+
+    def test_each_call_uses_fresh_block_id(self):
+        """Block IDs are UUIDs — two invocations must not collide."""
+        events_a, _ = _build_budget_exhausted_fallback_events("")
+        events_b, _ = _build_budget_exhausted_fallback_events("")
+        assert events_a[0].id != events_b[0].id
