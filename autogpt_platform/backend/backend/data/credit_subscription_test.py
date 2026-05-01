@@ -205,6 +205,68 @@ async def test_sync_subscription_from_stripe_cancelled():
 
 
 @pytest.mark.asyncio
+async def test_sync_subscription_from_stripe_cancelled_applies_no_tier_storage_limit():
+    """After unsubscribe takes effect, workspace storage resolves against NO_TIER."""
+    from backend.copilot.rate_limit import get_workspace_storage_limit_bytes
+
+    mock_user = _make_user(tier=SubscriptionTier.PRO)
+    stripe_sub = {
+        "id": "sub_old",
+        "customer": "cus_123",
+        "status": "canceled",
+        "items": {"data": []},
+    }
+    empty_list = MagicMock()
+    empty_list.data = []
+    empty_list.has_more = False
+
+    async def _set_tier(_user_id: str, tier: SubscriptionTier) -> None:
+        mock_user.subscriptionTier = tier
+
+    with (
+        patch(
+            "backend.data.credit.User.prisma",
+            return_value=MagicMock(find_first=AsyncMock(return_value=mock_user)),
+        ),
+        patch(
+            "backend.data.credit.stripe.Subscription.list",
+            return_value=empty_list,
+        ),
+        patch(
+            "backend.data.credit.set_subscription_tier",
+            new_callable=AsyncMock,
+            side_effect=_set_tier,
+        ),
+        patch(
+            "backend.copilot.rate_limit.get_user_tier",
+            new_callable=AsyncMock,
+            side_effect=lambda _user_id: mock_user.subscriptionTier,
+        ),
+        patch(
+            "backend.copilot.rate_limit.get_workspace_storage_limits_mb",
+            new_callable=AsyncMock,
+            return_value={
+                "NO_TIER": 250,
+                "BASIC": 500,
+                "PRO": 1024,
+                "MAX": 5 * 1024,
+                "BUSINESS": 15 * 1024,
+                "ENTERPRISE": 15 * 1024,
+            },
+        ),
+        patch.object(
+            get_pending_subscription_change,
+            "cache_delete",
+        ) as mock_pending_cache_delete,
+    ):
+        await sync_subscription_from_stripe(stripe_sub)
+        result = await get_workspace_storage_limit_bytes("user-1")
+
+    assert result == 250 * 1024 * 1024
+    mock_pending_cache_delete.assert_called_once_with("user-1")
+
+
+@pytest.mark.asyncio
 async def test_sync_subscription_from_stripe_cancelled_but_other_active_sub_exists():
     """Cancelling sub_old must NOT downgrade the user if sub_new is still active.
 
@@ -3078,3 +3140,86 @@ async def test_release_pending_subscription_schedule_invalidates_cache_on_partia
             await release_pending_subscription_schedule("user-partial")
 
         mock_cache_delete.assert_called_once_with("user-partial")
+
+
+# ─── TOP_UP vs GRANT routing ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_grant_credits_writes_grant_not_top_up():
+    """grant_credits writes a GRANT row and never touches Stripe — TOP_UP is
+    reserved for actual user-initiated Stripe checkouts."""
+    from prisma.enums import CreditTransactionType
+
+    from backend.data.credit import UserCredit
+    from backend.util.json import SafeJson
+
+    credit_system = UserCredit()
+    add_tx_mock = AsyncMock(return_value=(1500, "grant-txkey"))
+    with patch.object(credit_system, "_add_transaction", add_tx_mock):
+        balance = await credit_system.grant_credits(
+            "user-1", 500, "Refund for failed CoPilot rate-limit reset"
+        )
+
+    assert balance == 1500
+    add_tx_mock.assert_awaited_once()
+    kwargs = add_tx_mock.await_args.kwargs
+    assert kwargs["transaction_type"] == CreditTransactionType.GRANT
+    metadata = kwargs["metadata"]
+    assert isinstance(metadata, SafeJson)
+    assert metadata.data["reason"] == "Refund for failed CoPilot rate-limit reset"
+
+
+@pytest.mark.asyncio
+async def test_grant_credits_rejects_negative_amount():
+    """grant_credits only adds credits — negative amounts must raise."""
+    from backend.data.credit import UserCredit
+
+    credit_system = UserCredit()
+    with pytest.raises(ValueError, match="must not be negative"):
+        await credit_system.grant_credits("user-1", -100, "bug")
+
+
+@pytest.mark.asyncio
+async def test_admin_get_user_history_excludes_inactive_by_default():
+    """Default call must filter out inactive ledger rows so phantom TOP_UP entries
+    from abandoned Stripe checkouts don't pollute the admin dashboard."""
+    from backend.data.credit import admin_get_user_history
+
+    prisma_mock = MagicMock(
+        find_many=AsyncMock(return_value=[]),
+        count=AsyncMock(return_value=0),
+    )
+    with patch(
+        "backend.data.credit.CreditTransaction.prisma", return_value=prisma_mock
+    ):
+        await admin_get_user_history()
+
+    where = prisma_mock.find_many.await_args.kwargs["where"]
+    assert where == {"isActive": True}
+    count_where = prisma_mock.count.await_args.kwargs["where"]
+    assert count_where == {"isActive": True}
+
+
+@pytest.mark.asyncio
+async def test_admin_get_user_history_include_inactive_omits_filter():
+    """include_inactive=True surfaces phantom rows for debugging abandoned checkouts."""
+    from prisma.enums import CreditTransactionType
+
+    from backend.data.credit import admin_get_user_history
+
+    prisma_mock = MagicMock(
+        find_many=AsyncMock(return_value=[]),
+        count=AsyncMock(return_value=0),
+    )
+    with patch(
+        "backend.data.credit.CreditTransaction.prisma", return_value=prisma_mock
+    ):
+        await admin_get_user_history(
+            transaction_filter=CreditTransactionType.TOP_UP,
+            include_inactive=True,
+        )
+
+    where = prisma_mock.find_many.await_args.kwargs["where"]
+    assert "isActive" not in where
+    assert where["type"] == CreditTransactionType.TOP_UP
