@@ -540,10 +540,12 @@ async def check_rate_limit(
         )
         daily_used = int(daily_raw or 0)
         weekly_used = int(weekly_raw or 0)
-    except (RedisError, ConnectionError, OSError) as exc:
-        logger.warning(
-            "Redis unavailable for rate limit check, rejecting request: %s", exc
-        )
+    except (RedisError, ConnectionError, OSError, ValueError) as exc:
+        # ValueError covers a corrupt non-numeric counter value
+        # (e.g. partial write or wrong-type SET on a counter key) — same
+        # spirit as a Redis outage: we cannot prove the user is under their
+        # cap, so fail closed instead of letting the request through.
+        logger.warning("Rate limit state unreadable, rejecting request: %s", exc)
         raise RateLimitUnavailable() from exc
 
     if daily_cost_limit > 0 and daily_used >= daily_cost_limit:

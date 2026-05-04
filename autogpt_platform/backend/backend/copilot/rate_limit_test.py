@@ -259,6 +259,23 @@ class TestCheckRateLimit:
                 )
 
     @pytest.mark.asyncio
+    async def test_raises_unavailable_when_counter_is_corrupt(self):
+        """Fail-closed when a Redis counter holds a non-numeric value — the
+        ``int(...)`` cast would otherwise raise ValueError and surface as a
+        500, but the same fail-closed reasoning applies (we cannot prove the
+        user is under their cap)."""
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(side_effect=["not-a-number", "200"])
+        with patch(
+            "backend.copilot.rate_limit.get_redis_async",
+            return_value=mock_redis,
+        ):
+            with pytest.raises(RateLimitUnavailable):
+                await check_rate_limit(
+                    _USER, daily_cost_limit=10000, weekly_cost_limit=50000
+                )
+
+    @pytest.mark.asyncio
     async def test_skips_redis_and_does_not_raise_unavailable_when_unlimited(self):
         """When both limits are 0 (unlimited) we must not even attempt Redis,
         so a brown-out cannot 503 unlimited users."""
