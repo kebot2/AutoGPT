@@ -389,6 +389,14 @@ def test_stream_chat_returns_503_with_retry_after_when_rate_limit_unavailable(
     _mock_stream_internals(mocker)
     mocker.patch.object(chat_routes.config, "daily_cost_limit_microdollars", 10000)
     mocker.patch.object(chat_routes.config, "weekly_cost_limit_microdollars", 50000)
+    # Patch the limit-resolution helper so the test does not exercise the
+    # real LaunchDarkly / tier-lookup path — keeps the assertion focused on
+    # the RateLimitUnavailable → 503 mapping.
+    mocker.patch(
+        "backend.api.features.chat.routes.get_global_rate_limits",
+        new_callable=AsyncMock,
+        return_value=(10_000, 50_000, SubscriptionTier.BASIC),
+    )
     mocker.patch(
         "backend.api.features.chat.routes.check_rate_limit",
         side_effect=RateLimitUnavailable(),
