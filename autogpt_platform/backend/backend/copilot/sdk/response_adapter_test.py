@@ -524,6 +524,88 @@ def test_result_success_thinking_only_after_reprompt_promotes_thinking():
     assert isinstance(results[-1], StreamFinish)
 
 
+def test_result_success_thinking_only_two_rounds_with_driver_reset_emits_fallback():
+    """Regression: the driver's reset between the deferred first round and
+    the re-prompt second round must leave enough state for the guard to
+    fire when the second round also returns thinking-only.  Specifically,
+    ``_any_tool_results_seen`` must remain True after the reset — the
+    guard requires it.
+    """
+    adapter = _adapter()
+
+    # --- Round 1: tool_use → tool_result → thinking-only finish.
+    adapter.convert_message(
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id="t1", name=f"{MCP_TOOL_PREFIX}find_block", input={})
+            ],
+            model="test",
+        )
+    )
+    adapter.convert_message(
+        UserMessage(
+            content=[
+                ToolResultBlock(tool_use_id="t1", content="result", is_error=False)
+            ],
+            parent_tool_use_id=None,
+        )
+    )
+    adapter.convert_message(
+        AssistantMessage(
+            content=[
+                ThinkingBlock(thinking="Round 1 internal reasoning.", signature="")
+            ],
+            model="test",
+        )
+    )
+    round1 = adapter.convert_message(
+        ResultMessage(
+            subtype="success",
+            duration_ms=100,
+            duration_api_ms=50,
+            is_error=False,
+            num_turns=2,
+            session_id="s1",
+            result="",
+        )
+    )
+    assert adapter.pending_thinking_only_reprompt is True
+    assert [r for r in round1 if isinstance(r, StreamFinish)] == []
+
+    # --- Driver behaviour between rounds (must mirror service.py exactly).
+    adapter.pending_thinking_only_reprompt = False
+    adapter.thinking_only_reprompted = True
+    adapter._text_since_last_tool_result = False
+    # Intentionally do NOT touch ``_any_tool_results_seen`` — the guard at
+    # ResultMessage time needs it to stay True so the placeholder fires
+    # if the re-prompt round also returns thinking-only.
+
+    # --- Round 2: model returns thinking-only again.
+    adapter.convert_message(
+        AssistantMessage(
+            content=[
+                ThinkingBlock(thinking="Round 2 internal reasoning.", signature="")
+            ],
+            model="test",
+        )
+    )
+    round2 = adapter.convert_message(
+        ResultMessage(
+            subtype="success",
+            duration_ms=100,
+            duration_api_ms=50,
+            is_error=False,
+            num_turns=4,
+            session_id="s1",
+            result="",
+        )
+    )
+    text_deltas = [r for r in round2 if isinstance(r, StreamTextDelta)]
+    assert len(text_deltas) == 1, "second pass must emit fallback text"
+    assert text_deltas[0].delta.strip()  # non-empty
+    assert isinstance(round2[-1], StreamFinish)
+
+
 def test_result_success_thinking_only_after_reprompt_falls_back_to_placeholder():
     """After re-prompt with no thinking content captured either, the
     adapter emits the placeholder so the turn still visibly completes."""

@@ -3081,8 +3081,13 @@ async def _run_stream_attempt(
             ):
                 state.adapter.pending_thinking_only_reprompt = False
                 state.adapter.thinking_only_reprompted = True
+                # Keep ``_any_tool_results_seen`` True — the guard at
+                # ``ResultMessage`` time still needs it to fire on the
+                # re-prompt round if the model returns thinking-only
+                # again.  Only reset the per-tool-result text-tracker;
+                # if the re-prompt emits a TextBlock it'll set this to
+                # True and the guard won't fire.
                 state.adapter._text_since_last_tool_result = False
-                state.adapter._any_tool_results_seen = False
                 acc.stream_completed = False
                 logger.info(
                     "%s Re-prompting model for closing summary "
