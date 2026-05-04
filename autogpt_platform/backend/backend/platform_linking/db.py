@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from prisma.errors import UniqueViolationError
 from prisma.models import PlatformLink, PlatformLinkToken, PlatformUserLink
 
-from backend.data.db import transaction
+from backend.data.db import prisma, transaction
 from backend.util.exceptions import (
     LinkAlreadyExistsError,
     LinkFlowMismatchError,
@@ -36,6 +36,7 @@ from .models import (
     PlatformLinkInfo,
     PlatformUserLinkInfo,
     ResolveResponse,
+    ServerLinkDetails,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,21 @@ async def find_server_link_owner(platform: str, platform_server_id: str) -> str 
         where={"platform": platform, "platformServerId": platform_server_id}
     )
     return link.userId if link else None
+
+
+async def find_server_link_details(
+    platform: str, platform_server_id: str
+) -> ServerLinkDetails | None:
+    """Return (user_id, organization_id) for a server link, or None."""
+    link = await PlatformLink.prisma().find_first(
+        where={"platform": platform, "platformServerId": platform_server_id}
+    )
+    if not link:
+        return None
+    return ServerLinkDetails(
+        user_id=link.userId,
+        organization_id=link.organizationId,
+    )
 
 
 async def find_user_link_owner(platform: str, platform_user_id: str) -> str | None:
@@ -237,10 +253,49 @@ async def get_link_token_info(token: str) -> LinkTokenInfoResponse:
     )
 
 
+# ── Org resolution for server links ────────────────────────────────────
+
+
+async def _resolve_org_for_link(
+    user_id: str, organization_id: str | None
+) -> str | None:
+    """Validate or auto-resolve the org for a server link.
+
+    - If *organization_id* is given, verify the user is an active member.
+    - If omitted, fall back to the user's personal org (best-effort).
+    - Returns None gracefully for pre-migration users.
+    """
+    if organization_id:
+        member = await prisma.orgmember.find_first(
+            where={
+                "userId": user_id,
+                "orgId": organization_id,
+                "Org": {"deletedAt": None},
+            },
+        )
+        if member is None:
+            raise NotAuthorizedError(
+                "You are not a member of the selected organization."
+            )
+        return organization_id
+
+    # Auto-resolve: personal org
+    try:
+        from backend.api.features.orgs.db import get_user_default_team
+
+        org_id, _ = await get_user_default_team(user_id)
+        return org_id
+    except Exception:
+        logger.debug("Could not auto-resolve org for user ...%s", user_id[-8:])
+        return None
+
+
 # ── Confirmation (user-facing, JWT-authed) ────────────────────────────
 
 
-async def confirm_server_link(token: str, user_id: str) -> ConfirmLinkResponse:
+async def confirm_server_link(
+    token: str, user_id: str, organization_id: str | None = None
+) -> ConfirmLinkResponse:
     link_token = await PlatformLinkToken.prisma().find_unique(where={"token": token})
 
     if not link_token:
@@ -265,6 +320,9 @@ async def confirm_server_link(token: str, user_id: str) -> ConfirmLinkResponse:
         )
         raise LinkAlreadyExistsError(detail)
 
+    # Resolve/validate organization_id
+    resolved_org_id = await _resolve_org_for_link(user_id, organization_id)
+
     # Atomic consume + create so a failed create doesn't burn the token.
     now = datetime.now(timezone.utc)
     try:
@@ -282,6 +340,7 @@ async def confirm_server_link(token: str, user_id: str) -> ConfirmLinkResponse:
                     "platformServerId": link_token.platformServerId,
                     "ownerPlatformUserId": link_token.platformUserId,
                     "serverName": link_token.serverName,
+                    "organizationId": resolved_org_id,
                 }
             )
     except UniqueViolationError as exc:
@@ -301,6 +360,7 @@ async def confirm_server_link(token: str, user_id: str) -> ConfirmLinkResponse:
         platform=link_token.platform,
         platform_server_id=link_token.platformServerId,
         server_name=link_token.serverName,
+        organization_id=resolved_org_id,
     )
 
 
@@ -373,6 +433,7 @@ async def list_server_links(user_id: str) -> list[PlatformLinkInfo]:
             platform_server_id=link.platformServerId,
             owner_platform_user_id=link.ownerPlatformUserId,
             server_name=link.serverName,
+            organization_id=link.organizationId,
             linked_at=link.linkedAt,
         )
         for link in links

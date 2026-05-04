@@ -837,6 +837,8 @@ async def create_chat_session(
     *,
     dry_run: bool,
     builder_graph_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> ChatSession:
     """Create a new chat session and persist it.
 
@@ -847,6 +849,8 @@ async def create_chat_session(
         builder_graph_id: When set, locks the session to the given graph.
             The builder panel uses this to bind a chat to the currently-
             opened agent and to resume the same session on refresh.
+        organization_id: Optional org context for billing/scoping.
+        team_id: Optional team context for billing/scoping.
 
     Raises:
         DatabaseError: If the database write fails. We fail fast to ensure
@@ -865,6 +869,8 @@ async def create_chat_session(
             session_id=session.session_id,
             user_id=user_id,
             metadata=session.metadata,
+            organization_id=organization_id,
+            team_id=team_id,
         )
     except Exception as e:
         logger.error(f"Failed to create session {session.session_id} in database: {e}")

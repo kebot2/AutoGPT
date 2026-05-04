@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -114,6 +114,16 @@ class BotChatRequest(BaseModel):
     )
 
 
+class ConfirmServerLinkRequest(BaseModel):
+    """Request body for server link confirmation (optional org selection)."""
+
+    organization_id: str | None = Field(
+        default=None,
+        description="Organization to bill for server usage. "
+        "Omit to auto-resolve from user's default org.",
+    )
+
+
 # ── Response Models ────────────────────────────────────────────────────
 
 
@@ -143,6 +153,7 @@ class PlatformLinkInfo(BaseModel):
     platform_server_id: str
     owner_platform_user_id: str
     server_name: str | None
+    organization_id: str | None = None
     linked_at: datetime
 
 
@@ -160,6 +171,7 @@ class ConfirmLinkResponse(BaseModel):
     platform: str
     platform_server_id: str
     server_name: str | None
+    organization_id: str | None = None
 
 
 class ConfirmUserLinkResponse(BaseModel):
@@ -180,3 +192,10 @@ class ChatTurnHandle(BaseModel):
     turn_id: str
     user_id: str
     subscribe_from: str = "0-0"
+
+
+class ServerLinkDetails(NamedTuple):
+    """Internal tuple returned by find_server_link_details()."""
+
+    user_id: str
+    organization_id: str | None

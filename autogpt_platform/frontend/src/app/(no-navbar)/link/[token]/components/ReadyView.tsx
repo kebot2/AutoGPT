@@ -3,6 +3,7 @@ import { Text } from "@/components/atoms/Text/Text";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { LinkType } from "@/app/api/__generated__/models/linkType";
 import { isUserLink } from "../helpers";
+import { OrgSelector } from "./OrgSelector";
 
 interface Props {
   linkType: LinkType;
@@ -10,6 +11,8 @@ interface Props {
   serverName: string | null;
   userEmail: string | null;
   isLinking: boolean;
+  selectedOrgId: string | null;
+  onOrgChange: (orgId: string) => void;
   onLink: () => void;
   onSwitchAccount: () => void;
 }
@@ -20,6 +23,8 @@ export function ReadyView({
   serverName,
   userEmail,
   isLinking,
+  selectedOrgId,
+  onOrgChange,
   onLink,
   onSwitchAccount,
 }: Props) {
@@ -60,6 +65,13 @@ export function ReadyView({
             You can unlink at any time from your account settings.
           </Text>
         </div>
+
+        {!forUser && (
+          <OrgSelector
+            selectedOrgId={selectedOrgId}
+            onOrgChange={onOrgChange}
+          />
+        )}
 
         <Button
           onClick={onLink}

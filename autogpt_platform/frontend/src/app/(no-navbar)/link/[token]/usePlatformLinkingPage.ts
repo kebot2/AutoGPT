@@ -7,7 +7,9 @@ import { ConfirmLinkResponse } from "@/app/api/__generated__/models/confirmLinkR
 import { ConfirmUserLinkResponse } from "@/app/api/__generated__/models/confirmUserLinkResponse";
 import { LinkType } from "@/app/api/__generated__/models/linkType";
 import { useSupabase } from "@/lib/supabase/hooks/useSupabase";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { useParams, useSearchParams } from "next/navigation";
+import { useState } from "react";
 import {
   getLoginRedirect,
   getPlatformDisplayName,
@@ -36,6 +38,10 @@ export function usePlatformLinkingPage() {
   const token = TOKEN_PATTERN.test(rawToken) ? rawToken : null;
   const platformFromUrl = getPlatformDisplayName(searchParams.get("platform"));
   const { user, isUserLoading, logOut } = useSupabase();
+  const { activeOrgID, isLoaded: isOrgLoaded } = useOrgTeamStore();
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+
+  const effectiveOrgId = selectedOrgId ?? activeOrgID;
 
   const {
     data: info,
@@ -61,12 +67,15 @@ export function usePlatformLinkingPage() {
       ? (mutation.data.data as ConfirmLinkResponse | ConfirmUserLinkResponse)
       : undefined;
 
+  const isServerLink = info ? !isUserLink(info.link_type) : false;
+
   const status = resolveStatus({
     hasToken: Boolean(token),
     isUserLoading,
     hasUser: Boolean(user),
     isInfoLoading,
     isInfoError,
+    isOrgLoading: isServerLink && !isOrgLoaded,
     isMutating: mutation.isPending,
     isMutationSuccess: mutation.isSuccess,
     isMutationError: mutation.isError,
@@ -74,7 +83,14 @@ export function usePlatformLinkingPage() {
 
   function handleLink() {
     if (!token || !info) return;
-    mutation.mutate({ token });
+    if (info && !isUserLink(info.link_type) && effectiveOrgId) {
+      mutation.mutate({
+        token,
+        data: { organization_id: effectiveOrgId },
+      });
+    } else {
+      mutation.mutate({ token });
+    }
   }
 
   async function handleSwitchAccount() {
@@ -87,6 +103,8 @@ export function usePlatformLinkingPage() {
     token,
     loginRedirect: getLoginRedirect(token),
     userEmail: user?.email ?? null,
+    selectedOrgId: effectiveOrgId,
+    setSelectedOrgId,
     viewData: buildViewData({ info, platformFromUrl }),
     successData: buildSuccessData({
       confirmResponse,
@@ -108,6 +126,7 @@ function resolveStatus(args: {
   hasUser: boolean;
   isInfoLoading: boolean;
   isInfoError: boolean;
+  isOrgLoading: boolean;
   isMutating: boolean;
   isMutationSuccess: boolean;
   isMutationError: boolean;
@@ -120,6 +139,7 @@ function resolveStatus(args: {
   if (args.isMutating) return "linking";
   if (args.isInfoLoading) return "loading";
   if (args.isInfoError) return "error";
+  if (args.isOrgLoading) return "loading";
   return "ready";
 }
 

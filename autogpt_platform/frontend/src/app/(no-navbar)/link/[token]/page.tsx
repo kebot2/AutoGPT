@@ -28,6 +28,8 @@ export default function PlatformLinkPage() {
           serverName={page.viewData.serverName}
           userEmail={page.userEmail}
           isLinking={false}
+          selectedOrgId={page.selectedOrgId}
+          onOrgChange={page.setSelectedOrgId}
           onLink={page.handleLink}
           onSwitchAccount={page.handleSwitchAccount}
         />
@@ -40,6 +42,8 @@ export default function PlatformLinkPage() {
           serverName={page.viewData.serverName}
           userEmail={page.userEmail}
           isLinking
+          selectedOrgId={page.selectedOrgId}
+          onOrgChange={page.setSelectedOrgId}
           onLink={page.handleLink}
           onSwitchAccount={page.handleSwitchAccount}
         />

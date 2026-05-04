@@ -4,11 +4,12 @@ import logging
 from typing import Annotated
 
 from autogpt_libs import auth
-from fastapi import APIRouter, HTTPException, Path, Security
+from fastapi import APIRouter, Body, HTTPException, Path, Security
 
 from backend.data.db_accessors import platform_linking_db
 from backend.platform_linking.models import (
     ConfirmLinkResponse,
+    ConfirmServerLinkRequest,
     ConfirmUserLinkResponse,
     DeleteLinkResponse,
     LinkTokenInfoResponse,
@@ -69,9 +70,13 @@ async def get_link_token_info_route(token: TokenPath) -> LinkTokenInfoResponse:
 async def confirm_link_token(
     token: TokenPath,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    body: ConfirmServerLinkRequest = Body(default=ConfirmServerLinkRequest()),
 ) -> ConfirmLinkResponse:
     try:
-        return await platform_linking_db().confirm_server_link(token, user_id)
+        org_id = body.organization_id if body else None
+        return await platform_linking_db().confirm_server_link(
+            token, user_id, organization_id=org_id
+        )
     except (
         NotFoundError,
         LinkFlowMismatchError,

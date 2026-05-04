@@ -1628,6 +1628,7 @@ model Organization {
   TransfersFrom      TransferRequest[]            @relation("TransferSource")
   TransfersTo        TransferRequest[]            @relation("TransferTarget")
   AuditLogs          AuditLog[]
+  PlatformLinks      PlatformLink[]
   // slug already has @unique which creates an index — no separate @@index needed
 }
 
@@ -1936,17 +1937,20 @@ enum PlatformLinkType {
 // to an AutoGPT user account. The user who first authenticates becomes the
 // "owner" — all usage from that server is attributed to their account.
 model PlatformLink {
-  id                  String       @id @default(uuid())
-  userId              String       // AutoGPT user ID of the owner
-  User                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                  String        @id @default(uuid())
+  userId              String        // AutoGPT user ID of the owner
+  User                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   platform            PlatformType
-  platformServerId    String       // Server/guild/group ID on that platform
-  ownerPlatformUserId String       // Platform user ID of the person who set it up
-  serverName          String?      // Display name of the server (best-effort, may go stale)
-  linkedAt            DateTime     @default(now())
+  platformServerId    String        // Server/guild/group ID on that platform
+  ownerPlatformUserId String        // Platform user ID of the person who set it up
+  serverName          String?       // Display name of the server (best-effort, may go stale)
+  organizationId      String?       // Org to bill; set by user during link confirmation
+  Organization        Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  linkedAt            DateTime      @default(now())
 
   @@unique([platform, platformServerId])
   @@index([userId])
+  @@index([organizationId])
 }
 
 // Maps a platform user identity (a single Discord / Telegram / Slack user) to

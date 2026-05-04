@@ -357,6 +357,7 @@ class DatabaseManager(AppService):
 
     # ============ Platform Linking ============ #
     find_server_link_owner = _(platform_linking_db.find_server_link_owner)
+    find_server_link_details = _(platform_linking_db.find_server_link_details)
     find_user_link_owner = _(platform_linking_db.find_user_link_owner)
     resolve_server_link = _(platform_linking_db.resolve_server_link)
     resolve_user_link = _(platform_linking_db.resolve_user_link)
@@ -581,6 +582,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ Platform Linking ============ #
     find_server_link_owner = d.find_server_link_owner
+    find_server_link_details = d.find_server_link_details
     find_user_link_owner = d.find_user_link_owner
     resolve_server_link = d.resolve_server_link
     resolve_user_link = d.resolve_user_link
