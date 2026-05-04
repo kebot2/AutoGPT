@@ -58,7 +58,7 @@ from enum import Enum
 
 from prisma.models import User as PrismaUser
 from pydantic import BaseModel, Field
-from redis.exceptions import RedisError
+from redis.exceptions import RedisClusterException, RedisError
 
 from backend.data.db_accessors import user_db
 from backend.data.redis_client import AsyncRedisClient, get_redis_async
@@ -540,11 +540,20 @@ async def check_rate_limit(
         )
         daily_used = int(daily_raw or 0)
         weekly_used = int(weekly_raw or 0)
-    except (RedisError, ConnectionError, OSError, ValueError) as exc:
-        # ValueError covers a corrupt non-numeric counter value
-        # (e.g. partial write or wrong-type SET on a counter key) — same
-        # spirit as a Redis outage: we cannot prove the user is under their
-        # cap, so fail closed instead of letting the request through.
+    except (
+        RedisError,
+        RedisClusterException,
+        ConnectionError,
+        OSError,
+        ValueError,
+    ) as exc:
+        # RedisClusterException covers SlotNotCoveredError raised during a
+        # GKE rolling restart (it does NOT inherit from RedisError, only
+        # from Exception, so it would otherwise bubble up as a 500 — which
+        # is exactly the brown-out scenario this PR is meant to handle).
+        # ValueError covers a corrupt non-numeric counter value (partial
+        # write or wrong-type SET). Same spirit either way: we cannot prove
+        # the user is under their cap, so fail closed.
         logger.warning("Rate limit state unreadable, rejecting request: %s", exc)
         raise RateLimitUnavailable() from exc
 

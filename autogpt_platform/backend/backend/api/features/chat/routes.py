@@ -902,6 +902,10 @@ def _empty_ui_message_stream_response() -> StreamingResponse:
     responses={
         404: {"description": "Session not found or access denied"},
         429: {"description": "Cost rate-limit or call-frequency cap exceeded"},
+        503: {
+            "description": "Rate limit service degraded (Redis unavailable); "
+            "client should honour the Retry-After header before retrying."
+        },
     },
 )
 async def stream_chat_post(

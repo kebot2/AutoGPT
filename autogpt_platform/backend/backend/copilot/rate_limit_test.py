@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from redis.exceptions import RedisError
+from redis.exceptions import RedisClusterException, RedisError
 
 from .rate_limit import (
     _DEFAULT_TIER_MULTIPLIERS,
@@ -236,6 +236,27 @@ class TestCheckRateLimit:
         CROSSSLOT-style failures during a brown-out)."""
         mock_redis = AsyncMock()
         mock_redis.get = AsyncMock(side_effect=RedisError("cluster down"))
+        with patch(
+            "backend.copilot.rate_limit.get_redis_async",
+            return_value=mock_redis,
+        ):
+            with pytest.raises(RateLimitUnavailable):
+                await check_rate_limit(
+                    _USER, daily_cost_limit=10000, weekly_cost_limit=50000
+                )
+
+    @pytest.mark.asyncio
+    async def test_raises_unavailable_when_redis_cluster_exception(self):
+        """Fail-closed for RedisClusterException — covers SlotNotCoveredError
+        raised during a GKE rolling restart when slot coverage is briefly
+        incomplete. This subclass does NOT inherit from RedisError, so it
+        must be caught explicitly."""
+        try:
+            from redis.exceptions import SlotNotCoveredError as _ClusterExc
+        except ImportError:
+            _ClusterExc = RedisClusterException
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(side_effect=_ClusterExc("slot 1234 uncovered"))
         with patch(
             "backend.copilot.rate_limit.get_redis_async",
             return_value=mock_redis,
