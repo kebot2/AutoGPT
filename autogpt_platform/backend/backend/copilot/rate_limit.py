@@ -489,7 +489,9 @@ async def get_usage_status(
         )
         daily_used = int(daily_raw or 0)
         weekly_used = int(weekly_raw or 0)
-    except (RedisError, RedisClusterException, ConnectionError, OSError):
+    except (RedisError, RedisClusterException, ConnectionError, OSError, ValueError):
+        # ValueError: corrupt non-numeric counter (partial write / wrong-type
+        # SET) — same fail-open semantics, returns zeros.
         logger.warning("Redis unavailable for usage status, returning zeros")
 
     return CoPilotUsageStatus(
@@ -640,7 +642,9 @@ async def get_daily_reset_count(user_id: str) -> int | None:
         key = f"{_RESET_COUNT_PREFIX}:{user_id}:{now.strftime('%Y-%m-%d')}"
         val = await redis.get(key)
         return int(val or 0)
-    except (RedisError, RedisClusterException, ConnectionError, OSError):
+    except (RedisError, RedisClusterException, ConnectionError, OSError, ValueError):
+        # ValueError: corrupt non-numeric counter — fail-closed for billed
+        # resets (returning None makes the caller refuse the billed reset).
         logger.warning("Redis unavailable for reading daily reset count")
         return None
 
