@@ -375,6 +375,34 @@ def test_stream_chat_429_includes_reset_time(mocker: pytest_mock.MockerFixture):
     assert "Resets in" in detail
 
 
+def test_stream_chat_returns_503_with_retry_after_when_rate_limit_unavailable(
+    mocker: pytest_mock.MockerFixture,
+):
+    """Redis brown-out must NOT bypass the per-user USD cap.
+
+    When ``check_rate_limit`` raises :class:`RateLimitUnavailable` the
+    endpoint must respond 503 with ``Retry-After``, not 429 (different UX:
+    transient outage, not "you hit your limit") and not 200 (which would
+    silently let the user blast the LLM during the outage)."""
+    from backend.copilot.rate_limit import RateLimitUnavailable
+
+    _mock_stream_internals(mocker)
+    mocker.patch.object(chat_routes.config, "daily_cost_limit_microdollars", 10000)
+    mocker.patch.object(chat_routes.config, "weekly_cost_limit_microdollars", 50000)
+    mocker.patch(
+        "backend.api.features.chat.routes.check_rate_limit",
+        side_effect=RateLimitUnavailable(),
+    )
+
+    response = client.post(
+        "/sessions/sess-1/stream",
+        json={"message": "hello"},
+    )
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After") == "30"
+    assert "degraded" in response.json()["detail"].lower()
+
+
 # ─── Usage endpoint ───────────────────────────────────────────────────
 
 

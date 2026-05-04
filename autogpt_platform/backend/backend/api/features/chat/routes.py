@@ -38,6 +38,7 @@ from backend.copilot.pending_messages import peek_pending_messages
 from backend.copilot.rate_limit import (
     CoPilotUsagePublic,
     RateLimitExceeded,
+    RateLimitUnavailable,
     acquire_reset_lock,
     check_rate_limit,
     get_daily_reset_count,
@@ -994,6 +995,16 @@ async def stream_chat_post(
             )
         except RateLimitExceeded as e:
             raise HTTPException(status_code=429, detail=str(e)) from e
+        except RateLimitUnavailable as e:
+            # Fail-closed on Redis brown-out: the user may already be at or
+            # past their USD cap and we cannot prove otherwise. 503 + a short
+            # Retry-After is the right UX (transient outage, retry shortly),
+            # not 429 ("you hit your limit").
+            raise HTTPException(
+                status_code=503,
+                detail="Rate limit service degraded, retry shortly",
+                headers={"Retry-After": "30"},
+            ) from e
 
     # Enrich message with file metadata if file_ids are provided.
     # Also sanitise file_ids so only validated, workspace-scoped IDs are

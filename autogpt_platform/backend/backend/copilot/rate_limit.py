@@ -3,8 +3,22 @@
 Uses Redis fixed-window counters to track per-user USD spend (stored as
 microdollars, matching ``PlatformCostLog.cost_microdollars``) with
 configurable daily and weekly limits. Daily windows reset at midnight UTC;
-weekly windows reset at ISO week boundary (Monday 00:00 UTC). Fails open
-when Redis is unavailable to avoid blocking users.
+weekly windows reset at ISO week boundary (Monday 00:00 UTC).
+
+Failure-mode policy:
+
+* Enforcement path (:func:`check_rate_limit`) **fails closed** — if Redis
+  is unreachable we raise :class:`RateLimitUnavailable` so the API layer
+  returns HTTP 503. A brown-out must not let a user bypass their
+  daily / weekly USD cap.
+* Observability paths (:func:`get_usage_status`, the reset-count
+  read/write helpers, the recording path :func:`record_cost_usage`) keep
+  fail-open / best-effort semantics — losing a usage gauge or a single
+  cost increment is preferable to 500-ing the request, and the
+  authoritative cap is re-checked on the next turn.
+* Reset paths (:func:`reset_user_usage`, :func:`reset_daily_usage`,
+  :func:`acquire_reset_lock`) re-raise / return ``False`` so billed reset
+  operations cannot silently no-op.
 
 Storing microdollars rather than tokens means the counter already reflects
 real model pricing (including cache discounts and provider surcharges), so
@@ -433,6 +447,18 @@ class RateLimitExceeded(Exception):
         )
 
 
+class RateLimitUnavailable(Exception):
+    """Rate limit state is currently unreachable — request rejected to
+    prevent USD-cap bypass. Maps to HTTP 503 in the API layer.
+
+    Distinct from :class:`RateLimitExceeded` (HTTP 429): the user is not
+    over their cap, but Redis is down so we cannot prove they are under it
+    either. Failing closed avoids the brown-out bypass where a user could
+    blast the LLM during a Redis outage and exceed their daily/weekly USD
+    allowance by hundreds of dollars.
+    """
+
+
 async def get_usage_status(
     user_id: str,
     daily_cost_limit: int,
@@ -487,15 +513,18 @@ async def check_rate_limit(
     daily_cost_limit: int,
     weekly_cost_limit: int,
 ) -> None:
-    """Check if user is within rate limits. Raises RateLimitExceeded if not.
+    """Check if user is within rate limits.
+
+    Raises :class:`RateLimitExceeded` when the user is over their cap, and
+    :class:`RateLimitUnavailable` when Redis is unreachable so the caller
+    must fail closed (HTTP 503) — the daily/weekly USD caps are real money
+    and cannot be bypassed by a Redis brown-out.
 
     This is a pre-turn soft check. The authoritative usage counter is updated
     by ``record_cost_usage()`` after the turn completes. Under concurrency,
     two parallel turns may both pass this check against the same snapshot.
     This is acceptable because cost-based limits are approximate by nature
     (the exact cost is unknown until after generation).
-
-    Fails open: if Redis is unavailable, allows the request.
     """
     # Short-circuit: when both limits are 0 (unlimited) skip the Redis
     # round-trip entirely.
@@ -511,9 +540,11 @@ async def check_rate_limit(
         )
         daily_used = int(daily_raw or 0)
         weekly_used = int(weekly_raw or 0)
-    except (RedisError, ConnectionError, OSError):
-        logger.warning("Redis unavailable for rate limit check, allowing request")
-        return
+    except (RedisError, ConnectionError, OSError) as exc:
+        logger.warning(
+            "Redis unavailable for rate limit check, rejecting request: %s", exc
+        )
+        raise RateLimitUnavailable() from exc
 
     if daily_cost_limit > 0 and daily_used >= daily_cost_limit:
         raise RateLimitExceeded("daily", _daily_reset_time(now=now))
