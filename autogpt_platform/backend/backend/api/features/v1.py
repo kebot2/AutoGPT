@@ -705,6 +705,10 @@ class SubscriptionTierRequest(BaseModel):
     tier: Literal["NO_TIER", "BASIC", "PRO", "MAX", "BUSINESS"]
     success_url: str = ""
     cancel_url: str = ""
+    # Billing cycle for paid upgrades. Defaults to "monthly" so existing
+    # clients keep working; the onboarding + settings UIs send this
+    # explicitly based on the user's Monthly/Yearly toggle selection.
+    billing_cycle: Literal["monthly", "yearly"] = "monthly"
 
 
 class SubscriptionStatusResponse(BaseModel):
@@ -953,7 +957,7 @@ async def update_subscription_tier(
         Flag.ENABLE_PLATFORM_PAYMENT, user_id, default=False
     )
 
-    target_price_id = await get_subscription_price_id(tier)
+    target_price_id = await get_subscription_price_id(tier, request.billing_cycle)
 
     # Cancel: target NO_TIER. Schedule Stripe cancellation at period end;
     # cancel_at_period_end=True lets the webhook flip the DB tier. No active
@@ -990,15 +994,23 @@ async def update_subscription_tier(
         )
 
     # Target has no LD price — not provisionable (matches the GET hiding).
+    # Yearly is a separate price ID in LD; when only monthly is configured,
+    # a yearly request lands here and fails fast rather than silently billing
+    # monthly (the bug this fix addresses).
     if target_price_id is None:
         raise HTTPException(
             status_code=422,
-            detail=f"Subscription not available for tier {tier.value}",
+            detail=(
+                f"Subscription not available for tier {tier.value} "
+                f"on {request.billing_cycle} billing"
+            ),
         )
 
     # Modify in place if there's a sub; else fall through to Checkout below.
     try:
-        modified = await modify_stripe_subscription_for_tier(user_id, tier)
+        modified = await modify_stripe_subscription_for_tier(
+            user_id, tier, request.billing_cycle
+        )
         if modified:
             return await get_subscription_status(user_id)
     except ValueError as e:
@@ -1084,6 +1096,7 @@ async def update_subscription_tier(
             tier=tier,
             success_url=request.success_url,
             cancel_url=request.cancel_url,
+            billing_cycle=request.billing_cycle,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

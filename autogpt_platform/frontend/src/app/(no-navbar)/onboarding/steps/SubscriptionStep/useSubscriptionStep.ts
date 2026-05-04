@@ -95,9 +95,14 @@ export function useSubscriptionStep() {
       });
 
       const baseUrl = `${window.location.origin}/onboarding`;
+      // Send billing_cycle explicitly so the backend picks the correct
+      // Stripe price ID. Without this, the API silently defaults to the
+      // monthly price even when the user has the "Yearly billing" toggle
+      // enabled on the plan card.
       const result = await updateTier({
         data: {
           tier,
+          billing_cycle: isYearly ? "yearly" : "monthly",
           success_url: `${baseUrl}?step=5&subscription=success`,
           cancel_url: `${baseUrl}?step=4&subscription=cancelled`,
         },
