@@ -452,14 +452,12 @@ def test_render_reasoning_on_is_default():
     assert "StreamReasoningDelta" in types
 
 
-def test_result_success_synthesizes_fallback_text_when_final_turn_is_thinking_only():
-    """If the model's last LLM call after a tool_result produced only a
-    ThinkingBlock (no TextBlock), the UI would hang on the tool output
-    with no response text.  The adapter should inject a short closing
-    line before ``StreamFinish`` so the turn visibly completes."""
+def test_result_success_thinking_only_first_pass_defers_for_reprompt():
+    """First time we see a thinking-only final turn the adapter must defer:
+    no text, no StreamFinish.  Driver reads ``pending_thinking_only_reprompt``
+    and re-prompts the model for a closing TextBlock before falling back."""
     adapter = _adapter()
 
-    # Tool use + tool_result (simulates the tool round).
     adapter.convert_message(
         AssistantMessage(
             content=[
@@ -477,11 +475,6 @@ def test_result_success_synthesizes_fallback_text_when_final_turn_is_thinking_on
         )
     )
 
-    # Model's "final turn" after tool_result is thinking-only.  This test
-    # simulates the *degenerate* case where the SDK never surfaces an
-    # AssistantMessage carrying the ThinkingBlock at all (not even the
-    # streamed reasoning events) before ResultMessage — only the tool_result
-    # has arrived.  The fallback guard should still synthesize closing text.
     msg = ResultMessage(
         subtype="success",
         duration_ms=100,
@@ -493,10 +486,67 @@ def test_result_success_synthesizes_fallback_text_when_final_turn_is_thinking_on
     )
     results = adapter.convert_message(msg)
 
-    # Fallback text should be injected before the finish events.
     text_deltas = [r for r in results if isinstance(r, StreamTextDelta)]
-    assert len(text_deltas) == 1, "should synthesize exactly one fallback text"
-    assert text_deltas[0].delta.strip()  # non-empty
+    finishes = [r for r in results if isinstance(r, StreamFinish)]
+    assert text_deltas == [], "first pass must not emit placeholder"
+    assert finishes == [], "first pass must skip StreamFinish so driver can re-prompt"
+    assert adapter.pending_thinking_only_reprompt is True
+    assert adapter.thinking_only_reprompted is False
+
+
+def test_result_success_thinking_only_after_reprompt_promotes_thinking():
+    """After re-prompt, if the model still produces thinking-only, the
+    adapter promotes the most recent ThinkingBlock content to visible text
+    rather than showing the bare placeholder."""
+    adapter = _adapter()
+    adapter._last_thinking_content = (
+        "Here are the best restaurants: Dishoom, The Clove Club, Padella."
+    )
+    # Simulate the driver having already fired the re-prompt round once.
+    adapter.thinking_only_reprompted = True
+    adapter._any_tool_results_seen = True
+    adapter._text_since_last_tool_result = False
+
+    msg = ResultMessage(
+        subtype="success",
+        duration_ms=100,
+        duration_api_ms=50,
+        is_error=False,
+        num_turns=4,
+        session_id="s1",
+        result="",
+    )
+    results = adapter.convert_message(msg)
+
+    text_deltas = [r for r in results if isinstance(r, StreamTextDelta)]
+    assert len(text_deltas) == 1
+    assert "Dishoom" in text_deltas[0].delta
+    assert isinstance(results[-1], StreamFinish)
+
+
+def test_result_success_thinking_only_after_reprompt_falls_back_to_placeholder():
+    """After re-prompt with no thinking content captured either, the
+    adapter emits the placeholder so the turn still visibly completes."""
+    adapter = _adapter()
+    adapter._last_thinking_content = ""
+    adapter.thinking_only_reprompted = True
+    adapter._any_tool_results_seen = True
+    adapter._text_since_last_tool_result = False
+
+    msg = ResultMessage(
+        subtype="success",
+        duration_ms=100,
+        duration_api_ms=50,
+        is_error=False,
+        num_turns=4,
+        session_id="s1",
+        result="",
+    )
+    results = adapter.convert_message(msg)
+
+    text_deltas = [r for r in results if isinstance(r, StreamTextDelta)]
+    assert len(text_deltas) == 1
+    assert text_deltas[0].delta == "(Done — no further commentary.)"
     assert isinstance(results[-1], StreamFinish)
 
 
@@ -843,15 +893,11 @@ def test_flush_unresolved_at_result_message():
         "StreamToolInputAvailable",
         "StreamToolOutputAvailable",  # flushed with empty output
         "StreamFinishStep",  # step closed by flush
-        # Flush marks a tool_result as seen, so the thinking-only-final-turn
-        # guard at ResultMessage time synthesizes a closing text delta.
-        "StreamStartStep",
-        "StreamTextStart",
-        "StreamTextDelta",
-        "StreamTextEnd",
-        "StreamFinishStep",
-        "StreamFinish",
     ]
+    # Flush marked a tool_result as seen with no text since, so the
+    # thinking-only-final-turn guard defers placeholder emission and asks
+    # the driver to re-prompt (no StreamFinish yet).
+    assert adapter.pending_thinking_only_reprompt is True
     # The flushed output should be empty (no stash available)
     output_event = [
         r for r in all_responses if isinstance(r, StreamToolOutputAvailable)
