@@ -1,6 +1,11 @@
 -- Sortable UUIDv7 generator (RFC 9562). Built on gen_random_uuid()
 -- (pgcrypto, already in use). The first 48 bits encode the unix
 -- timestamp in milliseconds, so values are k-sortable on insert order.
+--
+-- NOTE: drop this function and switch to the built-in once Supabase ships a
+-- PG18 image (PG18 added native `uuidv7()`). PG15 — our current pin — has
+-- no native generator and no pre-bundled extension that provides one
+-- (uuid-ossp tops out at v5; pg_uuidv7 isn't in Supabase's image).
 CREATE OR REPLACE FUNCTION uuid_generate_v7()
 RETURNS uuid
 AS $$
