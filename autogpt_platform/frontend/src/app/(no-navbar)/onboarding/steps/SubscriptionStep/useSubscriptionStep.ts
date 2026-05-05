@@ -6,11 +6,15 @@ import { environment } from "@/services/environment";
 import { useState } from "react";
 import { normalizeOnboardingProfile } from "../../helpers";
 import { useOnboardingWizardStore } from "../../store";
-import { COUNTRIES } from "./countries";
-import { PLAN_KEYS, type PlanKey, TEAM_INTAKE_FORM_URL } from "./helpers";
+import { COUNTRIES } from "@/components/molecules/PlanCard/countries";
+import {
+  PLAN_KEYS,
+  type PlanKey,
+  TEAM_INTAKE_FORM_URL,
+} from "@/components/molecules/PlanCard/plans";
 
 const PLAN_TO_TIER: Record<
-  Exclude<PlanKey, typeof PLAN_KEYS.TEAM>,
+  Exclude<PlanKey, typeof PLAN_KEYS.TEAM | typeof PLAN_KEYS.BUSINESS>,
   SubscriptionTierRequestTier
 > = {
   PRO: "PRO",
@@ -53,6 +57,7 @@ export function useSubscriptionStep() {
       window.open(TEAM_INTAKE_FORM_URL, "_blank", "noopener,noreferrer");
       return;
     }
+    if (planKey === PLAN_KEYS.BUSINESS) return;
     if (isProcessing) return;
     setIsSubmitting(true);
 
@@ -91,6 +96,7 @@ export function useSubscriptionStep() {
           tier,
           success_url: `${baseUrl}?step=5&subscription=success`,
           cancel_url: `${baseUrl}?step=4&subscription=cancelled`,
+          billing_cycle: isYearly ? "yearly" : "monthly",
         },
       });
       const url = (result?.data as CheckoutResponse | undefined)?.url;

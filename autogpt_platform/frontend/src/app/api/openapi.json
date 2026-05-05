@@ -16618,6 +16618,19 @@
             "type": "object",
             "title": "Tier Costs"
           },
+          "tier_costs_yearly": {
+            "additionalProperties": { "type": "integer" },
+            "type": "object",
+            "title": "Tier Costs Yearly",
+            "description": "Tier → yearly amount in cents. Populated only for tiers with a yearly Stripe price configured in LaunchDarkly. Empty for monthly-only configurations."
+          },
+          "billing_cycle": {
+            "type": "string",
+            "enum": ["monthly", "yearly"],
+            "title": "Billing Cycle",
+            "description": "Billing cycle of the user's active Stripe subscription. Defaults to ``monthly`` for users without an active sub. ``monthly_cost`` above reflects this cycle's actual price (so a yearly subscriber sees their yearly amount, not the monthly equivalent).",
+            "default": "monthly"
+          },
           "tier_multipliers": {
             "additionalProperties": { "type": "number" },
             "type": "object",
@@ -16655,6 +16668,14 @@
               { "type": "null" }
             ],
             "title": "Pending Tier Effective At"
+          },
+          "pending_billing_cycle": {
+            "anyOf": [
+              { "type": "string", "enum": ["monthly", "yearly"] },
+              { "type": "null" }
+            ],
+            "title": "Pending Billing Cycle",
+            "description": "Billing cycle of the queued change, when resolvable. Set alongside ``pending_tier`` for tier downgrades and same-tier cycle switches (yearly→monthly). The frontend uses this to differentiate a cycle-only schedule (``pending_tier == current tier``) from a real tier downgrade so the UI copy can describe the actual change. ``None`` for cancellations and unconfigured legacy prices."
           },
           "url": {
             "type": "string",
@@ -16694,6 +16715,12 @@
             "type": "string",
             "title": "Cancel Url",
             "default": ""
+          },
+          "billing_cycle": {
+            "type": "string",
+            "enum": ["monthly", "yearly"],
+            "title": "Billing Cycle",
+            "default": "monthly"
           }
         },
         "type": "object",
