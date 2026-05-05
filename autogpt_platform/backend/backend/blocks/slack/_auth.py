@@ -21,7 +21,7 @@ def SlackCredentialsField() -> SlackCredentialsInput:
     """Creates a Slack bot token credentials field."""
     return CredentialsField(
         description="Slack Bot Token (xoxb-...). "
-        "Create a Slack app at https://api.slack.com/apps, add the required"
+        "Create a Slack app at https://api.slack.com/apps, add the required "
         "OAuth scopes, and install it to your workspace to get the token."
     )
 
