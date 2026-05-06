@@ -7,11 +7,19 @@ function makeStorage(): Storage {
   const store: Record<string, string> = {};
   return {
     getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    setItem: (k: string, v: string) => {
+      store[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
     key: (i: number) => Object.keys(store)[i] ?? null,
-    get length() { return Object.keys(store).length; },
+    get length() {
+      return Object.keys(store).length;
+    },
   };
 }
 
@@ -36,7 +44,9 @@ describe("localStorageAdapter", () => {
 
   test("read() returns null when localStorage throws", async () => {
     Object.defineProperty(globalThis, "localStorage", {
-      get() { throw new Error("no storage"); },
+      get() {
+        throw new Error("no storage");
+      },
       configurable: true,
     });
     expect(await localStorageAdapter.read()).toBeNull();
@@ -44,10 +54,14 @@ describe("localStorageAdapter", () => {
 
   test("write() is silent when localStorage throws", async () => {
     Object.defineProperty(globalThis, "localStorage", {
-      get() { throw new Error("no storage"); },
+      get() {
+        throw new Error("no storage");
+      },
       configurable: true,
     });
-    await expect(localStorageAdapter.write("2026-05-01")).resolves.toBeUndefined();
+    await expect(
+      localStorageAdapter.write("2026-05-01"),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -105,10 +119,13 @@ describe("userPrefsAdapter", () => {
     const adapter = userPrefsAdapter({ endpoint: "/api/prefs", fetchFn });
     await adapter.write("2026-05-01");
     expect(localStorage.getItem(STORAGE_KEY)).toBe("2026-05-01");
-    expect(fetchFn).toHaveBeenCalledWith("/api/prefs", expect.objectContaining({
-      method: "PUT",
-      body: JSON.stringify({ lastSeenId: "2026-05-01" }),
-    }));
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/prefs",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ lastSeenId: "2026-05-01" }),
+      }),
+    );
   });
 
   test("write() is non-fatal when PUT errors", async () => {

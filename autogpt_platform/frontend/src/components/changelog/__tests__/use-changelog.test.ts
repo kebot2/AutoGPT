@@ -8,7 +8,9 @@ function makeAdapter(initial: string | null = null): SeenStateAdapter {
   let stored = initial;
   return {
     read: vi.fn(async () => stored),
-    write: vi.fn(async (id: string) => { stored = id; }),
+    write: vi.fn(async (id: string) => {
+      stored = id;
+    }),
   };
 }
 
@@ -31,44 +33,48 @@ beforeEach(() => {
 describe("useChangelog", () => {
   test("pillVisible becomes true after delay when there is an unread entry", async () => {
     const seenState = makeAdapter(null);
-    const { result } = renderHook(() =>
-      useChangelog({ seenState })
-    );
+    const { result } = renderHook(() => useChangelog({ seenState }));
     // Not visible before hydration
     expect(result.current.pillVisible).toBe(false);
 
     // Wait for hydration
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     await waitFor(() => expect(result.current.pillVisible).toBe(true));
   });
 
   test("pillVisible stays false when latest entry already seen", async () => {
     const seenState = makeAdapter(LATEST_ENTRY.id);
-    const { result } = renderHook(() =>
-      useChangelog({ seenState })
-    );
-    await act(async () => { await vi.runAllTimersAsync(); });
+    const { result } = renderHook(() => useChangelog({ seenState }));
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     expect(result.current.pillVisible).toBe(false);
   });
 
   test("pillVisible stays false when hidden=true", async () => {
     const seenState = makeAdapter(null);
     const { result } = renderHook(() =>
-      useChangelog({ seenState, hidden: true })
+      useChangelog({ seenState, hidden: true }),
     );
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     expect(result.current.pillVisible).toBe(false);
   });
 
   test("setOpen(true) hides pill and calls onOpen", async () => {
     const seenState = makeAdapter(null);
     const onOpen = vi.fn();
-    const { result } = renderHook(() =>
-      useChangelog({ seenState, onOpen })
-    );
-    await act(async () => { await vi.runAllTimersAsync(); });
+    const { result } = renderHook(() => useChangelog({ seenState, onOpen }));
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
 
-    act(() => { result.current.setOpen(true); });
+    act(() => {
+      result.current.setOpen(true);
+    });
     expect(result.current.open).toBe(true);
     expect(result.current.pillVisible).toBe(false);
     expect(onOpen).toHaveBeenCalledOnce();
@@ -77,10 +83,14 @@ describe("useChangelog", () => {
   test("dismissPill hides pill and marks seen", async () => {
     const seenState = makeAdapter(null);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     await waitFor(() => expect(result.current.pillVisible).toBe(true));
 
-    act(() => { result.current.dismissPill(); });
+    act(() => {
+      result.current.dismissPill();
+    });
     expect(result.current.pillVisible).toBe(false);
     expect(seenState.write).toHaveBeenCalledWith(LATEST_ENTRY.id);
   });
@@ -89,25 +99,33 @@ describe("useChangelog", () => {
     const seenState = makeAdapter(LATEST_ENTRY.id);
     const onEntryView = vi.fn();
     const { result } = renderHook(() =>
-      useChangelog({ seenState, onEntryView })
+      useChangelog({ seenState, onEntryView }),
     );
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
 
-    act(() => { result.current.setActiveId("2026-04-09"); });
+    act(() => {
+      result.current.setActiveId("2026-04-09");
+    });
     expect(onEntryView).toHaveBeenCalledWith("2026-04-09");
   });
 
   test("hasUnread is true when lastSeenId differs from latest", async () => {
     const seenState = makeAdapter("2026-04-09");
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     expect(result.current.hasUnread).toBe(true);
   });
 
   test("hasUnread is false when lastSeenId matches latest", async () => {
     const seenState = makeAdapter(LATEST_ENTRY.id);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
     expect(result.current.hasUnread).toBe(false);
   });
 });
