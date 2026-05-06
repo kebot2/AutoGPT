@@ -139,6 +139,12 @@ def response_detail(response: dict) -> str | None:
     """Pick the first useful human-readable detail field from a provider response."""
     for key in ("error", "message", "detail", "status"):
         value = response.get(key)
-        if value:
-            return str(value)
+        if not value:
+            continue
+        if isinstance(value, dict):
+            nested = response_detail(value)
+            if nested:
+                return nested
+            continue
+        return str(value)
     return None

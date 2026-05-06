@@ -179,3 +179,16 @@ def test_response_detail_returns_none_for_empty_response():
 
 def test_response_detail_stringifies_non_string_values():
     assert response_detail({"status": 500}) == "500"
+
+
+def test_response_detail_recurses_into_nested_dict():
+    assert (
+        response_detail({"error": {"code": 500, "message": "boom"}}) == "boom"
+    )
+
+
+def test_response_detail_skips_dict_with_no_useful_fields():
+    assert (
+        response_detail({"error": {"unrelated": "x"}, "message": "fallback"})
+        == "fallback"
+    )
