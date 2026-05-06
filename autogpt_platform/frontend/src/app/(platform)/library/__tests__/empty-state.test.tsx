@@ -73,21 +73,23 @@ describe("LibraryPage empty state", () => {
 
     render(<LibraryPage />);
 
-    expect(await screen.findByText("Your library is empty")).toBeDefined();
     expect(
-      screen.getByText(/build your own agent from scratch/i),
+      await screen.findByText(/you have no agents\. let.s change that\./i),
+    ).toBeDefined();
+    expect(
+      screen.getByText(/work with autopilot to create one/i),
     ).toBeDefined();
   });
 
-  test("renders Build an agent CTA pointing to /build", async () => {
+  test("renders Ask AutoPilot CTA pointing to /copilot", async () => {
     setupHandlers();
 
     render(<LibraryPage />);
 
-    const buildLink = await screen.findByRole("link", {
-      name: /build an agent/i,
+    const copilotLink = await screen.findByRole("link", {
+      name: /ask autopilot/i,
     });
-    expect(buildLink.getAttribute("href")).toBe("/build");
+    expect(copilotLink.getAttribute("href")).toBe("/copilot");
   });
 
   test("renders Browse marketplace CTA pointing to /marketplace", async () => {
@@ -101,13 +103,26 @@ describe("LibraryPage empty state", () => {
     expect(marketplaceLink.getAttribute("href")).toBe("/marketplace");
   });
 
+  test("renders Build manually CTA pointing to /build", async () => {
+    setupHandlers();
+
+    render(<LibraryPage />);
+
+    const buildLink = await screen.findByRole("link", {
+      name: /build manually/i,
+    });
+    expect(buildLink.getAttribute("href")).toBe("/build");
+  });
+
   test("does not render empty state when at least one agent exists", async () => {
     setupHandlers({ agents: [makeAgent({ name: "Existing Agent" })] });
 
     render(<LibraryPage />);
 
     expect(await screen.findByText("Existing Agent")).toBeDefined();
-    expect(screen.queryByText("Your library is empty")).toBeNull();
+    expect(
+      screen.queryByText(/you have no agents\. let.s change that\./i),
+    ).toBeNull();
   });
 
   test("does not render empty state when folders exist but no agents", async () => {
@@ -133,6 +148,8 @@ describe("LibraryPage empty state", () => {
     render(<LibraryPage />);
 
     expect(await screen.findByText("My Folder")).toBeDefined();
-    expect(screen.queryByText("Your library is empty")).toBeNull();
+    expect(
+      screen.queryByText(/you have no agents\. let.s change that\./i),
+    ).toBeNull();
   });
 });
