@@ -1,5 +1,5 @@
-import { describe, expect, test, vi, beforeEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
 import { useChangelog } from "../use-changelog";
 import type { SeenStateAdapter } from "../seen-state";
 import { LATEST_ENTRY } from "../manifest";
@@ -30,18 +30,20 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("useChangelog", () => {
   test("pillVisible becomes true after delay when there is an unread entry", async () => {
     const seenState = makeAdapter(null);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    // Not visible before hydration
     expect(result.current.pillVisible).toBe(false);
 
-    // Wait for hydration
     await act(async () => {
       await vi.runAllTimersAsync();
     });
-    await waitFor(() => expect(result.current.pillVisible).toBe(true));
+    expect(result.current.pillVisible).toBe(true);
   });
 
   test("pillVisible stays false when latest entry already seen", async () => {
@@ -86,7 +88,7 @@ describe("useChangelog", () => {
     await act(async () => {
       await vi.runAllTimersAsync();
     });
-    await waitFor(() => expect(result.current.pillVisible).toBe(true));
+    expect(result.current.pillVisible).toBe(true);
 
     act(() => {
       result.current.dismissPill();
