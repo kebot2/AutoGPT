@@ -41,6 +41,21 @@ from backend.blocks.ideogram import (
     StyleType,
     UpscaleOption,
 )
+from backend.blocks.replicate._auth import (
+    TEST_CREDENTIALS as REPLICATE_FLUX_TEST_CREDENTIALS,
+)
+from backend.blocks.replicate._auth import (
+    TEST_CREDENTIALS_INPUT as REPLICATE_FLUX_TEST_CREDENTIALS_INPUT,
+)
+from backend.blocks.replicate._helper import (
+    NO_OUTPUT_MESSAGE,
+    UNPROCESSABLE_OUTPUT_MESSAGE,
+)
+from backend.blocks.replicate.flux_advanced import (
+    ImageType,
+    ReplicateFluxAdvancedModelBlock,
+    ReplicateFluxModelName,
+)
 from backend.blocks.talking_head import _missing_clip_id_message
 from backend.data.execution import ExecutionContext
 
@@ -195,6 +210,99 @@ async def test_flux_kontext_provider_error_suggests_model_fallback(monkeypatch):
         ),
         credentials=FLUX_TEST_CREDENTIALS,
         execution_context=ExecutionContext(user_id="user", graph_exec_id="exec"),
+    ):
+        outputs.append(output)
+
+    assert outputs, "block produced no outputs"
+    assert outputs[0][0] == "error"
+    assert "try another image generation model" in outputs[0][1]
+
+
+async def test_replicate_flux_provider_error_suggests_model_fallback(monkeypatch):
+    async def run_model(*args, **kwargs):
+        raise RuntimeError("503 Replicate temporarily unavailable")
+
+    monkeypatch.setattr(ReplicateFluxAdvancedModelBlock, "run_model", run_model)
+
+    block = ReplicateFluxAdvancedModelBlock()
+    outputs = []
+    async for output in block.run(
+        ReplicateFluxAdvancedModelBlock.Input(
+            credentials=REPLICATE_FLUX_TEST_CREDENTIALS_INPUT,
+            replicate_model_name=ReplicateFluxModelName.FLUX_SCHNELL,
+            prompt="A beautiful landscape",
+            seed=42,
+            steps=25,
+            guidance=3.0,
+            interval=2.0,
+            aspect_ratio="1:1",
+            output_format=ImageType.PNG,
+            output_quality=80,
+            safety_tolerance=2,
+        ),
+        credentials=REPLICATE_FLUX_TEST_CREDENTIALS,
+    ):
+        outputs.append(output)
+
+    assert outputs, "block produced no outputs"
+    assert outputs[0][0] == "error"
+    assert "try another image generation model" in outputs[0][1]
+
+
+async def test_replicate_flux_unprocessable_output_suggests_model_fallback(monkeypatch):
+    async def run_model(*args, **kwargs):
+        return UNPROCESSABLE_OUTPUT_MESSAGE
+
+    monkeypatch.setattr(ReplicateFluxAdvancedModelBlock, "run_model", run_model)
+
+    block = ReplicateFluxAdvancedModelBlock()
+    outputs = []
+    async for output in block.run(
+        ReplicateFluxAdvancedModelBlock.Input(
+            credentials=REPLICATE_FLUX_TEST_CREDENTIALS_INPUT,
+            replicate_model_name=ReplicateFluxModelName.FLUX_SCHNELL,
+            prompt="A beautiful landscape",
+            seed=42,
+            steps=25,
+            guidance=3.0,
+            interval=2.0,
+            aspect_ratio="1:1",
+            output_format=ImageType.PNG,
+            output_quality=80,
+            safety_tolerance=2,
+        ),
+        credentials=REPLICATE_FLUX_TEST_CREDENTIALS,
+    ):
+        outputs.append(output)
+
+    assert outputs, "block produced no outputs"
+    assert outputs[0][0] == "error"
+    assert "try another image generation model" in outputs[0][1]
+
+
+async def test_replicate_flux_no_output_suggests_model_fallback(monkeypatch):
+    async def run_model(*args, **kwargs):
+        return NO_OUTPUT_MESSAGE
+
+    monkeypatch.setattr(ReplicateFluxAdvancedModelBlock, "run_model", run_model)
+
+    block = ReplicateFluxAdvancedModelBlock()
+    outputs = []
+    async for output in block.run(
+        ReplicateFluxAdvancedModelBlock.Input(
+            credentials=REPLICATE_FLUX_TEST_CREDENTIALS_INPUT,
+            replicate_model_name=ReplicateFluxModelName.FLUX_SCHNELL,
+            prompt="A beautiful landscape",
+            seed=42,
+            steps=25,
+            guidance=3.0,
+            interval=2.0,
+            aspect_ratio="1:1",
+            output_format=ImageType.PNG,
+            output_quality=80,
+            safety_tolerance=2,
+        ),
+        credentials=REPLICATE_FLUX_TEST_CREDENTIALS,
     ):
         outputs.append(output)
 
