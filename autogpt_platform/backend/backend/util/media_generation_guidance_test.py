@@ -182,9 +182,7 @@ def test_response_detail_stringifies_non_string_values():
 
 
 def test_response_detail_recurses_into_nested_dict():
-    assert (
-        response_detail({"error": {"code": 500, "message": "boom"}}) == "boom"
-    )
+    assert response_detail({"error": {"code": 500, "message": "boom"}}) == "boom"
 
 
 def test_response_detail_skips_dict_with_no_useful_fields():
