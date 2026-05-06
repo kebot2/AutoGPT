@@ -1,5 +1,3 @@
-import pytest
-
 from backend.blocks.ai_image_customizer import (
     TEST_CREDENTIALS as REPLICATE_TEST_CREDENTIALS,
 )
@@ -47,11 +45,6 @@ from backend.blocks.talking_head import _missing_clip_id_message
 from backend.data.execution import ExecutionContext
 
 
-@pytest.fixture(scope="session", autouse=True)
-def graph_cleanup():
-    yield
-
-
 async def test_image_generator_storage_error_does_not_suggest_model_fallback(
     monkeypatch,
 ):
@@ -79,6 +72,7 @@ async def test_image_generator_provider_error_suggests_model_fallback(monkeypatc
 
     outputs = await _run_image_generator()
 
+    assert outputs, "block produced no outputs"
     assert outputs[0][0] == "error"
     assert "try another image generation model" in outputs[0][1]
 
@@ -122,6 +116,7 @@ async def test_image_customizer_provider_error_suggests_model_fallback(monkeypat
     ):
         outputs.append(output)
 
+    assert outputs, "block produced no outputs"
     assert outputs[0][0] == "error"
     assert "try another image generation model" in outputs[0][1]
 
@@ -152,6 +147,7 @@ async def test_ideogram_provider_error_suggests_model_fallback(monkeypatch):
     ):
         outputs.append(output)
 
+    assert outputs, "block produced no outputs"
     assert outputs[0][0] == "error"
     assert "try another image generation model" in outputs[0][1]
 
@@ -175,6 +171,7 @@ async def test_fal_video_generator_provider_error_suggests_model_fallback(monkey
     ):
         outputs.append(output)
 
+    assert outputs, "block produced no outputs"
     assert outputs[0][0] == "error"
     assert "try another video generation model or block" in outputs[0][1]
 
@@ -201,6 +198,7 @@ async def test_flux_kontext_provider_error_suggests_model_fallback(monkeypatch):
     ):
         outputs.append(output)
 
+    assert outputs, "block produced no outputs"
     assert outputs[0][0] == "error"
     assert "try another image generation model" in outputs[0][1]
 
