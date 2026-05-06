@@ -36,7 +36,7 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": "text/markdown; charset=utf-8",
-        "Cache-Control": `public, s-maxage=${CACHE_SECONDS}, stale-while-revalidate=${STALE_WHILE_REVALIDATE}`,
+        "Cache-Control": `public, s-maxage=3600, stale-while-revalidate=${STALE_WHILE_REVALIDATE}`,
       },
     });
   } catch (err) {
