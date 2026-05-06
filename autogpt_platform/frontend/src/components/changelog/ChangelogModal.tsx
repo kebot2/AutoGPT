@@ -31,14 +31,14 @@ export function ChangelogModal({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/60" />
         <DialogPrimitive.Content
           className={cn(
-            "fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
-            "p-0 gap-0 overflow-hidden",
-            "max-w-[1080px] w-[92vw] h-[78vh] max-h-[820px]",
+            "fixed top-[50%] left-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
+            "gap-0 overflow-hidden p-0",
+            "h-[78vh] max-h-[820px] w-[92vw] max-w-[1080px]",
             "flex flex-row",
-            "bg-background rounded-lg shadow-xl border border-border",
+            "bg-background border-border rounded-lg border shadow-xl",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
@@ -53,16 +53,16 @@ export function ChangelogModal({
           </span>
 
           {/* Sidebar */}
-          <aside className="w-[280px] shrink-0 border-r border-border bg-muted/30 flex flex-col">
+          <aside className="border-border bg-muted/30 flex w-[280px] shrink-0 flex-col border-r">
             <div className="px-6 pt-6 pb-4">
-              <div className="flex items-center gap-2 mb-1">
+              <div className="mb-1 flex items-center gap-2">
                 <div
-                  className="w-2 h-2 rounded-full"
+                  className="h-2 w-2 rounded-full"
                   style={{
                     background: "linear-gradient(135deg, #f59e0b, #ef4444)",
                   }}
                 />
-                <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground font-semibold">
+                <span className="text-muted-foreground text-[11px] font-semibold tracking-[0.18em] uppercase">
                   AutoGPT
                 </span>
               </div>
@@ -88,16 +88,16 @@ export function ChangelogModal({
                     key={entry.id}
                     onClick={() => onActiveIDChange(entry.id)}
                     className={cn(
-                      "w-full text-left px-3 py-2.5 rounded-lg mb-0.5 transition-all relative group border",
+                      "group relative mb-0.5 w-full rounded-lg border px-3 py-2.5 text-left transition-all",
                       isActive
-                        ? "bg-background shadow-sm border-border/80"
+                        ? "bg-background border-border/80 shadow-sm"
                         : "hover:bg-background/60 border-transparent",
                     )}
                     aria-current={isActive ? "page" : undefined}
                   >
                     {isActive && entry.isHighlighted && (
                       <span
-                        className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
+                        className="absolute top-2 bottom-2 left-0 w-[2px] rounded-full"
                         style={{
                           background:
                             "linear-gradient(to bottom, #f59e0b, #ef4444)",
@@ -105,19 +105,19 @@ export function ChangelogModal({
                         aria-hidden
                       />
                     )}
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-[10px] italic font-serif text-muted-foreground">
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <span className="text-muted-foreground font-serif text-[10px] italic">
                         {entry.dateLabel}
                       </span>
                       {entry.isHighlighted && (
-                        <span className="text-[9px] uppercase tracking-wider font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-700 uppercase">
                           New
                         </span>
                       )}
                     </div>
                     <div
                       className={cn(
-                        "text-[13px] leading-snug line-clamp-2 transition-colors",
+                        "line-clamp-2 text-[13px] leading-snug transition-colors",
                         isActive
                           ? "text-foreground font-medium"
                           : "text-muted-foreground group-hover:text-foreground",
@@ -130,9 +130,9 @@ export function ChangelogModal({
               })}
             </nav>
 
-            <div className="px-6 py-4 border-t border-border text-[11px] text-muted-foreground">
+            <div className="border-border text-muted-foreground border-t px-6 py-4 text-[11px]">
               Press{" "}
-              <kbd className="font-mono bg-muted text-foreground/80 px-1.5 py-0.5 rounded text-[10px]">
+              <kbd className="bg-muted text-foreground/80 rounded px-1.5 py-0.5 font-mono text-[10px]">
                 esc
               </kbd>{" "}
               to close
@@ -140,12 +140,12 @@ export function ChangelogModal({
           </aside>
 
           {/* Content */}
-          <main className="flex-1 relative">
+          <main className="relative flex-1">
             <div
               ref={contentRef}
               className="absolute inset-0 overflow-y-auto px-14 py-12"
             >
-              <div className="max-w-[640px] mx-auto">
+              <div className="mx-auto max-w-[640px]">
                 <ChangelogContent entry={activeEntry} />
               </div>
             </div>

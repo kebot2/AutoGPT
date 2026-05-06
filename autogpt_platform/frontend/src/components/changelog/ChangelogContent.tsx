@@ -42,22 +42,22 @@ export function ChangelogContent({ entry }: Props) {
 
   return (
     <article>
-      <header className="pb-8 border-b border-border">
-        <div className="flex items-center gap-2 mb-3">
+      <header className="border-border border-b pb-8">
+        <div className="mb-3 flex items-center gap-2">
           {entry.isHighlighted && (
             <>
-              <span className="text-xs uppercase tracking-[0.18em] font-medium text-emerald-700">
+              <span className="text-xs font-medium tracking-[0.18em] text-emerald-700 uppercase">
                 Latest
               </span>
               <span className="text-muted-foreground/50">·</span>
             </>
           )}
-          <span className="text-sm text-muted-foreground italic font-serif">
+          <span className="text-muted-foreground font-serif text-sm italic">
             {entry.dateLabel}
           </span>
         </div>
         <h1
-          className="text-[42px] leading-[1.05] font-medium tracking-tight mb-4"
+          className="mb-4 text-[42px] leading-[1.05] font-medium tracking-tight"
           style={{
             fontFamily:
               "var(--font-changelog-display, ui-serif, Georgia, serif)",
@@ -69,7 +69,7 @@ export function ChangelogContent({ entry }: Props) {
           {entry.versions.map((v) => (
             <span
               key={v}
-              className="font-mono text-[12px] px-2 py-0.5 bg-muted text-muted-foreground rounded"
+              className="bg-muted text-muted-foreground rounded px-2 py-0.5 font-mono text-[12px]"
             >
               {v}
             </span>
@@ -79,22 +79,22 @@ export function ChangelogContent({ entry }: Props) {
 
       <div>
         {markdown === null && error === null && (
-          <div className="flex items-center gap-2 text-muted-foreground py-12">
-            <SpinnerGap className="w-4 h-4 animate-spin" />
+          <div className="text-muted-foreground flex items-center gap-2 py-12">
+            <SpinnerGap className="h-4 w-4 animate-spin" />
             <span className="text-sm">Loading…</span>
           </div>
         )}
 
         {error && (
-          <div className="py-12 text-sm text-muted-foreground">
+          <div className="text-muted-foreground py-12 text-sm">
             <p className="mb-2">Couldn&apos;t load this entry.</p>
             <a
               href={`${DOCS_ORIGIN}/docs/platform/changelog/changelog/${entry.slug}.md`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-foreground hover:underline"
+              className="text-foreground inline-flex items-center gap-1 hover:underline"
             >
-              Read it on agpt.co <ArrowSquareOut className="w-3 h-3" />
+              Read it on agpt.co <ArrowSquareOut className="h-3 w-3" />
             </a>
           </div>
         )}
@@ -115,15 +115,15 @@ export function ChangelogContent({ entry }: Props) {
 
 const markdownComponents: import("react-markdown").Components = {
   h2: ({ children }) => (
-    <h2 className="text-2xl font-medium mt-12 mb-4 tracking-tight">
+    <h2 className="mt-12 mb-4 text-2xl font-medium tracking-tight">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="text-lg font-medium mt-8 mb-3">{children}</h3>
+    <h3 className="mt-8 mb-3 text-lg font-medium">{children}</h3>
   ),
   p: ({ children }) => (
-    <p className="text-muted-foreground leading-[1.7] text-[15px] mb-4">
+    <p className="text-muted-foreground mb-4 text-[15px] leading-[1.7]">
       {children}
     </p>
   ),
@@ -132,32 +132,32 @@ const markdownComponents: import("react-markdown").Components = {
       href={resolveLink(href)}
       target="_blank"
       rel="noreferrer"
-      className="text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground transition-colors"
+      className="text-foreground decoration-border hover:decoration-foreground underline underline-offset-2 transition-colors"
     >
       {children}
     </a>
   ),
   ul: ({ children }) => (
-    <ul className="my-4 space-y-2 list-none pl-0">{children}</ul>
+    <ul className="my-4 list-none space-y-2 pl-0">{children}</ul>
   ),
   li: ({ children }) => (
-    <li className="text-[14px] text-muted-foreground leading-relaxed pl-4 relative">
-      <span className="absolute left-0 top-2.5 w-1 h-1 rounded-full bg-muted-foreground/40" />
+    <li className="text-muted-foreground relative pl-4 text-[14px] leading-relaxed">
+      <span className="bg-muted-foreground/40 absolute top-2.5 left-0 h-1 w-1 rounded-full" />
       {children}
     </li>
   ),
   strong: ({ children }) => (
-    <strong className="font-medium text-foreground">{children}</strong>
+    <strong className="text-foreground font-medium">{children}</strong>
   ),
   code: ({ children }) => (
-    <code className="font-mono text-[12px] bg-muted text-foreground px-1.5 py-0.5 rounded">
+    <code className="bg-muted text-foreground rounded px-1.5 py-0.5 font-mono text-[12px]">
       {children}
     </code>
   ),
-  hr: () => <hr className="my-10 border-border" />,
+  hr: () => <hr className="border-border my-10" />,
   figure: ({ children }) => <figure className="my-8">{children}</figure>,
   figcaption: ({ children }) => (
-    <figcaption className="mt-3 text-sm text-muted-foreground italic font-serif">
+    <figcaption className="text-muted-foreground mt-3 font-serif text-sm italic">
       {children}
     </figcaption>
   ),
@@ -166,14 +166,14 @@ const markdownComponents: import("react-markdown").Components = {
     <img
       src={resolveImageSrc(src)}
       alt={alt ?? ""}
-      className="w-full rounded-xl border border-border shadow-sm"
+      className="border-border w-full rounded-xl border shadow-sm"
       loading="lazy"
     />
   ),
   details: ({ children }) => (
     <details
       className={cn(
-        "group border-t border-border py-4",
+        "group border-border border-t py-4",
         "[&>*:not(summary)]:mt-3 [&>*:not(summary)]:ml-6",
       )}
     >
@@ -183,16 +183,16 @@ const markdownComponents: import("react-markdown").Components = {
   summary: ({ children }) => (
     <summary
       className={cn(
-        "flex items-center gap-2 cursor-pointer select-none",
+        "flex cursor-pointer items-center gap-2 select-none",
         "list-none [&::-webkit-details-marker]:hidden [&::marker]:hidden",
-        "hover:opacity-80 transition-opacity",
+        "transition-opacity hover:opacity-80",
       )}
     >
       <CaretRight
-        className="w-4 h-4 text-muted-foreground shrink-0 transition-transform group-open:rotate-90"
+        className="text-muted-foreground h-4 w-4 shrink-0 transition-transform group-open:rotate-90"
         aria-hidden
       />
-      <span className="font-medium text-[15px] text-foreground">
+      <span className="text-foreground text-[15px] font-medium">
         {children}
       </span>
     </summary>

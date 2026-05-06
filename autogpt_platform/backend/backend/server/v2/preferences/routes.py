@@ -3,21 +3,19 @@
 # User preferences endpoints. Generic per-user key/value store scoped under
 # /api/me/preferences. The changelog feature uses key "changelog.lastSeenId".
 #
-# Integration TODOs (three short edits):
-# 1. Auth dependency: replace `get_user_id` with whatever the v2 routes use
-#    (likely `requires_user` from backend.server.utils).
-# 2. Prisma import: adjust `from backend.data.db import prisma` to match your
-#    generated client path.
-# 3. Router mounting: wire into the v2 app in backend/server/v2/__init__.py
-#    the same way other v2 routers are mounted.
+# Integration TODOs (two short edits before this router is live):
+# 1. Prisma schema: apply the UserPreference model from
+#    autogpt_platform/backend/schema.prisma.changelog.snippet and run
+#    `prisma generate && prisma migrate dev`.
+# 2. Router mounting: wire into the API app in backend/api/app.py (or
+#    equivalent) the same way other routers are mounted.
 
 from __future__ import annotations
 
+import prisma.models
+from autogpt_libs.auth import get_user_id
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-
-from backend.data.db import prisma  # adjust import to match your setup
-from backend.server.utils import get_user_id  # adjust to your auth dep
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
 
@@ -38,7 +36,8 @@ class ChangelogPrefs(BaseModel):
 async def get_changelog_prefs(
     user_id: str = Depends(get_user_id),
 ) -> ChangelogPrefs:
-    pref = await prisma.userpreference.find_unique(
+    # TODO: remove type: ignore once UserPreference is added to prisma schema
+    pref = await prisma.models.UserPreference.prisma().find_unique(  # type: ignore[attr-defined]
         where={
             "userId_key": {
                 "userId": user_id,
@@ -64,7 +63,8 @@ async def put_changelog_prefs(
     if len(body.last_seen_id) > 64:
         raise HTTPException(status_code=400, detail="lastSeenId too long")
 
-    await prisma.userpreference.upsert(
+    # TODO: remove type: ignore once UserPreference is added to prisma schema
+    await prisma.models.UserPreference.prisma().upsert(  # type: ignore[attr-defined]
         where={
             "userId_key": {
                 "userId": user_id,
