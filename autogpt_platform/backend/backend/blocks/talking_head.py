@@ -21,6 +21,7 @@ from backend.integrations.providers import ProviderName
 from backend.util.file import store_media_file
 from backend.util.media_generation_guidance import (
     VIDEO_GENERATION_MODEL_SELECTION_GUIDANCE,
+    response_detail,
     video_generation_failure_message,
 )
 from backend.util.request import Requests
@@ -42,18 +43,10 @@ TEST_CREDENTIALS_INPUT = {
 
 
 def _missing_clip_id_message(response: dict) -> str:
-    detail = _response_detail(response)
+    detail = response_detail(response)
     if detail:
         return f"Clip creation returned no clip ID: {detail}"
     return "Clip creation returned no clip ID"
-
-
-def _response_detail(response: dict) -> str | None:
-    for key in ("error", "message", "detail", "status"):
-        value = response.get(key)
-        if value:
-            return str(value)
-    return None
 
 
 class CreateTalkingAvatarVideoBlock(Block):

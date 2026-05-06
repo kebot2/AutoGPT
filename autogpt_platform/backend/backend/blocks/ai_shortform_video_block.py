@@ -25,6 +25,7 @@ from backend.util.exceptions import BlockExecutionError
 from backend.util.file import store_media_file
 from backend.util.media_generation_guidance import (
     VIDEO_GENERATION_MODEL_SELECTION_GUIDANCE,
+    response_detail,
     video_generation_failure_message,
 )
 from backend.util.request import Requests
@@ -160,18 +161,10 @@ logger = logging.getLogger(__name__)
 
 
 def _missing_project_id_message(response: dict) -> str:
-    detail = _response_detail(response)
+    detail = response_detail(response)
     if detail:
         return f"Failed to create video: No project ID returned: {detail}"
     return "Failed to create video: No project ID returned"
-
-
-def _response_detail(response: dict) -> str | None:
-    for key in ("error", "message", "detail", "status"):
-        value = response.get(key)
-        if value:
-            return str(value)
-    return None
 
 
 class AIShortformVideoCreatorBlock(Block):

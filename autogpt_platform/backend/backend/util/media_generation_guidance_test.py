@@ -4,6 +4,7 @@ from backend.util.media_generation_guidance import (
     VIDEO_GENERATION_LEADERBOARD_URL,
     VIDEO_GENERATION_MODEL_SELECTION_GUIDANCE,
     image_generation_failure_message,
+    response_detail,
     video_generation_failure_message,
 )
 
@@ -145,3 +146,36 @@ def test_image_generation_failure_message_suggests_fallback_for_unprocessable_ou
     )
 
     assert "try another image generation model" in message
+
+
+def test_fallback_marker_wins_over_no_fallback_status():
+    message = image_generation_failure_message("Model unavailable (404)")
+
+    assert "try another image generation model" in message
+
+
+def test_status_408_triggers_fallback():
+    message = image_generation_failure_message("HTTP 408 Request Timeout")
+
+    assert "try another image generation model" in message
+
+
+def test_response_detail_picks_first_truthy_field():
+    assert response_detail({"error": "boom"}) == "boom"
+    assert response_detail({"message": "oops"}) == "oops"
+    assert response_detail({"detail": "details"}) == "details"
+    assert response_detail({"status": "FAILED"}) == "FAILED"
+
+
+def test_response_detail_prefers_error_over_others():
+    assert response_detail({"error": "primary", "message": "secondary"}) == "primary"
+
+
+def test_response_detail_returns_none_for_empty_response():
+    assert response_detail({}) is None
+    assert response_detail({"error": ""}) is None
+    assert response_detail({"unrelated": "value"}) is None
+
+
+def test_response_detail_stringifies_non_string_values():
+    assert response_detail({"status": 500}) == "500"

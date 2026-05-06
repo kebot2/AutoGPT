@@ -159,15 +159,20 @@ class AIImageEditorBlock(Block):
         execution_context: ExecutionContext,
         **kwargs,
     ) -> BlockOutput:
-        input_image_b64 = (
-            await store_media_file(
-                file=input_data.input_image,
-                execution_context=execution_context,
-                return_format="for_external_api",  # Get content for Replicate API
+        try:
+            input_image_b64 = (
+                await store_media_file(
+                    file=input_data.input_image,
+                    execution_context=execution_context,
+                    return_format="for_external_api",  # Get content for Replicate API
+                )
+                if input_data.input_image
+                else None
             )
-            if input_data.input_image
-            else None
-        )
+        except Exception as e:
+            yield "error", str(e)
+            return
+
         try:
             result = await self.run_model(
                 api_key=credentials.api_key,
@@ -185,12 +190,16 @@ class AIImageEditorBlock(Block):
             yield "error", image_generation_failure_message(str(e))
             return
 
-        # Store the generated image to the user's workspace for persistence
-        stored_url = await store_media_file(
-            file=result,
-            execution_context=execution_context,
-            return_format="for_block_output",
-        )
+        try:
+            stored_url = await store_media_file(
+                file=result,
+                execution_context=execution_context,
+                return_format="for_block_output",
+            )
+        except Exception as e:
+            yield "error", str(e)
+            return
+
         yield "output_image", stored_url
 
     async def run_model(

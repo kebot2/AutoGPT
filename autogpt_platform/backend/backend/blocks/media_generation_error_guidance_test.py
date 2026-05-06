@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 
 from backend.blocks.ai_image_generator_block import (
@@ -20,7 +18,7 @@ def graph_cleanup():
     yield
 
 
-def test_image_generator_storage_error_does_not_suggest_model_fallback(
+async def test_image_generator_storage_error_does_not_suggest_model_fallback(
     monkeypatch,
 ):
     async def generate_image(self, input_data, credentials):
@@ -34,18 +32,18 @@ def test_image_generator_storage_error_does_not_suggest_model_fallback(
         "backend.blocks.ai_image_generator_block.store_media_file", store_media_file
     )
 
-    outputs = asyncio.run(_run_image_generator())
+    outputs = await _run_image_generator()
 
     assert outputs == [("error", "Workspace storage timed out")]
 
 
-def test_image_generator_provider_error_suggests_model_fallback(monkeypatch):
+async def test_image_generator_provider_error_suggests_model_fallback(monkeypatch):
     async def generate_image(self, input_data, credentials):
         raise RuntimeError("Provider unavailable")
 
     monkeypatch.setattr(AIImageGeneratorBlock, "generate_image", generate_image)
 
-    outputs = asyncio.run(_run_image_generator())
+    outputs = await _run_image_generator()
 
     assert outputs[0][0] == "error"
     assert "try another image generation model" in outputs[0][1]

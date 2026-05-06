@@ -79,7 +79,7 @@ _NO_FALLBACK_ERROR_MARKERS = (
     "bad request",
 )
 
-_FALLBACK_STATUS_RE = re.compile(r"\b(?:429|500|502|503|504)\b")
+_FALLBACK_STATUS_RE = re.compile(r"\b(?:408|429|500|502|503|504)\b")
 _NO_FALLBACK_STATUS_RE = re.compile(r"\b(?:400|401|402|403|404)\b")
 
 
@@ -112,13 +112,18 @@ def _generation_failure_message(
 
 def _should_suggest_fallback(message: str) -> bool:
     normalized_message = message.casefold()
-    if _NO_FALLBACK_STATUS_RE.search(normalized_message) or any(
-        marker in normalized_message for marker in _NO_FALLBACK_ERROR_MARKERS
-    ):
+    # No-fallback markers (auth, policy, validation) are intent-explicit and
+    # always win — a moderation hit on a 503 is still a moderation issue.
+    if any(marker in normalized_message for marker in _NO_FALLBACK_ERROR_MARKERS):
         return False
-    return bool(_FALLBACK_STATUS_RE.search(normalized_message)) or any(
-        marker in normalized_message for marker in _FALLBACK_ERROR_MARKERS
-    )
+    # Fallback markers describe transient/provider failures and should win
+    # over no-fallback status codes so e.g. "Model unavailable (404)" still
+    # suggests a fallback even though 404 alone would suppress it.
+    if any(marker in normalized_message for marker in _FALLBACK_ERROR_MARKERS):
+        return True
+    if _NO_FALLBACK_STATUS_RE.search(normalized_message):
+        return False
+    return bool(_FALLBACK_STATUS_RE.search(normalized_message))
 
 
 def _as_sentence(message: str, default_message: str) -> str:
@@ -128,3 +133,12 @@ def _as_sentence(message: str, default_message: str) -> str:
     if stripped_message.endswith((".", "!", "?")):
         return stripped_message
     return f"{stripped_message}."
+
+
+def response_detail(response: dict) -> str | None:
+    """Pick the first useful human-readable detail field from a provider response."""
+    for key in ("error", "message", "detail", "status"):
+        value = response.get(key)
+        if value:
+            return str(value)
+    return None
