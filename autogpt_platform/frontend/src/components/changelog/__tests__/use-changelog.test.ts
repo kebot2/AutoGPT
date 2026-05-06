@@ -14,6 +14,17 @@ function makeAdapter(initial: string | null = null): SeenStateAdapter {
   };
 }
 
+async function flushAndAdvance() {
+  // Flush microtasks (resolves adapter.read() promise → sets hydrated)
+  await act(async () => {
+    await Promise.resolve();
+  });
+  // Advance fake timers (fires the PILL_DELAY_MS setTimeout)
+  await act(async () => {
+    vi.advanceTimersByTime(1000);
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   Object.defineProperty(globalThis, "localStorage", {
@@ -40,18 +51,14 @@ describe("useChangelog", () => {
     const { result } = renderHook(() => useChangelog({ seenState }));
     expect(result.current.pillVisible).toBe(false);
 
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.pillVisible).toBe(true);
   });
 
   test("pillVisible stays false when latest entry already seen", async () => {
     const seenState = makeAdapter(LATEST_ENTRY.id);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.pillVisible).toBe(false);
   });
 
@@ -60,9 +67,7 @@ describe("useChangelog", () => {
     const { result } = renderHook(() =>
       useChangelog({ seenState, hidden: true }),
     );
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.pillVisible).toBe(false);
   });
 
@@ -70,9 +75,7 @@ describe("useChangelog", () => {
     const seenState = makeAdapter(null);
     const onOpen = vi.fn();
     const { result } = renderHook(() => useChangelog({ seenState, onOpen }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
 
     act(() => {
       result.current.setOpen(true);
@@ -85,9 +88,7 @@ describe("useChangelog", () => {
   test("dismissPill hides pill and marks seen", async () => {
     const seenState = makeAdapter(null);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.pillVisible).toBe(true);
 
     act(() => {
@@ -103,9 +104,7 @@ describe("useChangelog", () => {
     const { result } = renderHook(() =>
       useChangelog({ seenState, onEntryView }),
     );
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
 
     act(() => {
       result.current.setActiveId("2026-04-09");
@@ -116,18 +115,14 @@ describe("useChangelog", () => {
   test("hasUnread is true when lastSeenId differs from latest", async () => {
     const seenState = makeAdapter("2026-04-09");
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.hasUnread).toBe(true);
   });
 
   test("hasUnread is false when lastSeenId matches latest", async () => {
     const seenState = makeAdapter(LATEST_ENTRY.id);
     const { result } = renderHook(() => useChangelog({ seenState }));
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
+    await flushAndAdvance();
     expect(result.current.hasUnread).toBe(false);
   });
 });
