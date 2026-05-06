@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 import { CHANGELOG_MANIFEST } from "@/components/changelog/manifest";
 
 const DOCS_BASE = "https://agpt.co/docs/platform/changelog/changelog";
-const CACHE_SECONDS = 60 * 60;
 const STALE_WHILE_REVALIDATE = 60 * 60 * 24;
 
-export const revalidate = CACHE_SECONDS;
+export const revalidate = 3600; // 1 hour — must be a static literal for Next.js segment config
 
 export async function GET(
   _req: Request,
@@ -21,7 +20,7 @@ export async function GET(
 
   try {
     const res = await fetch(upstream, {
-      next: { revalidate: CACHE_SECONDS },
+      next: { revalidate: 3600 },
       headers: { Accept: "text/markdown, text/plain, */*" },
     });
 
