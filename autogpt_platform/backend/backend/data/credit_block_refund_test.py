@@ -52,6 +52,15 @@ async def test_refund_credits_writes_paired_refund_row(setup_test_user):
     user_id = setup_test_user
     credit_system = UserCredit()
 
+    # Seed a balance so the USAGE charge below doesn't trip
+    # ``InsufficientBalanceError`` — a real direct block-execute would
+    # have hit the same precondition higher up the stack.
+    await credit_system._add_transaction(
+        user_id=user_id,
+        amount=100,
+        transaction_type=CreditTransactionType.TOP_UP,
+    )
+
     metadata = UsageTransactionMetadata(
         block_id="paid-block",
         block="PaidBlock",
@@ -65,7 +74,7 @@ async def test_refund_credits_writes_paired_refund_row(setup_test_user):
         cost=42,
         metadata=metadata,
     )
-    assert spend_balance == -42
+    assert spend_balance == 58  # 100 - 42
 
     # Refund — must add +42 back and write a REFUND row with the wrapped reason.
     refund_balance = await credit_system.refund_credits(
@@ -73,7 +82,7 @@ async def test_refund_credits_writes_paired_refund_row(setup_test_user):
         cost=42,
         metadata=metadata,
     )
-    assert refund_balance == 0
+    assert refund_balance == 100  # 58 + 42, fully restored
 
     refund_row = await CreditTransaction.prisma().find_first(
         where={"userId": user_id, "type": CreditTransactionType.REFUND},
