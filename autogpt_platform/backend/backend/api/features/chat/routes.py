@@ -19,12 +19,12 @@ from backend.copilot.db import get_chat_messages_paginated
 from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
 from backend.copilot.model import (
     ChatMessage,
-    ChatSession,
+    ChatSessionInfo,
     ChatSessionMetadata,
     append_and_save_message,
     create_chat_session,
     delete_chat_session,
-    get_chat_session,
+    get_chat_session_metadata,
     get_or_create_builder_session,
     get_user_sessions,
     update_session_title,
@@ -109,9 +109,14 @@ config = ChatConfig()
 async def _validate_and_get_session(
     session_id: str,
     user_id: str | None,
-) -> ChatSession:
-    """Validate session exists and belongs to user."""
-    session = await get_chat_session(session_id, user_id)
+) -> ChatSessionInfo:
+    """Validate session exists and belongs to user.
+
+    Returns metadata-only — callers needing the message history must use
+    ``get_chat_session`` directly. Bypassing the message-loading path
+    avoids a multi-KB cache deserialisation per ownership check.
+    """
+    session = await get_chat_session_metadata(session_id, user_id)
     if not session:
         raise NotFoundError(f"Session {session_id} not found.")
     return session
@@ -491,7 +496,7 @@ async def disconnect_session_stream(
     backend releases XREAD listeners immediately rather than waiting for
     the 5-10 s timeout.
     """
-    session = await get_chat_session(session_id, user_id)
+    session = await get_chat_session_metadata(session_id, user_id)
     if not session:
         raise HTTPException(
             status_code=404,
@@ -1538,7 +1543,7 @@ async def health_check() -> dict:
 
     # Create and retrieve session to verify full data layer
     session = await create_chat_session(health_check_user_id, dry_run=False)
-    await get_chat_session(session.session_id, health_check_user_id)
+    await get_chat_session_metadata(session.session_id, health_check_user_id)
 
     return {
         "status": "healthy",

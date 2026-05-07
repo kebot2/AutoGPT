@@ -1734,7 +1734,7 @@ def test_disconnect_stream_returns_204_and_awaits_registry(
 ) -> None:
     mock_session = MagicMock()
     mocker.patch(
-        "backend.api.features.chat.routes.get_chat_session",
+        "backend.api.features.chat.routes.get_chat_session_metadata",
         new_callable=AsyncMock,
         return_value=mock_session,
     )
@@ -1755,7 +1755,7 @@ def test_disconnect_stream_returns_404_when_session_missing(
     test_user_id: str,
 ) -> None:
     mocker.patch(
-        "backend.api.features.chat.routes.get_chat_session",
+        "backend.api.features.chat.routes.get_chat_session_metadata",
         new_callable=AsyncMock,
         return_value=None,
     )
