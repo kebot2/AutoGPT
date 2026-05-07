@@ -286,6 +286,34 @@ class TestSdkModelVendorCompatibility:
                 claude_agent_fallback_model="moonshotai/kimi-k2.6",
             )
 
+    def test_fast_standard_model_also_validated(self):
+        """Baseline (fast) tier slugs flow through the same
+        ``normalize_model_for_transport``, so the validator must catch
+        non-Anthropic fast-path slugs at boot — otherwise they'd fail
+        per-turn at runtime when LD or env serves them."""
+        with pytest.raises(Exception, match="fast_standard_model"):
+            ChatConfig(
+                use_openrouter=False,
+                api_key=None,
+                base_url=None,
+                use_claude_code_subscription=False,
+                thinking_standard_model="anthropic/claude-sonnet-4-6",
+                thinking_advanced_model="anthropic/claude-opus-4-7",
+                fast_standard_model="moonshotai/kimi-k2.6",
+            )
+
+    def test_fast_advanced_model_also_validated(self):
+        with pytest.raises(Exception, match="fast_advanced_model"):
+            ChatConfig(
+                use_openrouter=False,
+                api_key=None,
+                base_url=None,
+                use_claude_code_subscription=False,
+                thinking_standard_model="anthropic/claude-sonnet-4-6",
+                thinking_advanced_model="anthropic/claude-opus-4-7",
+                fast_advanced_model="openai/gpt-5",
+            )
+
     def test_empty_fallback_skipped(self):
         """Empty ``claude_agent_fallback_model`` (no fallback configured)
         must not trip the validator — the fallback-disabled state is

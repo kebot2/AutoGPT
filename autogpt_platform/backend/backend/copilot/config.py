@@ -715,10 +715,11 @@ class ChatConfig(BaseSettings):
         wired".  The runtime guard in ``_normalize_model_name`` still
         catches the credential-missing path on the first SDK turn.
 
-        Covers all three SDK fields that flow through
-        ``_normalize_model_name``: primary tier
-        (``thinking_standard_model``), advanced tier
-        (``thinking_advanced_model``), and fallback model
+        Covers every model field that flows through
+        ``normalize_model_for_transport``: SDK tiers
+        (``thinking_standard_model``, ``thinking_advanced_model``),
+        baseline tiers (``fast_standard_model``,
+        ``fast_advanced_model``), and the SDK fallback
         (``claude_agent_fallback_model`` via ``_resolve_fallback_model``).
 
         Skipped when ``use_claude_code_subscription=True`` because the
@@ -737,6 +738,8 @@ class ChatConfig(BaseSettings):
         for field_name in (
             "thinking_standard_model",
             "thinking_advanced_model",
+            "fast_standard_model",
+            "fast_advanced_model",
             "claude_agent_fallback_model",
         ):
             value: str = getattr(self, field_name)
@@ -748,6 +751,8 @@ class ChatConfig(BaseSettings):
                     f"requires an Anthropic model for {field_name}, got "
                     f"{value!r}. Set CHAT_THINKING_STANDARD_MODEL / "
                     f"CHAT_THINKING_ADVANCED_MODEL / "
+                    f"CHAT_FAST_STANDARD_MODEL / "
+                    f"CHAT_FAST_ADVANCED_MODEL / "
                     f"CHAT_CLAUDE_AGENT_FALLBACK_MODEL to an anthropic/* "
                     f"slug, or set CHAT_USE_OPENROUTER=true."
                 )
