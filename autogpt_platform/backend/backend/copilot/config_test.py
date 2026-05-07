@@ -308,6 +308,36 @@ class TestSdkModelVendorCompatibility:
                 fast_standard_model="moonshotai/kimi-k2.6",
             )
 
+    def test_bare_non_claude_slug_rejected(self):
+        """Bare slugs without the ``vendor/`` prefix must start with
+        ``claude-`` — otherwise the runtime ``normalize_model_for_transport``
+        would 500 every request.  Pre-fix, a bare ``gpt-4o-mini`` slug
+        slipped through the ``"/" not in value`` short-circuit."""
+        with pytest.raises(Exception, match="thinking_standard_model"):
+            ChatConfig(
+                use_openrouter=False,
+                api_key=None,
+                base_url=None,
+                use_claude_code_subscription=False,
+                thinking_standard_model="gpt-4o-mini",
+                thinking_advanced_model="anthropic/claude-opus-4-7",
+                aux_api_key="or-aux-key",
+            )
+
+    def test_bare_claude_slug_accepted(self):
+        """Bare ``claude-*`` slugs (the Anthropic Messages API's native
+        form, e.g. ``claude-3-5-sonnet-20241022``) must pass."""
+        cfg = ChatConfig(
+            use_openrouter=False,
+            api_key=None,
+            base_url=None,
+            use_claude_code_subscription=False,
+            thinking_standard_model="claude-sonnet-4-20250514",
+            thinking_advanced_model="anthropic/claude-opus-4-7",
+            aux_api_key="or-aux-key",
+        )
+        assert cfg.thinking_standard_model == "claude-sonnet-4-20250514"
+
     def test_fast_advanced_model_also_validated(self):
         with pytest.raises(Exception, match="fast_advanced_model"):
             ChatConfig(

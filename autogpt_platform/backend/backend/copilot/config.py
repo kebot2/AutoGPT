@@ -751,18 +751,31 @@ class ChatConfig(BaseSettings):
             "claude_agent_fallback_model",
         ):
             value: str = getattr(self, field_name)
-            if not value or "/" not in value:
+            if not value:
                 continue
-            if value.split("/", 1)[0] != "anthropic":
+            if "/" in value:
+                if value.split("/", 1)[0] != "anthropic":
+                    raise ValueError(
+                        f"Direct-Anthropic mode (use_openrouter=False) "
+                        f"requires an Anthropic model for {field_name}, got "
+                        f"{value!r}. Set CHAT_THINKING_STANDARD_MODEL / "
+                        f"CHAT_THINKING_ADVANCED_MODEL / "
+                        f"CHAT_FAST_STANDARD_MODEL / "
+                        f"CHAT_FAST_ADVANCED_MODEL / "
+                        f"CHAT_CLAUDE_AGENT_FALLBACK_MODEL to an "
+                        f"``anthropic/*`` or ``claude-*`` slug, or set "
+                        f"CHAT_USE_OPENROUTER=true."
+                    )
+            elif not value.startswith("claude-"):
+                # Bare slug must be ``claude-*`` to be valid for direct
+                # Anthropic — bare ``gpt-4o-mini`` would otherwise pass
+                # the ``"/" not in value`` short-circuit and fail at
+                # request time (``normalize_model_for_transport`` raises).
                 raise ValueError(
                     f"Direct-Anthropic mode (use_openrouter=False) "
-                    f"requires an Anthropic model for {field_name}, got "
-                    f"{value!r}. Set CHAT_THINKING_STANDARD_MODEL / "
-                    f"CHAT_THINKING_ADVANCED_MODEL / "
-                    f"CHAT_FAST_STANDARD_MODEL / "
-                    f"CHAT_FAST_ADVANCED_MODEL / "
-                    f"CHAT_CLAUDE_AGENT_FALLBACK_MODEL to an anthropic/* "
-                    f"slug, or set CHAT_USE_OPENROUTER=true."
+                    f"requires an Anthropic model slug for {field_name}, "
+                    f"got {value!r}. Use an ``anthropic/*`` or "
+                    f"``claude-*`` slug, or set CHAT_USE_OPENROUTER=true."
                 )
         return self
 
