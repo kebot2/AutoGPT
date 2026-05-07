@@ -478,17 +478,20 @@ class ChatConfig(BaseSettings):
     def main_client_credentials(self) -> tuple[str | None, str | None]:
         """``(api_key, base_url)`` for the main OpenAI-compatible client.
 
-        - **OpenRouter mode** (default): returns ``(api_key, base_url)`` —
-          the existing OpenRouter creds.
-        - **Direct Anthropic mode** (``use_openrouter=False``): returns
+        Gated on ``openrouter_active`` (use_openrouter + valid creds), not
+        the raw flag, so the baseline path matches the SDK's
+        ``effective_transport`` behaviour: when ``CHAT_USE_OPENROUTER=true``
+        but the OR creds aren't actually present, both paths fall back to
+        direct Anthropic instead of attempting OR with no key.
+
+        - **OpenRouter active**: returns ``(api_key, base_url)`` — the
+          existing OR creds.
+        - **Otherwise** (direct mode or OR misconfigured): returns
           ``(direct_anthropic_api_key, ANTHROPIC_OPENAI_COMPAT_BASE_URL)``
           so the baseline OpenAI-compat client talks straight to
           api.anthropic.com.
-
-        Used by the baseline path; the SDK path drives its own env vars
-        through ``build_sdk_env``.
         """
-        if self.use_openrouter:
+        if self.openrouter_active:
             return self.api_key, self.base_url
         return self.direct_anthropic_api_key, ANTHROPIC_OPENAI_COMPAT_BASE_URL
 

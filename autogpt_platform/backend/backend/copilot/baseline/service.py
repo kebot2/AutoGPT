@@ -1450,7 +1450,15 @@ async def stream_chat_completion_baseline(
     # Select model based on the per-request tier toggle (standard / advanced).
     # The path (fast vs extended_thinking) is already decided — we're in the
     # baseline (fast) path; ``mode`` is accepted for logging parity only.
+    # Normalize immediately so EVERY downstream helper (E2B context,
+    # ``_compress_session_messages``, the streaming caller) sees the
+    # transport-correct slug — otherwise compaction in direct-Anthropic
+    # mode silently falls back to the non-LLM path because the OR slug
+    # would be rejected by the direct client.  Pass the baseline-side
+    # ``config`` so monkeypatch fixtures targeting this module's
+    # ``config`` symbol drive the decision.
     active_model = await _resolve_baseline_model(model, user_id)
+    active_model = normalize_model_for_transport(active_model, config)
 
     # --- E2B sandbox setup (feature parity with SDK path) ---
     e2b_sandbox = None
@@ -1815,14 +1823,6 @@ async def stream_chat_completion_baseline(
         _trace_ctx.__enter__()
     except Exception:
         logger.warning("[Baseline] Langfuse trace context setup failed")
-
-    # Normalize the slug for the active transport: OpenRouter keeps the
-    # ``vendor/model`` prefix; direct-Anthropic / subscription mode strips
-    # ``anthropic/`` and converts dots to hyphens (and refuses non-Anthropic
-    # vendors with a clear error far from the request).  Pass the
-    # baseline-side ``config`` so monkeypatch fixtures that target this
-    # module's ``config`` symbol drive the decision.
-    active_model = normalize_model_for_transport(active_model, config)
 
     _stream_error = False  # Track whether an error occurred during streaming
     state = _BaselineStreamState(model=active_model)

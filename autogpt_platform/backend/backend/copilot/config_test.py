@@ -421,8 +421,10 @@ class TestAuxClientForDirectMainValidator:
     def test_direct_main_with_non_anthropic_title_and_no_aux_key_raises(self):
         # OpenRouter off, no aux key, no fallback ``api_key`` → aux
         # client would 401 on every title call.  Validator must reject
-        # at boot.
-        with pytest.raises(ValueError, match="non-Anthropic title_model"):
+        # at boot.  Pydantic wraps ValueError in ValidationError, so
+        # match against ``Exception`` for parity with the SDK-vendor
+        # validator tests above.
+        with pytest.raises(Exception, match="non-Anthropic title_model"):
             _make_direct_safe_config(
                 use_openrouter=False,
                 direct_anthropic_api_key="anthropic-key",

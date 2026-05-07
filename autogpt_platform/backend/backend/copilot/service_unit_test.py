@@ -523,13 +523,23 @@ class TestGenerateSessionTitle:
     @pytest.mark.asyncio
     async def test_create_receives_usage_include_extra_body(self):
         """PR adds ``usage: {'include': True}`` so OpenRouter embeds the
-        real billed cost into the final usage chunk."""
+        real billed cost into the final usage chunk — only when the aux
+        transport is OR (Anthropic-direct rejects unknown extras)."""
         resp = _build_completion(content="Title")
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=resp)
-        with patch(
-            "backend.copilot.service._get_aux_client",
-            return_value=client,
+        with (
+            patch(
+                "backend.copilot.service._get_aux_client",
+                return_value=client,
+            ),
+            patch(
+                "backend.copilot.service.config",
+                MagicMock(
+                    aux_uses_openrouter=True,
+                    title_model="anthropic/claude-haiku",
+                ),
+            ),
         ):
             await _generate_session_title(
                 "hello world", user_id="user-abc", session_id="sess-abc"
@@ -539,3 +549,33 @@ class TestGenerateSessionTitle:
         assert extra_body["usage"] == {"include": True}
         assert extra_body["user"] == "user-abc"
         assert extra_body["session_id"] == "sess-abc"
+
+    @pytest.mark.asyncio
+    async def test_create_omits_extra_body_when_aux_not_openrouter(self):
+        """When aux client is pointed at a non-OR endpoint (e.g.
+        Anthropic OAI-compat), the OR-specific extras must not be sent
+        — Anthropic's compat endpoint 400s on unknown fields."""
+        resp = _build_completion(content="Title")
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=resp)
+        with (
+            patch(
+                "backend.copilot.service._get_aux_client",
+                return_value=client,
+            ),
+            patch(
+                "backend.copilot.service.config",
+                MagicMock(
+                    aux_uses_openrouter=False,
+                    title_model="anthropic/claude-haiku",
+                ),
+            ),
+        ):
+            await _generate_session_title(
+                "hello world", user_id="user-abc", session_id="sess-abc"
+            )
+        client.chat.completions.create.assert_awaited_once()
+        extra_body = client.chat.completions.create.await_args.kwargs["extra_body"]
+        assert "usage" not in extra_body
+        assert "user" not in extra_body
+        assert "session_id" not in extra_body

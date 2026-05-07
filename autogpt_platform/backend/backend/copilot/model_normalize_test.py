@@ -55,3 +55,30 @@ class TestNormalizeModelForTransport:
             normalize_model_for_transport("anthropic/claude-opus-4.7", cfg)
             == "claude-opus-4-7"
         )
+
+    def test_unprefixed_claude_slug_passes(self):
+        # ``claude-sonnet-4-20250514`` (no vendor prefix) is the
+        # Anthropic Messages / OpenAI-compat form — must pass through.
+        cfg = _make_cfg(
+            use_openrouter=False,
+            api_key=None,
+            base_url=None,
+            use_claude_code_subscription=False,
+        )
+        assert (
+            normalize_model_for_transport("claude-sonnet-4-20250514", cfg)
+            == "claude-sonnet-4-20250514"
+        )
+
+    def test_unprefixed_non_anthropic_slug_rejected(self):
+        # Bare ``gpt-4o-mini`` (no slash, no claude- prefix) would fail
+        # at runtime against Anthropic with an opaque model_not_found —
+        # raise here so the misconfig surfaces near its source.
+        cfg = _make_cfg(
+            use_openrouter=False,
+            api_key=None,
+            base_url=None,
+            use_claude_code_subscription=False,
+        )
+        with pytest.raises(ValueError, match="Anthropic model slug"):
+            normalize_model_for_transport("gpt-4o-mini", cfg)

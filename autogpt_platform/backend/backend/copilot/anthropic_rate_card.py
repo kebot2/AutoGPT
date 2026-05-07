@@ -75,6 +75,14 @@ def compute_anthropic_cost_usd(
     output_rate = _OUTPUT_USD_PER_MTOK.get(model)
     if input_rate is None or output_rate is None:
         return None
+    # Clamp each token bucket to ``>= 0`` per the codebase convention —
+    # a malformed upstream that reports a negative count must not flip
+    # the sign of the recorded cost (which would skew rate-limit and
+    # billing accounting).
+    prompt_tokens = max(0, prompt_tokens)
+    completion_tokens = max(0, completion_tokens)
+    cache_read_tokens = max(0, cache_read_tokens)
+    cache_creation_tokens = max(0, cache_creation_tokens)
     cache_write_multiplier = _CACHE_WRITE_MULTIPLIER_BY_TTL.get(cache_ttl, 2.0)
     fresh_input_cost = prompt_tokens * input_rate / 1_000_000
     output_cost = completion_tokens * output_rate / 1_000_000

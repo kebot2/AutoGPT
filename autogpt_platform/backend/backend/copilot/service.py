@@ -592,15 +592,20 @@ async def _generate_session_title(
         # ``usage: {"include": True}`` asks OR to embed the real billed
         # cost into the final usage chunk — matches the baseline path's
         # ``_OPENROUTER_INCLUDE_USAGE_COST`` pattern, same read path.
-        extra_body: dict[str, Any] = {"usage": {"include": True}}
-        if user_id:
-            extra_body["user"] = user_id[:128]  # OpenRouter limit
-            extra_body["posthogDistinctId"] = user_id
-        if session_id:
-            extra_body["session_id"] = session_id[:128]  # OpenRouter limit
-        extra_body["posthogProperties"] = {
-            "environment": settings.config.app_env.value,
-        }
+        # Gated on the aux transport because Anthropic's OpenAI-compat
+        # endpoint (and any non-OR endpoint) rejects unknown extra_body
+        # fields with a 400 — the same gate the baseline path applies.
+        extra_body: dict[str, Any] = {}
+        if config.aux_uses_openrouter:
+            extra_body["usage"] = {"include": True}
+            if user_id:
+                extra_body["user"] = user_id[:128]  # OpenRouter limit
+                extra_body["posthogDistinctId"] = user_id
+            if session_id:
+                extra_body["session_id"] = session_id[:128]  # OpenRouter limit
+            extra_body["posthogProperties"] = {
+                "environment": settings.config.app_env.value,
+            }
 
         response = await _get_aux_client().chat.completions.create(
             model=config.title_model,

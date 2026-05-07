@@ -58,4 +58,16 @@ def normalize_model_for_transport(raw_model: str, cfg: ChatConfig | None = None)
                 f"CHAT_FAST_ADVANCED_MODEL to an anthropic/* slug, or "
                 f"enable OpenRouter."
             )
+    elif model and not model.startswith("claude-"):
+        # Bare slug missing the ``vendor/`` prefix — only ``claude-*``
+        # forms (``claude-sonnet-4-6``, ``claude-3-5-sonnet-20241022``)
+        # are accepted by the Anthropic Messages / OpenAI-compat APIs
+        # and the CLI subprocess.  Anything else (``gpt-4o-mini``,
+        # ``gemini-pro``, ...) would fail with an opaque
+        # ``model_not_found`` at request time — surface it here.
+        raise ValueError(
+            f"{config.effective_transport!r} transport requires an "
+            f"Anthropic model slug, got model={raw_model!r}. Use an "
+            f"``anthropic/*`` or ``claude-*`` slug, or enable OpenRouter."
+        )
     return model.replace(".", "-")

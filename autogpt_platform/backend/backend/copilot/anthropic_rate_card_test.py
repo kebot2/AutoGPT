@@ -83,3 +83,15 @@ class TestComputeAnthropicCostUsd:
             completion_tokens=0,
         )
         assert cost == 0.0
+
+    def test_negative_tokens_clamped_to_zero(self):
+        # Malformed upstream returning negative counts must not flip
+        # the sign of the recorded cost.
+        cost = compute_anthropic_cost_usd(
+            model="claude-sonnet-4-6",
+            prompt_tokens=-100,
+            completion_tokens=-50,
+            cache_read_tokens=-10,
+            cache_creation_tokens=-20,
+        )
+        assert cost == 0.0
