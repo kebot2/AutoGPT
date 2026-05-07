@@ -98,6 +98,12 @@ from backend.data.notifications import (
 )
 from backend.data.onboarding import increment_onboarding_runs
 from backend.data.platform_cost import log_platform_cost
+from backend.data.push_subscription import (
+    cleanup_failed_subscriptions,
+    delete_push_subscription,
+    get_user_push_subscriptions,
+    increment_fail_count,
+)
 from backend.data.understanding import (
     get_business_understanding,
     upsert_business_understanding,
@@ -117,6 +123,7 @@ from backend.data.workspace import (
     get_or_create_workspace,
     get_workspace_file,
     get_workspace_file_by_path,
+    get_workspace_total_size,
     list_workspace_files,
     soft_delete_workspace_file,
 )
@@ -325,6 +332,7 @@ class DatabaseManager(AppService):
     get_or_create_workspace = _(get_or_create_workspace)
     get_workspace_file = _(get_workspace_file)
     get_workspace_file_by_path = _(get_workspace_file_by_path)
+    get_workspace_total_size = _(get_workspace_total_size)
     list_workspace_files = _(list_workspace_files)
     soft_delete_workspace_file = _(soft_delete_workspace_file)
 
@@ -338,6 +346,16 @@ class DatabaseManager(AppService):
 
     # ============ Platform Cost Tracking ============ #
     log_platform_cost = _(log_platform_cost)
+
+    # ============ Push Notifications ============ #
+    get_user_push_subscriptions = _(get_user_push_subscriptions)
+    delete_push_subscription = _(delete_push_subscription)
+    increment_push_fail_count = _(
+        increment_fail_count, name="increment_push_fail_count"
+    )
+    cleanup_failed_push_subscriptions = _(
+        cleanup_failed_subscriptions, name="cleanup_failed_push_subscriptions"
+    )
 
     # ============ Platform Linking ============ #
     find_server_link_owner = _(platform_linking_db.find_server_link_owner)
@@ -540,6 +558,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_or_create_workspace = d.get_or_create_workspace
     get_workspace_file = d.get_workspace_file
     get_workspace_file_by_path = d.get_workspace_file_by_path
+    get_workspace_total_size = d.get_workspace_total_size
     list_workspace_files = d.list_workspace_files
     soft_delete_workspace_file = d.soft_delete_workspace_file
 
@@ -556,6 +575,12 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ Platform Cost Tracking ============ #
     log_platform_cost = d.log_platform_cost
+
+    # ============ Push Notifications ============ #
+    get_user_push_subscriptions = d.get_user_push_subscriptions
+    delete_push_subscription = d.delete_push_subscription
+    increment_push_fail_count = d.increment_push_fail_count
+    cleanup_failed_push_subscriptions = d.cleanup_failed_push_subscriptions
 
     # ============ Platform Linking ============ #
     find_server_link_owner = d.find_server_link_owner

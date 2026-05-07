@@ -3,7 +3,7 @@
 import os
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from backend.util.clients import OPENROUTER_BASE_URL
@@ -17,8 +17,12 @@ from backend.util.clients import OPENROUTER_BASE_URL
 CopilotMode = Literal["fast", "extended_thinking"]
 
 # Per-request model tier set by the frontend model toggle.
-# 'standard' uses ``ChatConfig.model`` (Sonnet by default).
-# 'advanced' uses ``ChatConfig.advanced_model`` (Opus by default).
+# 'standard' picks the cheaper everyday model for the active path —
+#   ``fast_standard_model`` on the baseline path, ``thinking_standard_model``
+#   on the SDK path.
+# 'advanced' picks the premium model for the active path — ``fast_advanced_model``
+#   on the baseline path, ``thinking_advanced_model`` on the SDK path (both
+#   default to Opus today).
 # None means no preference — falls through to LD per-user targeting, then config.
 # Using tier names instead of model names keeps the contract model-agnostic.
 CopilotLlmModel = Literal["standard", "advanced"]
@@ -27,29 +31,60 @@ CopilotLlmModel = Literal["standard", "advanced"]
 class ChatConfig(BaseSettings):
     """Configuration for the chat system."""
 
-    # Chat model tiers — applied orthogonally to the path (fast=baseline vs
-    # extended_thinking=SDK).  The "fast" vs "extended_thinking" toggle picks
-    # which code path runs (no reasoning / heavy SDK); "standard" vs
-    # "advanced" picks the model inside that path.
-    model: str = Field(
+    # Chat model tiers — a 2×2 of (path, tier).  ``path`` = ``CopilotMode``
+    # (``"fast"`` → baseline OpenAI-compat / any OpenRouter model;
+    # ``"extended_thinking"`` → Claude Agent SDK, Anthropic-only CLI).
+    # ``tier`` = ``CopilotLlmModel`` (``"standard"`` / ``"advanced"``).
+    # Each cell has its own config so the two paths can evolve
+    # independently (cheap provider on baseline, Anthropic on SDK) at each
+    # tier without conflating one path's needs with the other's constraint.
+    #
+    # Historical env var names (``CHAT_MODEL`` / ``CHAT_ADVANCED_MODEL`` /
+    # ``CHAT_FAST_MODEL``) are preserved via ``validation_alias`` so
+    # existing deployments continue to override the same effective cell.
+    fast_standard_model: str = Field(
         default="anthropic/claude-sonnet-4-6",
-        description="Model used for the 'standard' tier (Sonnet by default). "
-        "Applies to both baseline (fast) and SDK (extended thinking) paths. "
-        "Override via CHAT_MODEL env var.",
+        validation_alias=AliasChoices(
+            "CHAT_FAST_STANDARD_MODEL",
+            "CHAT_FAST_MODEL",
+        ),
+        description="Baseline path, 'standard' / ``None`` tier.  Per-user "
+        "overrides flow through ``copilot-model-routing[fast][standard]`` "
+        "(see ``copilot/model_router.py``); this value is the fallback.",
     )
-    advanced_model: str = Field(
-        default="anthropic/claude-opus-4-7",
-        description="Model used for the 'advanced' tier (Opus by default). "
-        "Applies to both baseline (fast) and SDK (extended thinking) paths. "
-        "Override via CHAT_ADVANCED_MODEL env var.",
+    fast_advanced_model: str = Field(
+        default="anthropic/claude-opus-4.7",
+        validation_alias=AliasChoices("CHAT_FAST_ADVANCED_MODEL"),
+        description="Baseline path, 'advanced' tier.  LD override: "
+        "``copilot-model-routing[fast][advanced]``.",
+    )
+    thinking_standard_model: str = Field(
+        default="anthropic/claude-sonnet-4-6",
+        validation_alias=AliasChoices(
+            "CHAT_THINKING_STANDARD_MODEL",
+            "CHAT_MODEL",
+        ),
+        description="SDK (extended-thinking) path, 'standard' / ``None`` "
+        "tier.  LD override: ``copilot-model-routing[thinking][standard]``.",
+    )
+    thinking_advanced_model: str = Field(
+        default="anthropic/claude-opus-4.7",
+        validation_alias=AliasChoices(
+            "CHAT_THINKING_ADVANCED_MODEL",
+            "CHAT_ADVANCED_MODEL",
+        ),
+        description="SDK (extended-thinking) path, 'advanced' tier.  LD "
+        "override: ``copilot-model-routing[thinking][advanced]``.",
     )
     title_model: str = Field(
         default="openai/gpt-4o-mini",
         description="Model to use for generating session titles (should be fast/cheap)",
     )
     simulation_model: str = Field(
-        default="google/gemini-2.5-flash",
-        description="Model for dry-run block simulation (should be fast/cheap with good JSON output)",
+        default="google/gemini-2.5-flash-lite",
+        description="Model for dry-run block simulation (should be fast/cheap with good JSON output). "
+        "Gemini 2.5 Flash-Lite is ~3x cheaper than Flash ($0.10/$0.40 vs $0.30/$1.20 per MTok) "
+        "with JSON-mode reliability adequate for shape-matching block outputs.",
     )
     api_key: str | None = Field(default=None, description="OpenAI API key")
     base_url: str | None = Field(
@@ -150,7 +185,7 @@ class ChatConfig(BaseSettings):
     claude_agent_model: str | None = Field(
         default=None,
         description="Model for the Claude Agent SDK path. If None, derives from "
-        "the `model` field by stripping the OpenRouter provider prefix.",
+        "`thinking_standard_model` by stripping the OpenRouter provider prefix.",
     )
     claude_agent_max_buffer_size: int = Field(
         default=10 * 1024 * 1024,  # 10MB (default SDK is 1MB)
@@ -172,14 +207,18 @@ class ChatConfig(BaseSettings):
         "overloaded). The SDK automatically retries with this cheaper model. "
         "Empty string disables the fallback (no --fallback-model flag passed to CLI).",
     )
-    claude_agent_max_turns: int = Field(
-        default=50,
+    agent_max_turns: int = Field(
+        default=100,
         ge=1,
         le=10000,
-        description="Maximum number of agentic turns (tool-use loops) per query. "
-        "Prevents runaway tool loops from burning budget. "
-        "Changed from 1000 to 50 in SDK 0.1.58 upgrade — override via "
-        "CHAT_CLAUDE_AGENT_MAX_TURNS env var if your workflows need more.",
+        validation_alias=AliasChoices(
+            "CHAT_AGENT_MAX_TURNS",
+            "CHAT_CLAUDE_AGENT_MAX_TURNS",
+        ),
+        description="Maximum number of tool-call rounds per turn — applies to "
+        "both the baseline and Claude Agent SDK paths. Prevents runaway tool "
+        "loops from burning budget. Override via CHAT_AGENT_MAX_TURNS env var "
+        "(legacy CHAT_CLAUDE_AGENT_MAX_TURNS still accepted).",
     )
     claude_agent_max_budget_usd: float = Field(
         default=10.0,
@@ -189,6 +228,20 @@ class ChatConfig(BaseSettings):
         "to wrap up gracefully when this budget is reached. "
         "Set to $10 to allow most tasks to complete (p50=$5.37, p75=$13.07). "
         "Override via CHAT_CLAUDE_AGENT_MAX_BUDGET_USD env var.",
+    )
+    claude_agent_autocompact_pct_override: int = Field(
+        default=50,
+        ge=0,
+        le=100,
+        description="Auto-compaction trigger threshold as a percentage of the "
+        "CLI's perceived window (sets ``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`` on the "
+        "SDK subprocess). The CLI caps at its default (~93% of window); values "
+        "above that have no effect. 50 (= 100K of a 200K window) keeps Anthropic "
+        "context creation costs down. Set to 0 to omit the env var entirely "
+        "and let the CLI use its default ~93% threshold — useful when the "
+        "post-compaction floor (system prompt + tool defs ≈ 65-110K) is close "
+        "to the trigger and a more aggressive value causes back-to-back "
+        "compaction cascades. Skipped unconditionally for Moonshot routes.",
     )
     claude_agent_max_thinking_tokens: int = Field(
         default=8192,
@@ -205,13 +258,28 @@ class ChatConfig(BaseSettings):
         "``max_thinking_tokens`` kwarg so the CLI falls back to model default "
         "(which, without the flag, leaves extended thinking off).",
     )
+    render_reasoning_in_ui: bool = Field(
+        default=True,
+        description="Render reasoning as live UI parts "
+        "(``StreamReasoning*`` wire events). False suppresses the live "
+        "wire events only; ``role='reasoning'`` rows are always persisted "
+        "so the reasoning bubble hydrates on reload. Tokens are billed "
+        "upstream regardless.",
+    )
+    stream_replay_count: int = Field(
+        default=200,
+        ge=1,
+        le=10000,
+        description="Max Redis stream entries replayed on SSE reconnect.",
+    )
     claude_agent_thinking_effort: Literal["low", "medium", "high", "max"] | None = (
         Field(
             default=None,
             description="Thinking effort level: 'low', 'medium', 'high', 'max', or None. "
-            "Only applies to models with extended thinking (Opus). "
-            "Sonnet doesn't have extended thinking — setting effort on Sonnet "
-            "can cause <internal_reasoning> tag leaks. "
+            "Applies to models that emit a reasoning channel — Opus (extended "
+            "thinking) and Kimi K2.6 (OpenRouter ``reasoning`` extension lit "
+            "up by #12871).  Sonnet does not have extended thinking — setting "
+            "effort on Sonnet can cause <internal_reasoning> tag leaks. "
             "None = let the model decide. Override via CHAT_CLAUDE_AGENT_THINKING_EFFORT.",
         )
     )
@@ -242,6 +310,31 @@ class ChatConfig(BaseSettings):
         "reads amortise the higher write cost. Anthropic has no longer "
         "(24h, permanent) TTL option — see "
         "https://platform.claude.com/docs/en/build-with-claude/prompt-caching.",
+    )
+    sdk_include_partial_messages: bool = Field(
+        default=True,
+        description="Stream SDK responses token-by-token instead of in "
+        "one lump at the end.  Set to False if the SDK path starts "
+        "double-writing text or dropping the tail of long messages.",
+    )
+    sdk_reconcile_openrouter_cost: bool = Field(
+        default=True,
+        description="Query OpenRouter's ``/api/v1/generation?id=`` after each "
+        "SDK turn and record the authoritative ``total_cost`` instead of the "
+        "Claude Agent SDK CLI's estimate.  Covers every OpenRouter-routed "
+        "SDK turn regardless of vendor — the CLI's static Anthropic pricing "
+        "table is accurate for Anthropic models (Sonnet/Opus via OpenRouter "
+        "bill at Anthropic's own rates, penny-for-penny), but the reconcile "
+        "catches any future rate change the CLI hasn't picked up and makes "
+        "non-Anthropic cost (Kimi et al) correct — real billed amount, "
+        "matching the baseline path's ``usage.cost`` read since #12864.  "
+        "Kill-switch for emergencies: set ``CHAT_SDK_RECONCILE_OPENROUTER_COST"
+        "=false`` to fall back to the CLI's ``total_cost_usd`` reported "
+        "synchronously (accurate-for-Anthropic / over-billed-for-Kimi).  "
+        "Tradeoff: 0.5-2s window between turn end and cost write; rate-limit "
+        "counter briefly unaware, back-to-back turns in that window see "
+        "stale state.  The alternative (writing an estimate sync then a "
+        "correction delta) would double-count the rate limit.",
     )
     claude_agent_cli_path: str | None = Field(
         default=None,
@@ -302,11 +395,17 @@ class ChatConfig(BaseSettings):
 
     @property
     def openrouter_active(self) -> bool:
-        """True when OpenRouter is enabled AND credentials are usable.
+        """True when OpenRouter config is shape-valid (flag + credentials).
 
-        Single source of truth for "will the SDK route through OpenRouter?".
-        Checks the flag *and* that ``api_key`` + a valid ``base_url`` are
-        present — mirrors the fallback logic in ``build_sdk_env``.
+        Indicates whether OpenRouter settings are present and usable —
+        ``use_openrouter`` set, plus ``api_key`` + a valid ``base_url``,
+        mirroring the fallback logic in ``build_sdk_env``.
+
+        Note: this is a **config-shape check only**.  Runtime SDK routing
+        is governed by ``effective_transport`` — subscription mode
+        bypasses OpenRouter entirely even when these fields are set, so
+        callers asking "will the SDK actually route through OpenRouter
+        for this turn?" should use ``effective_transport`` instead.
         """
         if not self.use_openrouter:
             return False
@@ -314,6 +413,34 @@ class ChatConfig(BaseSettings):
         if base.endswith("/v1"):
             base = base[:-3]
         return bool(self.api_key and base and base.startswith("http"))
+
+    @property
+    def effective_transport(
+        self,
+    ) -> Literal["subscription", "openrouter", "direct_anthropic"]:
+        """The transport the SDK CLI subprocess actually uses for this turn.
+
+        Detection order:
+
+        1. ``subscription`` — when ``use_claude_code_subscription`` is True
+           the CLI uses OAuth from the keychain or
+           ``CLAUDE_CODE_OAUTH_TOKEN`` and ignores ``CHAT_BASE_URL`` /
+           ``CHAT_API_KEY`` entirely (see ``build_sdk_env`` mode 1).
+        2. ``openrouter`` — when ``openrouter_active`` (use_openrouter +
+           api_key + a valid base_url).
+        3. ``direct_anthropic`` — fallback (CLI talks to api.anthropic.com
+           with ``ANTHROPIC_API_KEY`` from parent env).
+
+        Use this when the question is "which model-name format will the
+        CLI accept?" — the OpenRouter slug ``anthropic/claude-opus-4.7``
+        works through the proxy but is rejected by the subscription /
+        direct-Anthropic transports.
+        """
+        if self.use_claude_code_subscription:
+            return "subscription"
+        if self.openrouter_active:
+            return "openrouter"
+        return "direct_anthropic"
 
     @property
     def e2b_active(self) -> bool:
@@ -413,6 +540,63 @@ class ChatConfig(BaseSettings):
                 )
         return v
 
+    @model_validator(mode="after")
+    def _validate_sdk_model_vendor_compatibility(self) -> "ChatConfig":
+        """Fail at config load when an SDK model slug is incompatible with
+        explicit direct-Anthropic mode.
+
+        The SDK path's ``_normalize_model_name`` raises ``ValueError`` when
+        a non-Anthropic vendor slug (e.g. ``moonshotai/kimi-k2.6``) is paired
+        with direct-Anthropic mode — but that fires inside the request loop,
+        so a misconfigured deployment would surface a 500 to every user
+        instead of failing visibly at boot.
+
+        Only the **explicit** opt-out (``use_openrouter=False``) is checked
+        here, not the credential-missing path.  Build environments and
+        OpenAPI-schema export jobs construct ``ChatConfig()`` without any
+        OpenRouter credentials in the env — that's not a misconfiguration,
+        it's "config loads ok, but no SDK turn will succeed until creds are
+        wired".  The runtime guard in ``_normalize_model_name`` still
+        catches the credential-missing path on the first SDK turn.
+
+        Covers all three SDK fields that flow through
+        ``_normalize_model_name``: primary tier
+        (``thinking_standard_model``), advanced tier
+        (``thinking_advanced_model``), and fallback model
+        (``claude_agent_fallback_model`` via ``_resolve_fallback_model``).
+
+        Skipped when ``use_claude_code_subscription=True`` because the
+        subscription path normally resolves the static config to ``None``
+        (CLI default). An LD-served override under subscription does
+        flow through ``_normalize_model_name``; the runtime guard first
+        falls back to the tier default, and only avoids a request error
+        when that default is itself valid (otherwise the original LD
+        ValueError is re-raised — see ``_resolve_sdk_model_for_request``).
+        Empty fallback strings are also skipped (no fallback configured).
+        """
+        if self.use_claude_code_subscription:
+            return self
+        if self.use_openrouter:
+            return self
+        for field_name in (
+            "thinking_standard_model",
+            "thinking_advanced_model",
+            "claude_agent_fallback_model",
+        ):
+            value: str = getattr(self, field_name)
+            if not value or "/" not in value:
+                continue
+            if value.split("/", 1)[0] != "anthropic":
+                raise ValueError(
+                    f"Direct-Anthropic mode (use_openrouter=False) "
+                    f"requires an Anthropic model for {field_name}, got "
+                    f"{value!r}. Set CHAT_THINKING_STANDARD_MODEL / "
+                    f"CHAT_THINKING_ADVANCED_MODEL / "
+                    f"CHAT_CLAUDE_AGENT_FALLBACK_MODEL to an anthropic/* "
+                    f"slug, or set CHAT_USE_OPENROUTER=true."
+                )
+        return self
+
     # Prompt paths for different contexts
     PROMPT_PATHS: dict[str, str] = {
         "default": "prompts/chat_system.md",
@@ -426,3 +610,10 @@ class ChatConfig(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "ignore"  # Ignore extra environment variables
+        # Accept both the Python attribute name and the validation_alias when
+        # constructing a ``ChatConfig`` directly (e.g. in tests passing
+        # ``thinking_standard_model=...``).  Without this, pydantic only
+        # accepts the alias names (``CHAT_THINKING_STANDARD_MODEL`` env) and
+        # rejects field-name kwargs — breaking ``ChatConfig(field=...)`` in
+        # every test that constructs a config.
+        populate_by_name = True
