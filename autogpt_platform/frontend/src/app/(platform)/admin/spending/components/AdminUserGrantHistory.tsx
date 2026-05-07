@@ -12,6 +12,10 @@ import { SearchAndFilterAdminSpending } from "./SearchAndFilterAdminSpending";
 import { getUsersTransactionHistory } from "@/app/(platform)/admin/spending/actions";
 import { AdminAddMoneyButton } from "./AddMoneyButton";
 import { RateLimitModal } from "./RateLimitModal";
+import {
+  pickAmountColor,
+  pickTypePillColor,
+} from "./AdminUserGrantHistory.helpers";
 import { CreditTransactionType } from "@/lib/autogpt-server-api";
 
 export async function AdminUserGrantHistory({
@@ -31,49 +35,22 @@ export async function AdminUserGrantHistory({
     initialStatus,
   );
 
-  // Helper function to format the amount with color based on transaction type.
-  // REFUND covers both block-execute refunds (positive amount → user-facing
-  // credit return) and Stripe clawbacks (negative amount → deduction); branch
-  // on sign so admins can tell them apart at a glance.
-  const formatAmount = (amount: number, type: CreditTransactionType) => {
-    const isPositive =
-      type === CreditTransactionType.GRANT ||
-      (type === CreditTransactionType.REFUND && amount > 0);
-    const isNeutral = type === CreditTransactionType.TOP_UP;
-    const color = isPositive
-      ? "text-green-600"
-      : isNeutral
-        ? "text-blue-600"
-        : "text-red-600";
-    return <span className={color}>${Math.abs(amount / 100)}</span>;
-  };
+  const formatAmount = (amount: number, type: CreditTransactionType) => (
+    <span className={pickAmountColor(amount, type)}>
+      ${Math.abs(amount / 100)}
+    </span>
+  );
 
-  // Helper function to format the transaction type with color
-  const formatType = (type: CreditTransactionType, amount: number) => {
-    const isGrant = type === CreditTransactionType.GRANT;
-    const isPurchased = type === CreditTransactionType.TOP_UP;
-    const isSpent = type === CreditTransactionType.USAGE;
-    const isRefundCredit = type === CreditTransactionType.REFUND && amount > 0;
-    const isRefundClawback =
-      type === CreditTransactionType.REFUND && amount < 0;
-
-    const displayText = type;
-    let bgColor = "";
-
-    if (isGrant || isRefundCredit) {
-      bgColor = "bg-green-100 text-green-800";
-    } else if (isPurchased) {
-      bgColor = "bg-blue-100 text-blue-800";
-    } else if (isSpent || isRefundClawback) {
-      bgColor = "bg-red-100 text-red-800";
-    }
-
-    return (
-      <span className={`rounded-full px-2 py-1 text-xs font-medium ${bgColor}`}>
-        {displayText.valueOf()}
-      </span>
-    );
-  };
+  const formatType = (type: CreditTransactionType, amount: number) => (
+    <span
+      className={`rounded-full px-2 py-1 text-xs font-medium ${pickTypePillColor(
+        type,
+        amount,
+      )}`}
+    >
+      {type.valueOf()}
+    </span>
+  );
 
   // Helper function to format the date
   const formatDate = (date: Date) => {
