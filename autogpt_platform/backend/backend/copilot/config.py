@@ -759,12 +759,17 @@ class ChatConfig(BaseSettings):
         """
         if self.use_claude_code_subscription:
             return self
-        # Gate on ``openrouter_active`` (use_openrouter + valid creds)
-        # rather than the raw flag — matches ``main_client_credentials``
-        # so the validator catches the "CHAT_USE_OPENROUTER=true but no
-        # OR creds, only ANTHROPIC_API_KEY" case where the main client
-        # silently falls back to direct mode but aux still 401s.
-        if self.openrouter_active:
+        # Match ``_validate_sdk_model_vendor_compatibility``: only check
+        # the **explicit** opt-out (``use_openrouter=False``).  Build
+        # environments and OpenAPI-schema export jobs construct
+        # ``ChatConfig()`` without any creds; that's not a misconfig
+        # here either, just "no turn will succeed until creds are wired".
+        # The credential-missing path on a real request is caught
+        # downstream by the aux client's 401 response and surfaced via
+        # the title-cost log.  Catching it here would block CI's
+        # ``check API types`` step that imports the config to export
+        # the OpenAPI schema.
+        if self.use_openrouter:
             return self
         # Aux client falls back to ``api_key`` / ``base_url`` only when
         # those creds actually point at OpenRouter (``aux_uses_openrouter``).
