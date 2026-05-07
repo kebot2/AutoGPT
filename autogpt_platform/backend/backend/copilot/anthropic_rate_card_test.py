@@ -95,3 +95,42 @@ class TestComputeAnthropicCostUsd:
             cache_creation_tokens=-20,
         )
         assert cost == 0.0
+
+    def test_cached_tokens_subtracted_from_prompt_tokens(self):
+        # Anthropic OAI-compat returns ``prompt_tokens`` as the total
+        # input including cached + cache-write tokens.  Without the
+        # subtract-out, fully-cached requests double-bill: full input
+        # rate on prompt_tokens AND cache-read rate on cached_tokens.
+        # Regression cover: 1M input all served from cache → just
+        # the cache-read cost ($0.30), not $3.30.
+        cost = compute_anthropic_cost_usd(
+            model="claude-sonnet-4-6",
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
+            cache_read_tokens=1_000_000,
+        )
+        assert cost == 0.3
+
+    def test_partial_cache_subtracts_correctly(self):
+        # 1M input, 500K from cache → fresh = 500K, cache_read = 500K.
+        # fresh = 500K × $3/M = $1.50; cache = 500K × $3 × 0.1 / M = $0.15.
+        cost = compute_anthropic_cost_usd(
+            model="claude-sonnet-4-6",
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
+            cache_read_tokens=500_000,
+        )
+        assert cost == 1.65
+
+    def test_overreported_breakdown_clamps_fresh_to_zero(self):
+        # Defensive: if cache_read + cache_creation > prompt_tokens
+        # (upstream over-reports), fresh_input clamps to 0 instead of
+        # going negative.
+        cost = compute_anthropic_cost_usd(
+            model="claude-sonnet-4-6",
+            prompt_tokens=100,
+            completion_tokens=0,
+            cache_read_tokens=1000,
+        )
+        # fresh_input clamped to 0, cache_read = 1000 × $3 × 0.1 / M = $0.0003.
+        assert cost == 0.0003

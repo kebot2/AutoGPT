@@ -55,11 +55,14 @@ def compute_anthropic_cost_usd(
 ) -> float | None:
     """Return the USD cost for an Anthropic-direct chat completion.
 
-    ``prompt_tokens`` is the OpenAI-compat top-level number, which on
-    Anthropic's compat endpoint **excludes** cached and cache-write
-    tokens (those land in the prompt-tokens-details breakdown).  So the
-    formula sums them as separate buckets at their own rates rather
-    than double-counting against ``prompt_tokens``.
+    ``prompt_tokens`` is the OpenAI-compat top-level total — on
+    Anthropic's compat endpoint it **includes** cached + cache-write
+    tokens (matching the OpenAI spec, where the cached subset lives
+    in ``prompt_tokens_details``).  We subtract those buckets out
+    before computing the fresh-input cost so each token is billed
+    exactly once at its correct rate.  If the upstream over-reports
+    the breakdown (cached + write > total), the fresh-input bucket is
+    clamped to zero to avoid flipping the sign.
 
     *cache_ttl* selects the cache-write surcharge multiplier — must
     match the ``cache_control: ttl`` set on the cached blocks (today
@@ -83,8 +86,11 @@ def compute_anthropic_cost_usd(
     completion_tokens = max(0, completion_tokens)
     cache_read_tokens = max(0, cache_read_tokens)
     cache_creation_tokens = max(0, cache_creation_tokens)
+    fresh_input_tokens = max(
+        0, prompt_tokens - cache_read_tokens - cache_creation_tokens
+    )
     cache_write_multiplier = _CACHE_WRITE_MULTIPLIER_BY_TTL.get(cache_ttl, 2.0)
-    fresh_input_cost = prompt_tokens * input_rate / 1_000_000
+    fresh_input_cost = fresh_input_tokens * input_rate / 1_000_000
     output_cost = completion_tokens * output_rate / 1_000_000
     cache_read_cost = (
         cache_read_tokens * input_rate * _CACHE_READ_MULTIPLIER / 1_000_000

@@ -699,12 +699,14 @@ async def _record_title_generation_cost(
     if cost_usd is None and prompt_tokens == 0 and completion_tokens == 0:
         return
 
-    # Provider label is derived from the configured aux base URL —
-    # title generation runs on the aux client (kept on OpenRouter so the
-    # non-Anthropic title model keeps working when the main client is
-    # pointed at Anthropic directly).  Falls back to "openai" for any
-    # non-OR custom endpoint.
-    provider = "open_router" if config.aux_uses_openrouter else "openai"
+    # Provider label tracks the aux client's actual transport — title
+    # generation runs on the aux client (kept on OpenRouter when split
+    # from the main client so the non-Anthropic title model keeps
+    # working).  ``aux_provider_label`` resolves to ``open_router`` /
+    # ``anthropic`` / ``openai`` so a single-key direct-Anthropic
+    # deployment lands the cost row under ``anthropic`` instead of the
+    # misleading ``openai`` fallback.
+    provider = config.aux_provider_label
 
     # Intentionally pass ``session=None``.  ``persist_and_record_usage``
     # would otherwise append a ``Usage`` entry to the live session

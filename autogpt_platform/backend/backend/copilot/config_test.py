@@ -413,6 +413,41 @@ class TestAuxClientCredentials:
         assert cfg.aux_uses_openrouter is False
 
 
+class TestAuxProviderLabel:
+    """``aux_provider_label`` tracks the aux client's actual transport for cost-log rows."""
+
+    def test_openrouter_url_returns_open_router(self):
+        cfg = ChatConfig(
+            use_openrouter=True,
+            api_key="or-key",
+            base_url="https://openrouter.ai/api/v1",
+        )
+        assert cfg.aux_provider_label == "open_router"
+
+    def test_anthropic_url_returns_anthropic(self):
+        # Single-key direct-Anthropic deployment: aux inherits the
+        # main creds (Anthropic-pointed).  Cost row must land under
+        # "anthropic", not the misleading "openai" fallback.
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key="anthropic-key",
+            base_url="https://api.anthropic.com/v1/",
+            aux_api_key=None,
+            aux_base_url=None,
+            title_model="anthropic/claude-haiku-4-5",
+        )
+        assert cfg.aux_provider_label == "anthropic"
+
+    def test_other_url_returns_openai(self):
+        cfg = ChatConfig(
+            use_openrouter=True,
+            api_key="key",
+            base_url="https://api.openai.com/v1",
+        )
+        assert cfg.aux_provider_label == "openai"
+
+
 class TestAuxClientForDirectMainValidator:
     """``_validate_aux_client_for_direct_main`` fails fast at boot when
     direct-main mode + non-Anthropic aux model would land on a
@@ -434,9 +469,11 @@ class TestAuxClientForDirectMainValidator:
                 title_model="openai/gpt-4o-mini",
             )
 
-    def test_direct_main_with_anthropic_aux_models_passes(self):
-        # Anthropic title + simulation models — aux can fall back to
-        # direct creds (Anthropic serves its own models).
+    def test_direct_main_with_anthropic_title_passes(self):
+        # Anthropic title model — aux can fall back to direct creds.
+        # ``simulation_model`` is no longer validated here (it has its
+        # own client acquisition path) so its default non-Anthropic
+        # value doesn't trip the check.
         cfg = _make_direct_safe_config(
             use_openrouter=False,
             direct_anthropic_api_key="anthropic-key",
@@ -444,9 +481,24 @@ class TestAuxClientForDirectMainValidator:
             base_url=None,
             aux_api_key=None,
             title_model="anthropic/claude-haiku-4-5",
-            simulation_model="anthropic/claude-haiku-4-5",
         )
         assert cfg.title_model == "anthropic/claude-haiku-4-5"
+
+    def test_simulation_model_not_validated(self):
+        # Non-Anthropic ``simulation_model`` does NOT trip the
+        # validator — the simulator uses its own platform-level OR key
+        # (``util.clients.get_openai_client(prefer_openrouter=True)``)
+        # which is independent of ChatConfig aux settings.
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key=None,
+            base_url=None,
+            aux_api_key=None,
+            title_model="anthropic/claude-haiku-4-5",
+            simulation_model="google/gemini-2.5-flash-lite",
+        )
+        assert cfg.simulation_model == "google/gemini-2.5-flash-lite"
 
     def test_direct_main_with_explicit_aux_key_passes(self):
         # Non-Anthropic title is fine when aux has its own creds.

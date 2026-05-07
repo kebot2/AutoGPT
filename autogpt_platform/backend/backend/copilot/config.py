@@ -517,11 +517,35 @@ class ChatConfig(BaseSettings):
     def aux_uses_openrouter(self) -> bool:
         """True when the aux client is pointed at OpenRouter.
 
-        Used to label the cost-log ``provider`` for aux calls (title
-        generation) without re-deriving the URL check at every call site.
+        Used to gate OR-specific request fields (extra_body keys like
+        ``usage.include`` and PostHog tracing) at the call site.
         """
         _, base_url = self.aux_client_credentials
         return bool(base_url and "openrouter.ai" in base_url)
+
+    @property
+    def aux_provider_label(self) -> str:
+        """Cost-log ``provider`` label tracking the aux client's actual
+        transport.
+
+        Three buckets:
+
+        - ``"open_router"`` — base URL points at OpenRouter.
+        - ``"anthropic"`` — base URL points at api.anthropic.com.  A
+          single-key direct-Anthropic deployment falls into this case
+          when ``aux_*`` is unset, because ``aux_client_credentials``
+          inherits from the (Anthropic-pointed) main creds.
+        - ``"openai"`` — anything else (custom OAI-compat endpoint,
+          plain api.openai.com, ...).
+        """
+        _, base_url = self.aux_client_credentials
+        if not base_url:
+            return "openai"
+        if "openrouter.ai" in base_url:
+            return "open_router"
+        if "anthropic.com" in base_url:
+            return "anthropic"
+        return "openai"
 
     @property
     def e2b_active(self) -> bool:
@@ -735,32 +759,42 @@ class ChatConfig(BaseSettings):
         """
         if self.use_claude_code_subscription:
             return self
-        if self.use_openrouter:
+        # Gate on ``openrouter_active`` (use_openrouter + valid creds)
+        # rather than the raw flag — matches ``main_client_credentials``
+        # so the validator catches the "CHAT_USE_OPENROUTER=true but no
+        # OR creds, only ANTHROPIC_API_KEY" case where the main client
+        # silently falls back to direct mode but aux still 401s.
+        if self.openrouter_active:
             return self
-        # Aux client falls back to ``api_key`` / ``base_url`` when the
-        # aux env vars are unset.  A populated ``api_key`` is enough to
-        # serve OR-routed aux calls — the original single-key flow.
-        if self.aux_api_key or self.api_key:
+        # Aux client falls back to ``api_key`` / ``base_url`` only when
+        # those creds actually point at OpenRouter (``aux_uses_openrouter``).
+        # A bare ``api_key`` paired with a non-OR ``base_url`` (e.g. an
+        # operator who set ``CHAT_BASE_URL=https://api.anthropic.com``
+        # for the main client) cannot serve a non-Anthropic title model,
+        # so the escape hatch must verify transport, not just presence.
+        if (self.aux_api_key or self.api_key) and self.aux_uses_openrouter:
             return self
-        for field_name in ("title_model", "simulation_model"):
-            value: str = getattr(self, field_name)
-            if not value:
-                continue
-            if "/" in value and value.split("/", 1)[0] == "anthropic":
-                continue
-            if "/" not in value:
-                # Bare slug like ``claude-haiku-4-5`` — assume Anthropic.
-                continue
-            raise ValueError(
-                f"Direct-Anthropic main mode (use_openrouter=False) "
-                f"with non-Anthropic {field_name}={value!r} requires "
-                f"explicit OpenRouter credentials for the aux client. "
-                f"Set CHAT_AUX_API_KEY (or OPEN_ROUTER_API_KEY) so "
-                f"title/simulation calls keep routing through "
-                f"OpenRouter, or override the model to an anthropic/* "
-                f"slug."
-            )
-        return self
+        # Only ``title_model`` is checked here.  ``simulation_model``
+        # uses its own client acquisition path
+        # (``backend.util.clients.get_openai_client(prefer_openrouter=True)``)
+        # backed by the platform-level OR key — independent of
+        # ``ChatConfig`` aux settings — so validating it here would
+        # block valid configs that wire the simulator separately.
+        title = self.title_model
+        if not title:
+            return self
+        if "/" in title and title.split("/", 1)[0] == "anthropic":
+            return self
+        if "/" not in title:
+            return self  # Bare slug like ``claude-haiku-4-5`` — assume Anthropic.
+        raise ValueError(
+            f"Direct-Anthropic main mode (use_openrouter=False) "
+            f"with non-Anthropic title_model={title!r} requires "
+            f"explicit OpenRouter credentials for the aux client. "
+            f"Set CHAT_AUX_API_KEY (or OPEN_ROUTER_API_KEY) so "
+            f"title generation keeps routing through OpenRouter, or "
+            f"override the title model to an anthropic/* slug."
+        )
 
     # Prompt paths for different contexts
     PROMPT_PATHS: dict[str, str] = {
