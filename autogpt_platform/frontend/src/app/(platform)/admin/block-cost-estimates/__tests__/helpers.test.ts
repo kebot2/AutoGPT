@@ -81,7 +81,7 @@ describe("buildEstimatesJson", () => {
 });
 
 describe("downloadJson", () => {
-  test("creates a Blob URL, triggers a click, and revokes the URL", () => {
+  test("creates a Blob URL, triggers a click, and revokes the URL", async () => {
     const createUrl = vi
       .spyOn(URL, "createObjectURL")
       .mockReturnValue("blob:mock");
@@ -92,13 +92,20 @@ describe("downloadJson", () => {
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(() => {});
 
-    downloadJson('{"hello":"world"}\n', "test.json");
+    try {
+      downloadJson('{"hello":"world"}\n', "test.json");
 
-    expect(createUrl).toHaveBeenCalledTimes(1);
-    expect(click).toHaveBeenCalledTimes(1);
-
-    createUrl.mockRestore();
-    revokeUrl.mockRestore();
-    click.mockRestore();
+      expect(createUrl).toHaveBeenCalledTimes(1);
+      expect(click).toHaveBeenCalledTimes(1);
+      // The setTimeout(0) revoke fires on the next macrotask — flush it so the
+      // assertion is deterministic and the test name's promise is honored.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(revokeUrl).toHaveBeenCalledWith("blob:mock");
+    } finally {
+      // Failure-safe restore: spies survive even if the assertions above throw.
+      createUrl.mockRestore();
+      revokeUrl.mockRestore();
+      click.mockRestore();
+    }
   });
 });

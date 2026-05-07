@@ -51,8 +51,11 @@ async def get_block_cost_estimates(
     """Aggregate per-block average credits-per-execution over [start, end].
 
     Capped at ANALYTICS_MAX_DAYS days. Returns only blocks whose current cost
-    type is dynamic (SECOND/ITEMS/COST_USD/TOKENS) — static-cost blocks already
-    charge correctly pre-flight and don't need an estimate override.
+    type is dynamic (SECOND/ITEMS/COST_USD) — static-cost blocks already
+    charge correctly pre-flight and don't need an estimate override. TOKENS
+    is excluded because `compute_token_credits` already supplies a per-model
+    floor at pre-flight; a per-block historical mean would lose that
+    granularity.
     """
     if start is None or end is None:
         raise HTTPException(
