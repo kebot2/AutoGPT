@@ -16,7 +16,12 @@ from backend.blocks import get_block
 from backend.data.block_cost_config import BLOCK_COSTS
 from backend.data.db import query_raw_with_schema
 
-DYNAMIC_COST_TYPES = {"SECOND", "ITEMS", "COST_USD", "TOKENS"}
+# Match the cost types whose pre-flight is genuinely 0 today (see
+# `block_usage_cost` in executor/utils.py). TOKENS is excluded because
+# `compute_token_credits` already provides a per-model floor at pre-flight,
+# which is more accurate than a per-block historical average that mixes
+# Haiku-class and Opus-class executions.
+DYNAMIC_COST_TYPES = {"second", "items", "cost_usd"}
 
 ANALYTICS_MAX_DAYS = 90
 ANALYTICS_MIN_SAMPLES_DEFAULT = 10
@@ -79,8 +84,8 @@ async def compute_block_cost_estimates(
         SUM(-amount) AS exec_cost
       FROM {schema_prefix}"CreditTransaction"
       WHERE type = 'USAGE'
-        AND "createdAt" >= $1
-        AND "createdAt" <= $2
+        AND "createdAt" >= $1::timestamp
+        AND "createdAt" <= $2::timestamp
         AND "isActive" = true
         AND metadata->>'block_id' IS NOT NULL
         AND metadata->>'node_exec_id' IS NOT NULL
