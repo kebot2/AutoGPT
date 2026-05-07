@@ -629,14 +629,22 @@ class ChatConfig(BaseSettings):
     @field_validator("aux_api_key", mode="before")
     @classmethod
     def get_aux_api_key(cls, v):
-        """Auxiliary API key — defaults to OPEN_ROUTER_API_KEY env var.
+        """Auxiliary API key — explicit ``CHAT_AUX_API_KEY`` only.
 
-        Falls through to ``None`` so callers can detect "unset" and
-        substitute the main ``api_key`` (preserves backwards-compat for
-        deployments that haven't split the keys yet).
+        Deliberately does NOT fall back to ``OPEN_ROUTER_API_KEY`` like
+        ``api_key`` does.  An explicit aux key signals "I'm splitting
+        the aux client from main"; an env-pulled OR key would silently
+        force aux to OR even in direct-Anthropic deployments where a
+        leftover ``OPEN_ROUTER_API_KEY`` happens to be in the env —
+        producing OR-key-with-Anthropic-URL 401s on every title call.
+
+        When unset, ``aux_client_credentials`` inherits
+        ``main_client_credentials`` (which itself reads
+        ``OPEN_ROUTER_API_KEY`` for OR mode), so single-key
+        deployments keep working unchanged.
         """
         if not v:
-            v = os.getenv("CHAT_AUX_API_KEY") or os.getenv("OPEN_ROUTER_API_KEY")
+            v = os.getenv("CHAT_AUX_API_KEY")
         return v
 
     @field_validator("aux_base_url", mode="before")

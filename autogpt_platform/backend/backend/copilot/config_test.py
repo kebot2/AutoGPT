@@ -19,6 +19,10 @@ _ENV_VARS_TO_CLEAR = (
     "CHAT_API_KEY",
     "OPEN_ROUTER_API_KEY",
     "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "CHAT_AUX_API_KEY",
+    "CHAT_AUX_BASE_URL",
+    "CHAT_DIRECT_ANTHROPIC_API_KEY",
     "CHAT_BASE_URL",
     "OPENROUTER_BASE_URL",
     "OPENAI_BASE_URL",
@@ -32,6 +36,8 @@ _ENV_VARS_TO_CLEAR = (
     "CHAT_MODEL",
     "CHAT_ADVANCED_MODEL",
     "CHAT_CLAUDE_AGENT_FALLBACK_MODEL",
+    "CHAT_TITLE_MODEL",
+    "CHAT_SIMULATION_MODEL",
     "CHAT_RENDER_REASONING_IN_UI",
     "CHAT_STREAM_REPLAY_COUNT",
 )
@@ -407,6 +413,29 @@ class TestAuxClientCredentials:
             "or-key",
             "https://openrouter.ai/api/v1",
         )
+
+    def test_leftover_or_env_does_not_force_aux_to_or_in_direct_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Migration scenario: deployment was on OR (env still has
+        # ``OPEN_ROUTER_API_KEY``), now flipped to direct-Anthropic
+        # without explicit aux split.  The aux key validator must NOT
+        # auto-pull the leftover OR env (would 401 vs Anthropic URL);
+        # aux must inherit ``main_client_credentials`` (Anthropic).
+        monkeypatch.setenv("OPEN_ROUTER_API_KEY", "leftover-or-key")
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key=None,
+            base_url=None,
+            aux_api_key=None,
+            aux_base_url=None,
+            title_model="anthropic/claude-haiku-4-5",
+        )
+        api_key, base_url = cfg.aux_client_credentials
+        assert api_key == "anthropic-key"
+        assert base_url == "https://api.anthropic.com/v1/"
+        assert cfg.aux_provider_label == "anthropic"
 
     def test_unset_aux_falls_back_to_main_client_creds_in_direct_mode(self):
         # Single-key direct-Anthropic deployment: aux env vars unset
