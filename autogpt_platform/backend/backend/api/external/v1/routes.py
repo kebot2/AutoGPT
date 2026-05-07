@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import urllib.parse
 from collections import defaultdict
@@ -113,11 +114,14 @@ async def execute_graph_block(
         async for name, output_data in obj.execute(data):
             output[name].append(output_data)
         return output
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         # Refund the captured pre-flight charge (only if we actually
-        # charged — free blocks return None). Wrap so a refund failure
-        # never swallows the original exception (logged with cost so
-        # reconciliation can recover it).
+        # charged — free blocks return None). CancelledError is a
+        # BaseException subclass in Py3.8+ so it would otherwise bypass
+        # `except Exception:` and skip the refund on client disconnect /
+        # ASGI timeout. Wrap so a refund failure never swallows the
+        # original exception (logged with cost so reconciliation can
+        # recover it).
         if charge_receipt is not None:
             try:
                 await refund_for_failed_block_execution(
