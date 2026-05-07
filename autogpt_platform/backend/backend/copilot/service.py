@@ -748,6 +748,18 @@ async def _record_title_generation_cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        if cost_usd is None:
+            # Rate-card lookup whiffed.  Mirror the baseline streaming path's
+            # warning so a model slug introduced via env var doesn't silently
+            # drop title-cost tracking — the row will still be recorded
+            # below (tokens > 0 keeps the guard from short-circuiting), but
+            # operators get a signal to extend the rate card.
+            logger.warning(
+                "[title] direct-Anthropic rate card has no entry for "
+                "model=%s — cost field will be NULL on this PlatformCostLog "
+                "row; add the model to anthropic_rate_card.py",
+                model,
+            )
 
     # Nothing meaningful to record — skip the DB roundtrip entirely
     # rather than writing a zero-valued row.  Covers the non-OR / non-
