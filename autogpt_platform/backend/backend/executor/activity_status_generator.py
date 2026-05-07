@@ -312,10 +312,33 @@ async def generate_activity_status_for_execution(
             f"Sending prompt to LLM for graph execution {graph_exec_id}: {json.dumps(messages, indent=2)}"
         )
 
-        # Model values arriving without a provider prefix (e.g. "gpt-4o-mini")
-        # need to be remapped to OpenRouter's namespaced form. Already-prefixed
-        # values (e.g. "openai/gpt-4o-mini", "anthropic/claude-...") pass through.
-        or_model = model_name if "/" in model_name else f"openai/{model_name}"
+        # Under the local OpenAI-compat transport (CHAT_USE_LOCAL=true) the
+        # client is pointed at Ollama / vLLM / LiteLLM, not OpenRouter:
+        #
+        # - The hardcoded ``gpt-4o-mini`` default is meaningless against a
+        #   local server, and the ``openai/`` prefix coercion would mangle
+        #   bare Ollama tags (``qwen3:0.6b`` → ``openai/qwen3:0.6b``) into
+        #   404s. Use ``ChatConfig.title_model`` instead — it auto-derives
+        #   from the operator's chosen ``fast_standard_model`` under
+        #   ``use_local`` and is already shaped for the local backend.
+        # - ``extra_body={"usage": {"include": True}}`` is OpenRouter's
+        #   piggybacked-cost extension; local backends don't implement it
+        #   and may reject the request body.
+        #
+        # Same gating pattern as ``backend/copilot/baseline/service.py`` and
+        # ``backend/executor/simulator.py`` — keep the three in sync.
+        from backend.copilot.sdk.env import config as chat_cfg
+
+        is_local_transport = chat_cfg.transport.name == "local"
+        if is_local_transport:
+            or_model = chat_cfg.title_model
+            extra_body: dict[str, Any] = {}
+        else:
+            # Model values arriving without a provider prefix (e.g. "gpt-4o-mini")
+            # need to be remapped to OpenRouter's namespaced form. Already-prefixed
+            # values (e.g. "openai/gpt-4o-mini", "anthropic/claude-...") pass through.
+            or_model = model_name if "/" in model_name else f"openai/{model_name}"
+            extra_body = _OPENROUTER_INCLUDE_USAGE_COST
 
         # Track the most recent attempt's usage so we can persist cost even
         # when every retry fails — the API calls were billed regardless of
@@ -330,7 +353,7 @@ async def generate_activity_status_for_execution(
                     messages=messages,
                     max_tokens=_MAX_OUTPUT_TOKENS,
                     response_format={"type": "json_object"},
-                    extra_body=_OPENROUTER_INCLUDE_USAGE_COST,
+                    extra_body=extra_body,
                 )
                 last_usage = response.usage
                 if not response.choices:
