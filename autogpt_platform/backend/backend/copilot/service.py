@@ -58,15 +58,46 @@ def resolve_chat_model(tier: CopilotLlmModel | None) -> str:
     return config.thinking_standard_model
 
 
-_client: LangfuseAsyncOpenAI | None = None
+_main_client: LangfuseAsyncOpenAI | None = None
+_aux_client: LangfuseAsyncOpenAI | None = None
 _langfuse = None
 
 
-def _get_openai_client() -> LangfuseAsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = LangfuseAsyncOpenAI(api_key=config.api_key, base_url=config.base_url)
-    return _client
+def _get_main_client() -> LangfuseAsyncOpenAI:
+    """Main OpenAI-compat client used by the baseline path.
+
+    Driven by ``config.main_client_credentials`` so a deployment can flip
+    ``CHAT_USE_OPENROUTER=false`` (+ ``ANTHROPIC_API_KEY``) to route the
+    main path straight to api.anthropic.com without disturbing aux
+    callers (title generation, builder helpers) that still need
+    OpenRouter for non-Anthropic models.
+    """
+    global _main_client
+    if _main_client is None:
+        api_key, base_url = config.main_client_credentials
+        _main_client = LangfuseAsyncOpenAI(api_key=api_key, base_url=base_url)
+    return _main_client
+
+
+def _get_aux_client() -> LangfuseAsyncOpenAI:
+    """Auxiliary OpenAI-compat client.
+
+    Used for non-Anthropic helpers (title generation, builder helpers)
+    that need to keep talking to OpenRouter even when the main client is
+    pointed at Anthropic directly.  Defaults to OpenRouter; falls back
+    to the main client's creds when ``CHAT_AUX_API_KEY`` /
+    ``CHAT_AUX_BASE_URL`` are unset (preserves single-key deployments).
+    """
+    global _aux_client
+    if _aux_client is None:
+        api_key, base_url = config.aux_client_credentials
+        _aux_client = LangfuseAsyncOpenAI(api_key=api_key, base_url=base_url)
+    return _aux_client
+
+
+# Back-compat alias.  Existing callers and tests import this name; new
+# code should pick the explicit ``_get_main_client`` / ``_get_aux_client``.
+_get_openai_client = _get_main_client
 
 
 def _get_langfuse():
@@ -571,7 +602,7 @@ async def _generate_session_title(
             "environment": settings.config.app_env.value,
         }
 
-        response = await _get_openai_client().chat.completions.create(
+        response = await _get_aux_client().chat.completions.create(
             model=config.title_model,
             messages=[
                 {
@@ -663,16 +694,12 @@ async def _record_title_generation_cost(
     if cost_usd is None and prompt_tokens == 0 and completion_tokens == 0:
         return
 
-    # Provider label is derived from the configured ``base_url`` (title
-    # LLM uses the shared copilot OpenAI client whose base URL mirrors
-    # ``ChatConfig.base_url``).  This lets a deployment that points
-    # title generation at a non-OR endpoint still get the correct
-    # ``provider`` on the cost-log row.
-    provider = (
-        "open_router"
-        if (config.base_url and "openrouter.ai" in config.base_url)
-        else "openai"
-    )
+    # Provider label is derived from the configured aux base URL —
+    # title generation runs on the aux client (kept on OpenRouter so the
+    # non-Anthropic title model keeps working when the main client is
+    # pointed at Anthropic directly).  Falls back to "openai" for any
+    # non-OR custom endpoint.
+    provider = "open_router" if config.aux_uses_openrouter else "openai"
 
     # Intentionally pass ``session=None``.  ``persist_and_record_usage``
     # would otherwise append a ``Usage`` entry to the live session

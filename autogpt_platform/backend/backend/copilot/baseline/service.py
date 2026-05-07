@@ -27,6 +27,7 @@ from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolPara
 from openai.types.completion_usage import PromptTokensDetails
 from opentelemetry import trace as otel_trace
 
+from backend.copilot.anthropic_rate_card import compute_anthropic_cost_usd
 from backend.copilot.baseline.reasoning import (
     BaselineReasoningEmitter,
     reasoning_extra_body,
@@ -45,6 +46,7 @@ from backend.copilot.model import (
     maybe_append_user_message,
     upsert_chat_session,
 )
+from backend.copilot.model_normalize import normalize_model_for_transport
 from backend.copilot.model_router import resolve_model
 from backend.copilot.moonshot import is_moonshot_model
 from backend.copilot.pending_message_helpers import (
@@ -76,7 +78,7 @@ from backend.copilot.response_model import (
 )
 from backend.copilot.service import (
     _build_system_prompt,
-    _get_openai_client,
+    _get_main_client,
     _update_title_async,
     config,
     inject_user_context,
@@ -628,7 +630,7 @@ async def _baseline_llm_caller(
 
     round_text = ""
     try:
-        client = _get_openai_client()
+        client = _get_main_client()
         # Cache markers are accepted by Anthropic AND Moonshot (via OR's
         # Anthropic-compat endpoint).  OpenAI/Grok/Gemini 400 on the
         # unknown ``cache_control`` field — tools were precomputed in
@@ -671,12 +673,19 @@ async def _baseline_llm_caller(
             final_messages = messages
             extra_headers = None
         typed_messages = cast(list[ChatCompletionMessageParam], final_messages)
-        extra_body: dict[str, Any] = dict(_OPENROUTER_INCLUDE_USAGE_COST)
-        reasoning_param = reasoning_extra_body(
-            state.model, config.claude_agent_max_thinking_tokens
-        )
-        if reasoning_param:
-            extra_body.update(reasoning_param)
+        # ``usage.include`` and OpenRouter's ``reasoning`` extension are
+        # OR-only — Anthropic's OpenAI-compat endpoint rejects unknown
+        # extras with a 400, so we omit them in direct mode.  Cost in
+        # direct mode is computed from the rate card (see chunk loop).
+        if config.openrouter_active:
+            extra_body: dict[str, Any] = dict(_OPENROUTER_INCLUDE_USAGE_COST)
+            reasoning_param = reasoning_extra_body(
+                state.model, config.claude_agent_max_thinking_tokens
+            )
+            if reasoning_param:
+                extra_body.update(reasoning_param)
+        else:
+            extra_body = {}
         create_kwargs: dict[str, Any] = {
             "model": state.model,
             "messages": typed_messages,
@@ -707,16 +716,32 @@ async def _baseline_llm_caller(
                             _extract_cache_creation_tokens(ptd)
                         )
                     cost = _extract_usage_cost(chunk.usage)
+                    if cost is None and not config.openrouter_active:
+                        # Direct-Anthropic / subscription mode — the
+                        # OpenAI-compat endpoint at api.anthropic.com
+                        # does not return ``usage.cost`` (OpenRouter
+                        # extension), so compute from token counts
+                        # against the static Anthropic rate card.
+                        ptd = chunk.usage.prompt_tokens_details
+                        cost = compute_anthropic_cost_usd(
+                            model=state.model,
+                            prompt_tokens=chunk.usage.prompt_tokens or 0,
+                            completion_tokens=chunk.usage.completion_tokens or 0,
+                            cache_read_tokens=(ptd.cached_tokens or 0) if ptd else 0,
+                            cache_creation_tokens=(
+                                _extract_cache_creation_tokens(ptd) if ptd else 0
+                            ),
+                        )
                     if cost is not None:
                         state.cost_usd = (state.cost_usd or 0.0) + cost
                     elif (
                         "cost" not in (chunk.usage.model_extra or {})
                         and not state.cost_missing_logged
                     ):
-                        # Field absent (non-OpenRouter route, or OpenRouter
-                        # misconfigured) — warn once per stream so error
-                        # monitoring picks up persistent misses without
-                        # flooding. Invalid values already logged inside
+                        # Field absent and not a known direct-mode model
+                        # — warn once per stream so error monitoring
+                        # picks up persistent misses without flooding.
+                        # Invalid values already logged inside
                         # _extract_usage_cost, so no duplicate warning here.
                         logger.warning(
                             "[Baseline] usage chunk missing cost (model=%s, "
@@ -1097,7 +1122,7 @@ async def _compress_session_messages(
         result = await compress_context(
             messages=messages_dict,
             model=model,
-            client=_get_openai_client(),
+            client=_get_main_client(),
         )
     except Exception as e:
         logger.warning("[Baseline] Context compression with LLM failed: %s", e)
@@ -1769,6 +1794,14 @@ async def stream_chat_completion_baseline(
         _trace_ctx.__enter__()
     except Exception:
         logger.warning("[Baseline] Langfuse trace context setup failed")
+
+    # Normalize the slug for the active transport: OpenRouter keeps the
+    # ``vendor/model`` prefix; direct-Anthropic / subscription mode strips
+    # ``anthropic/`` and converts dots to hyphens (and refuses non-Anthropic
+    # vendors with a clear error far from the request).  Pass the
+    # baseline-side ``config`` so monkeypatch fixtures that target this
+    # module's ``config`` symbol drive the decision.
+    active_model = normalize_model_for_transport(active_model, config)
 
     _stream_error = False  # Track whether an error occurred during streaming
     state = _BaselineStreamState(model=active_model)

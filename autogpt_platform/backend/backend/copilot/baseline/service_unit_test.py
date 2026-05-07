@@ -681,7 +681,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -706,7 +706,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -734,7 +734,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -757,7 +757,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -783,7 +783,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -806,7 +806,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -830,7 +830,7 @@ class TestBaselineCostExtraction:
 
         with (
             patch(
-                "backend.copilot.baseline.service._get_openai_client",
+                "backend.copilot.baseline.service._get_main_client",
                 return_value=mock_client,
             ),
             caplog.at_level("ERROR", logger="backend.copilot.baseline.service"),
@@ -865,7 +865,7 @@ class TestBaselineCostExtraction:
 
         with (
             patch(
-                "backend.copilot.baseline.service._get_openai_client",
+                "backend.copilot.baseline.service._get_main_client",
                 return_value=mock_client,
             ),
             pytest.raises(RuntimeError, match="stream error"),
@@ -891,7 +891,7 @@ class TestBaselineCostExtraction:
 
         with (
             patch(
-                "backend.copilot.baseline.service._get_openai_client",
+                "backend.copilot.baseline.service._get_main_client",
                 return_value=mock_client,
             ),
             pytest.raises(RuntimeError, match="connection refused"),
@@ -921,7 +921,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -951,7 +951,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -980,7 +980,7 @@ class TestBaselineCostExtraction:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1023,7 +1023,7 @@ class TestBaselineCostExtraction:
         mock_client.chat.completions.create = create_mock
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1559,7 +1559,7 @@ class TestApplyPromptCacheMarkers:
             {"role": "user", "content": "hi"},
         ]
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(messages=messages, tools=[], state=state)
@@ -1599,7 +1599,7 @@ class TestApplyPromptCacheMarkers:
             {"role": "user", "content": "hi"},
         ]
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(messages=messages, tools=[], state=state)
@@ -1685,7 +1685,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1755,7 +1755,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             response = await _baseline_llm_caller(
@@ -1799,7 +1799,7 @@ class TestBaselineReasoningStreaming:
         mock_client.chat.completions.create = AsyncMock(return_value=stream)
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             with pytest.raises(RuntimeError):
@@ -1831,7 +1831,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1855,7 +1855,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1884,7 +1884,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1949,7 +1949,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(
@@ -1980,7 +1980,7 @@ class TestBaselineReasoningStreaming:
 
         with (
             patch(
-                "backend.copilot.baseline.service._get_openai_client",
+                "backend.copilot.baseline.service._get_main_client",
                 return_value=mock_client,
             ),
             patch(
@@ -2017,7 +2017,7 @@ class TestBaselineReasoningStreaming:
         )
 
         with patch(
-            "backend.copilot.baseline.service._get_openai_client",
+            "backend.copilot.baseline.service._get_main_client",
             return_value=mock_client,
         ):
             await _baseline_llm_caller(

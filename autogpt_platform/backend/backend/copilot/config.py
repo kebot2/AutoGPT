@@ -8,6 +8,11 @@ from pydantic_settings import BaseSettings
 
 from backend.util.clients import OPENROUTER_BASE_URL
 
+# Anthropic's OpenAI-compatible endpoint. Used by the baseline path when
+# ``use_openrouter=False`` so the OpenAI SDK stays in place but talks
+# directly to api.anthropic.com instead of going through OpenRouter.
+ANTHROPIC_OPENAI_COMPAT_BASE_URL = "https://api.anthropic.com/v1/"
+
 # Per-request routing mode for a single chat turn.
 # - 'fast': route to the baseline OpenAI-compatible path with the cheaper model.
 # - 'extended_thinking': route to the Claude Agent SDK path with the default
@@ -90,6 +95,33 @@ class ChatConfig(BaseSettings):
     base_url: str | None = Field(
         default=OPENROUTER_BASE_URL,
         description="Base URL for API (e.g., for OpenRouter)",
+    )
+
+    # Auxiliary client credentials — used for non-Anthropic models (title
+    # generation, simulator, builder helpers).  Kept independent of the
+    # main client so flipping ``use_openrouter=False`` (main → direct
+    # Anthropic) does not break aux calls that need OpenAI / Google / etc.
+    # via OpenRouter.  Default to OpenRouter; fall back to the main
+    # ``api_key`` / ``base_url`` when unset (preserves current behaviour
+    # for deployments that haven't split the keys yet).
+    aux_api_key: str | None = Field(
+        default=None,
+        description="API key for auxiliary models (title, builder helpers). "
+        "Kept separate from ``api_key`` so direct-Anthropic main mode does not "
+        "break non-Anthropic aux models. Falls back to OPEN_ROUTER_API_KEY / "
+        "``api_key`` when unset.",
+    )
+    aux_base_url: str | None = Field(
+        default=None,
+        description="Base URL for auxiliary models. Falls back to ``base_url`` "
+        "when unset (i.e. OpenRouter).",
+    )
+
+    direct_anthropic_api_key: str | None = Field(
+        default=None,
+        description="Anthropic API key for direct mode (use_openrouter=False). "
+        "Used by the baseline OpenAI-compat client when pointed at "
+        "api.anthropic.com. Falls back to ANTHROPIC_API_KEY env var.",
     )
 
     # Session TTL Configuration - 12 hours
@@ -443,6 +475,52 @@ class ChatConfig(BaseSettings):
         return "direct_anthropic"
 
     @property
+    def main_client_credentials(self) -> tuple[str | None, str | None]:
+        """``(api_key, base_url)`` for the main OpenAI-compatible client.
+
+        - **OpenRouter mode** (default): returns ``(api_key, base_url)`` —
+          the existing OpenRouter creds.
+        - **Direct Anthropic mode** (``use_openrouter=False``): returns
+          ``(direct_anthropic_api_key, ANTHROPIC_OPENAI_COMPAT_BASE_URL)``
+          so the baseline OpenAI-compat client talks straight to
+          api.anthropic.com.
+
+        Used by the baseline path; the SDK path drives its own env vars
+        through ``build_sdk_env``.
+        """
+        if self.use_openrouter:
+            return self.api_key, self.base_url
+        return self.direct_anthropic_api_key, ANTHROPIC_OPENAI_COMPAT_BASE_URL
+
+    @property
+    def aux_client_credentials(self) -> tuple[str | None, str | None]:
+        """``(api_key, base_url)`` for the auxiliary client.
+
+        Auxiliary calls (title generation, builder helpers) use this
+        client.  Defaults to OpenRouter; can be split from the main
+        client via ``CHAT_AUX_API_KEY`` / ``CHAT_AUX_BASE_URL`` so
+        flipping main to direct-Anthropic does not break non-Anthropic
+        aux models like ``openai/gpt-4o-mini``.
+
+        Falls back to the main ``api_key`` / ``base_url`` when both aux
+        env vars are unset — i.e. existing deployments that share one
+        OpenRouter key for everything keep working unchanged.
+        """
+        api_key = self.aux_api_key or self.api_key
+        base_url = self.aux_base_url or self.base_url
+        return api_key, base_url
+
+    @property
+    def aux_uses_openrouter(self) -> bool:
+        """True when the aux client is pointed at OpenRouter.
+
+        Used to label the cost-log ``provider`` for aux calls (title
+        generation) without re-deriving the URL check at every call site.
+        """
+        _, base_url = self.aux_client_credentials
+        return bool(base_url and "openrouter.ai" in base_url)
+
+    @property
     def e2b_active(self) -> bool:
         """True when E2B is enabled and the API key is present.
 
@@ -504,6 +582,42 @@ class ChatConfig(BaseSettings):
                 v = os.getenv("OPENAI_BASE_URL")
             if not v:
                 v = OPENROUTER_BASE_URL
+        return v
+
+    @field_validator("aux_api_key", mode="before")
+    @classmethod
+    def get_aux_api_key(cls, v):
+        """Auxiliary API key — defaults to OPEN_ROUTER_API_KEY env var.
+
+        Falls through to ``None`` so callers can detect "unset" and
+        substitute the main ``api_key`` (preserves backwards-compat for
+        deployments that haven't split the keys yet).
+        """
+        if not v:
+            v = os.getenv("CHAT_AUX_API_KEY") or os.getenv("OPEN_ROUTER_API_KEY")
+        return v
+
+    @field_validator("aux_base_url", mode="before")
+    @classmethod
+    def get_aux_base_url(cls, v):
+        """Auxiliary base URL — defaults to OpenRouter."""
+        if not v:
+            v = os.getenv("CHAT_AUX_BASE_URL")
+        return v
+
+    @field_validator("direct_anthropic_api_key", mode="before")
+    @classmethod
+    def get_direct_anthropic_api_key(cls, v):
+        """Anthropic API key for direct mode.
+
+        Reads ``CHAT_DIRECT_ANTHROPIC_API_KEY`` first (Pydantic prefix),
+        then plain ``ANTHROPIC_API_KEY`` so the same env var the SDK CLI
+        already consumes also drives the baseline OpenAI-compat client.
+        """
+        if not v:
+            v = os.getenv("CHAT_DIRECT_ANTHROPIC_API_KEY") or os.getenv(
+                "ANTHROPIC_API_KEY"
+            )
         return v
 
     @field_validator("claude_agent_cli_path", mode="before")

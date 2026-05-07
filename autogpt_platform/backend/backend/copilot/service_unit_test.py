@@ -130,7 +130,7 @@ class TestRecordTitleGenerationCost:
             patch(
                 "backend.copilot.service.config",
                 MagicMock(
-                    base_url="https://openrouter.ai/api/v1",
+                    aux_uses_openrouter=True,
                     title_model="anthropic/claude-haiku",
                 ),
             ),
@@ -160,7 +160,7 @@ class TestRecordTitleGenerationCost:
             patch(
                 "backend.copilot.service.config",
                 MagicMock(
-                    base_url="https://api.openai.com/v1",
+                    aux_uses_openrouter=False,
                     title_model="gpt-4o-mini",
                 ),
             ),
@@ -182,7 +182,7 @@ class TestRecordTitleGenerationCost:
             ),
             patch(
                 "backend.copilot.service.config",
-                MagicMock(base_url=None, title_model="gpt-4o-mini"),
+                MagicMock(aux_uses_openrouter=False, title_model="gpt-4o-mini"),
             ),
         ):
             await _record_title_generation_cost(
@@ -446,7 +446,7 @@ class TestGenerateSessionTitle:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=resp)
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             title, response = await _generate_session_title(
@@ -463,7 +463,7 @@ class TestGenerateSessionTitle:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=resp)
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             title, _ = await _generate_session_title("x", user_id=None)
@@ -480,7 +480,7 @@ class TestGenerateSessionTitle:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=resp)
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             title, response = await _generate_session_title("x")
@@ -496,7 +496,7 @@ class TestGenerateSessionTitle:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=fake_response)
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             title, response = await _generate_session_title("x")
@@ -513,7 +513,7 @@ class TestGenerateSessionTitle:
             side_effect=RuntimeError("connection reset")
         )
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             title, response = await _generate_session_title("x")
@@ -528,7 +528,7 @@ class TestGenerateSessionTitle:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(return_value=resp)
         with patch(
-            "backend.copilot.service._get_openai_client",
+            "backend.copilot.service._get_aux_client",
             return_value=client,
         ):
             await _generate_session_title(

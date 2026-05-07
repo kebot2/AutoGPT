@@ -325,3 +325,78 @@ class TestStreamReplayCount:
         """count=0 would make XREAD replay nothing — rejected via ge=1."""
         with pytest.raises(Exception):
             ChatConfig(stream_replay_count=0)
+
+
+class TestMainClientCredentials:
+    """``main_client_credentials`` picks the right (api_key, base_url) per transport."""
+
+    def test_openrouter_mode_returns_main_creds(self):
+        cfg = ChatConfig(
+            use_openrouter=True,
+            api_key="or-key",
+            base_url="https://openrouter.ai/api/v1",
+        )
+        assert cfg.main_client_credentials == (
+            "or-key",
+            "https://openrouter.ai/api/v1",
+        )
+
+    def test_direct_mode_returns_anthropic_creds(self):
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key="or-key-leftover",
+        )
+        api_key, base_url = cfg.main_client_credentials
+        assert api_key == "anthropic-key"
+        assert base_url == "https://api.anthropic.com/v1/"
+
+
+class TestAuxClientCredentials:
+    """``aux_client_credentials`` keeps aux calls on OpenRouter even in direct mode."""
+
+    def test_default_falls_back_to_main_creds(self):
+        cfg = ChatConfig(
+            use_openrouter=True,
+            api_key="or-key",
+            base_url="https://openrouter.ai/api/v1",
+            aux_api_key=None,
+            aux_base_url=None,
+        )
+        # Single-key deployment: aux mirrors main.
+        assert cfg.aux_client_credentials == (
+            "or-key",
+            "https://openrouter.ai/api/v1",
+        )
+
+    def test_explicit_aux_overrides_main(self):
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            aux_api_key="or-aux-key",
+            aux_base_url="https://openrouter.ai/api/v1",
+        )
+        # Direct main + OR aux: aux client stays on OpenRouter.
+        assert cfg.aux_client_credentials == (
+            "or-aux-key",
+            "https://openrouter.ai/api/v1",
+        )
+
+    def test_aux_uses_openrouter_true_for_or_url(self):
+        cfg = ChatConfig(
+            use_openrouter=True,
+            api_key="or-key",
+            base_url="https://openrouter.ai/api/v1",
+        )
+        assert cfg.aux_uses_openrouter is True
+
+    def test_aux_uses_openrouter_false_for_other_url(self):
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key="anthropic-key",
+            base_url="https://api.anthropic.com/v1/",
+            aux_base_url="https://api.anthropic.com/v1/",
+            aux_api_key="anthropic-key",
+        )
+        assert cfg.aux_uses_openrouter is False
