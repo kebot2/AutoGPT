@@ -127,7 +127,13 @@ async def execute_graph_block(
                 await refund_for_failed_block_execution(
                     user_id=auth.user_id, receipt=charge_receipt
                 )
-            except Exception as refund_err:
+            except (Exception, asyncio.CancelledError) as refund_err:
+                # CancelledError on the refund itself (ASGI timeout while
+                # awaiting refund) would bypass `except Exception` and
+                # propagate, demoting the original execution exception
+                # to ``__context__`` and skipping the leak log. Catch
+                # both here, log, and let the outer ``raise`` re-raise
+                # the original execution exception.
                 logger.warning(
                     "BILLING_LEAK[REFUND_FAILED]: direct external block execution "
                     "(user_id=%s, block_id=%s, cost=%s): %s",
