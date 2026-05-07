@@ -645,11 +645,18 @@ class UserCreditBase(ABC):
 
             # Clear insufficient funds notification flags when credits are added
             # so user can receive alerts again if they run out in the future.
+            # Positive REFUND covers block-execute refunds that restore balance;
+            # the negative-amount REFUND (Stripe clawback) is excluded by the
+            # `amount > 0` guard above.
             if (
                 amount > 0
                 and is_active
                 and transaction_type
-                in [CreditTransactionType.GRANT, CreditTransactionType.TOP_UP]
+                in [
+                    CreditTransactionType.GRANT,
+                    CreditTransactionType.TOP_UP,
+                    CreditTransactionType.REFUND,
+                ]
             ):
                 # Lazy import to avoid circular dependency with executor.manager
                 from backend.executor.billing import (

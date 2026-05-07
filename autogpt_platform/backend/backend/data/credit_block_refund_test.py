@@ -12,6 +12,7 @@ are exercised end-to-end.
 """
 
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from prisma.enums import CreditTransactionType
@@ -148,3 +149,29 @@ async def test_refund_credits_falls_back_to_plain_refund_when_no_reason(
     assert refund_row is not None
     refund_metadata = _refund_metadata(refund_row)
     assert refund_metadata["reason"] == "Refund"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_refund_credits_clears_insufficient_funds_notification(
+    setup_test_user,
+):
+    """A positive REFUND restores balance, so it must clear the
+    'insufficient funds' notification flag the same way GRANT / TOP_UP
+    do — otherwise a user whose balance is restored by a refund and then
+    depletes again will silently miss the next low-balance alert."""
+    user_id = setup_test_user
+    credit_system = UserCredit()
+
+    metadata = UsageTransactionMetadata(block_id="block-id", block="Block")
+
+    with patch(
+        "backend.executor.billing.clear_insufficient_funds_notifications",
+        new_callable=AsyncMock,
+    ) as mock_clear:
+        await credit_system.refund_credits(
+            user_id=user_id,
+            cost=10,
+            metadata=metadata,
+        )
+
+    mock_clear.assert_awaited_once_with(user_id)
