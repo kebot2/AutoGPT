@@ -49,6 +49,7 @@ from backend.util.clients import (
 from backend.util.exceptions import (
     GraphNotFoundError,
     GraphValidationError,
+    InsufficientTierError,
     NotFoundError,
 )
 from backend.util.logging import TruncatedLogger, is_structured_logging_enabled
@@ -236,7 +237,29 @@ async def charge_for_direct_block_execution(
     code path — the post-flight reconciliation only runs inside
     ``executor/manager.py``, which the direct block-execute API
     endpoints bypass entirely.
+
+    Raises ``InsufficientTierError`` for ``NO_TIER`` users — the $3
+    onboarding grant is intended for in-builder exploration, not
+    programmatic block-execute. Tier check runs BEFORE
+    ``block_usage_cost`` / ``spend_credits`` so we never charge a
+    NO_TIER user just to refund them.
     """
+    # Lazy import: ``backend.copilot.rate_limit`` imports execution
+    # helpers at module scope, so a top-level import here would form a
+    # circular dependency. Mirrors the pattern in
+    # ``backend.data.credit:set_user_subscription_tier``.
+    from prisma.enums import SubscriptionTier
+
+    from backend.copilot.rate_limit import get_user_tier
+
+    tier = await get_user_tier(user_id)
+    if tier == SubscriptionTier.NO_TIER:
+        raise InsufficientTierError(
+            user_id=user_id,
+            current_tier=tier.value,
+            required_tier=SubscriptionTier.BASIC.value,
+        )
+
     cost, cost_filter = block_usage_cost(block, input_data)
     if cost <= 0:
         return None

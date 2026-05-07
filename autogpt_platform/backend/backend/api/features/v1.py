@@ -123,6 +123,7 @@ from backend.util.cloud_storage import get_cloud_storage_handler
 from backend.util.exceptions import (
     GraphValidationError,
     InsufficientBalanceError,
+    InsufficientTierError,
     NotFoundError,
 )
 from backend.util.feature_flag import Flag, is_feature_enabled
@@ -486,6 +487,11 @@ async def execute_graph_block(
         )
     except InsufficientBalanceError as e:
         raise HTTPException(status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)) from e
+    except InsufficientTierError as e:
+        # 403 (not 402): user *has* credits (e.g. $3 onboarding grant);
+        # they're on the wrong tier. The upgrade message is what we
+        # actually want surfaced.
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
     start_time = time.time()
     try:

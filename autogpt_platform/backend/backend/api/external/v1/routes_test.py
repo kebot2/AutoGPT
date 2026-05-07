@@ -33,6 +33,19 @@ def setup_auth(test_user_id):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def default_paid_tier(monkeypatch: pytest.MonkeyPatch):
+    """Default `get_user_tier` to BASIC so block-execute tests aren't
+    blocked by the NO_TIER gate. Tests that exercise the gate override
+    this with their own ``get_user_tier`` patch."""
+    from prisma.enums import SubscriptionTier
+
+    monkeypatch.setattr(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.BASIC),
+    )
+
+
 def _stub_block(
     *,
     block_id: str = "00000000-0000-0000-0000-000000000001",
@@ -257,3 +270,60 @@ def test_paid_block_refund_failure_does_not_swallow_original_error(
 
     spend_mock.assert_awaited_once()
     refund_mock.assert_awaited_once()
+
+
+def test_execute_graph_block_rejects_no_tier_user_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """NO_TIER users (still on the $3 onboarding grant) must be blocked
+    from the direct external block-execute API with HTTP 403 — even
+    when the block has a positive cost, no charge or execute call is
+    made."""
+    from prisma.enums import SubscriptionTier
+
+    block = _stub_block(name="PaidBlock")
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: block)
+    monkeypatch.setattr(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.NO_TIER),
+    )
+    cost_mock = MagicMock(return_value=(5, {}))
+    monkeypatch.setattr("backend.executor.utils.block_usage_cost", cost_mock)
+    spend_mock = AsyncMock()
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=MagicMock(spend_credits=spend_mock)),
+    )
+
+    response = client.post(f"/blocks/{block.id}/execute", json={})
+
+    assert response.status_code == 403, f"got {response.status_code}: {response.text}"
+    assert "upgrade" in response.json()["detail"].lower()
+    cost_mock.assert_not_called()
+    spend_mock.assert_not_awaited()
+
+
+def test_execute_graph_block_allows_basic_tier_user(monkeypatch: pytest.MonkeyPatch):
+    """BASIC tier users (and above) pass the tier gate and proceed to
+    the normal charge + execute path on the external API."""
+    from prisma.enums import SubscriptionTier
+
+    block = _stub_block(name="PaidBlock")
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: block)
+    monkeypatch.setattr(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.BASIC),
+    )
+    monkeypatch.setattr(
+        "backend.executor.utils.block_usage_cost", lambda *_a, **_k: (5, {})
+    )
+    spend_mock = AsyncMock(return_value=95)
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=MagicMock(spend_credits=spend_mock)),
+    )
+
+    response = client.post(f"/blocks/{block.id}/execute", json={})
+
+    assert response.status_code == 200, f"got {response.status_code}: {response.text}"
+    spend_mock.assert_awaited_once()

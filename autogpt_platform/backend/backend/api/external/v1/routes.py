@@ -25,7 +25,7 @@ from backend.executor.utils import (
     refund_for_failed_block_execution,
 )
 from backend.integrations.webhooks.graph_lifecycle_hooks import on_graph_activate
-from backend.util.exceptions import InsufficientBalanceError
+from backend.util.exceptions import InsufficientBalanceError, InsufficientTierError
 from backend.util.settings import Settings
 
 from .integrations import integrations_router
@@ -108,6 +108,11 @@ async def execute_graph_block(
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(e)
         ) from e
+    except InsufficientTierError as e:
+        # 403 (not 402): user *has* credits (e.g. $3 onboarding grant);
+        # they're on the wrong tier. The upgrade message is what we
+        # actually want surfaced.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
 
     try:
         output = defaultdict(list)

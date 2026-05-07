@@ -36,6 +36,19 @@ def setup_app_auth(mock_jwt_user, setup_test_user):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def default_paid_tier(mocker: pytest_mock.MockFixture):
+    """Default `get_user_tier` to BASIC so block-execute tests aren't
+    blocked by the NO_TIER gate. Tests that exercise the gate override
+    this with their own ``get_user_tier`` patch."""
+    from prisma.enums import SubscriptionTier
+
+    mocker.patch(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.BASIC),
+    )
+
+
 # Auth endpoints tests
 def test_get_or_create_user_route(
     mocker: pytest_mock.MockFixture,
@@ -290,6 +303,104 @@ def test_execute_graph_block_returns_402_on_insufficient_balance(
 
     assert response.status_code == 402
     mock_block.execute.assert_not_called()
+
+
+def test_execute_graph_block_rejects_no_tier_user_with_403(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """NO_TIER users (still on the $3 onboarding grant) must be blocked
+    from the direct block-execute API with HTTP 403 — even when the
+    block has a positive cost, no charge or execute call is made."""
+    from prisma.enums import SubscriptionTier
+
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "paid-block"
+    mock_block.name = "PaidBlock"
+    mock_block.execute = AsyncMock()
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.NO_TIER),
+    )
+    cost_mock = mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(42, {}),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    response = client.post(
+        "/blocks/paid-block/execute", json={"input_name": "x", "input_value": "y"}
+    )
+
+    assert response.status_code == 403
+    assert "upgrade" in response.json()["detail"].lower()
+    cost_mock.assert_not_called()
+    mock_credit_model.spend_credits.assert_not_awaited()
+    mock_block.execute.assert_not_called()
+
+
+def test_execute_graph_block_allows_basic_tier_user(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """BASIC tier users (and above) pass the tier gate and proceed to
+    the normal charge + execute path."""
+    from prisma.enums import SubscriptionTier
+
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "paid-block"
+    mock_block.name = "PaidBlock"
+
+    async def mock_execute(*args, **kwargs):
+        yield "output", {"data": "ok"}
+
+    mock_block.execute = mock_execute
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.copilot.rate_limit.get_user_tier",
+        AsyncMock(return_value=SubscriptionTier.BASIC),
+    )
+    mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(42, {}),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    response = client.post(
+        "/blocks/paid-block/execute", json={"input_name": "x", "input_value": "y"}
+    )
+
+    assert response.status_code == 200
+    mock_credit_model.spend_credits.assert_awaited_once()
 
 
 def test_execute_graph_block_not_found(

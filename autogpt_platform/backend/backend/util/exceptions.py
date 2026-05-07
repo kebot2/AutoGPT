@@ -92,6 +92,40 @@ class InsufficientBalanceError(ValueError):
         return self.message
 
 
+class InsufficientTierError(ValueError):
+    """Raised when an endpoint requires a paid subscription tier.
+
+    Distinct from ``InsufficientBalanceError``: the user may have credits
+    (e.g. the $3 onboarding grant) but is on ``NO_TIER``, which is gated
+    out of programmatic surfaces like the direct block-execute API.
+    """
+
+    user_id: str
+    current_tier: str
+    required_tier: str
+    message: str
+
+    def __init__(
+        self,
+        user_id: str,
+        current_tier: str,
+        required_tier: str,
+        message: str = (
+            "This endpoint requires a paid subscription. "
+            "Upgrade to BASIC or higher to use the direct block-execute API."
+        ),
+    ):
+        super().__init__(message)
+        self.args = (message, user_id, current_tier, required_tier)
+        self.message = message
+        self.user_id = user_id
+        self.current_tier = current_tier
+        self.required_tier = required_tier
+
+    def __str__(self):
+        return self.message
+
+
 class ModerationError(ValueError):
     """Content moderation failure during execution"""
 
