@@ -505,10 +505,25 @@ class ChatConfig(BaseSettings):
         flipping main to direct-Anthropic does not break non-Anthropic
         aux models like ``openai/gpt-4o-mini``.
 
-        Falls back to the main ``api_key`` / ``base_url`` when both aux
-        env vars are unset — i.e. existing deployments that share one
-        OpenRouter key for everything keep working unchanged.
+        Resolution order:
+
+        1. **Both aux env vars unset** — fall back to
+           ``main_client_credentials``.  In a single-key direct-Anthropic
+           deployment this routes aux through Anthropic (the title model
+           must be Anthropic too — boot validator catches mismatches);
+           in a single-key OpenRouter deployment it routes through OR
+           with the existing OR key.
+        2. **At least one aux env var set** — use the resolved aux
+           values, falling back to the raw ``api_key`` / ``base_url``
+           for whichever wasn't set.  This is the explicit-split flow.
+
+        Step 1 matters for the direct-Anthropic case where the raw
+        ``api_key`` is None and ``base_url`` defaults to OpenRouter:
+        without this, aux would silently get
+        ``(None, https://openrouter.ai/api/v1)`` and 401 every call.
         """
+        if self.aux_api_key is None and self.aux_base_url is None:
+            return self.main_client_credentials
         api_key = self.aux_api_key or self.api_key
         base_url = self.aux_base_url or self.base_url
         return api_key, base_url

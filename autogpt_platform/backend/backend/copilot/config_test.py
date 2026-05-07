@@ -380,6 +380,28 @@ class TestAuxClientCredentials:
             "https://openrouter.ai/api/v1",
         )
 
+    def test_unset_aux_falls_back_to_main_client_creds_in_direct_mode(self):
+        # Single-key direct-Anthropic deployment: aux env vars unset
+        # → aux must inherit ``main_client_credentials`` (Anthropic),
+        # NOT the raw ``api_key`` / ``base_url`` which default to OR
+        # with no key.  Otherwise aux silently gets
+        # ``(None, https://openrouter.ai/api/v1)`` and 401s on every
+        # title call.
+        cfg = _make_direct_safe_config(
+            use_openrouter=False,
+            direct_anthropic_api_key="anthropic-key",
+            api_key=None,
+            base_url=None,
+            aux_api_key=None,
+            aux_base_url=None,
+            title_model="anthropic/claude-haiku-4-5",
+        )
+        api_key, base_url = cfg.aux_client_credentials
+        assert api_key == "anthropic-key"
+        assert base_url == "https://api.anthropic.com/v1/"
+        assert cfg.aux_uses_openrouter is False
+        assert cfg.aux_provider_label == "anthropic"
+
     def test_explicit_aux_overrides_main(self):
         cfg = _make_direct_safe_config(
             use_openrouter=False,
