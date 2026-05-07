@@ -20,6 +20,7 @@ from backend.data.auth.base import APIAuthorizationInfo
 from backend.data.block import BlockInput, CompletedBlockOutput
 from backend.executor.utils import (
     add_graph_execution,
+    block_usage_cost,
     charge_for_direct_block_execution,
     refund_for_failed_block_execution,
 )
@@ -117,7 +118,8 @@ async def execute_graph_block(
     except Exception:
         # Refund the pre-flight charge so a failed execute() doesn't bill
         # the user for output they never received. Wrap so a refund failure
-        # never swallows the original exception (the leak is logged instead).
+        # never swallows the original exception (the leak is logged with
+        # the stuck cost so reconciliation can recover it).
         try:
             await refund_for_failed_block_execution(
                 user_id=auth.user_id,
@@ -126,12 +128,23 @@ async def execute_graph_block(
                 source="external",
             )
         except Exception as refund_err:
+            stuck_cost, _ = block_usage_cost(obj, input_data)
             logger.warning(
-                "Refund failed for direct external block execution "
-                "(user_id=%s, block_id=%s): %s",
+                "BILLING_LEAK[REFUND_FAILED]: direct external block execution "
+                "(user_id=%s, block_id=%s, cost=%s): %s",
                 auth.user_id,
                 block_id,
+                stuck_cost,
                 refund_err,
+                extra={
+                    "json_fields": {
+                        "billing_leak": True,
+                        "leak_type": "REFUND_FAILED",
+                        "user_id": auth.user_id,
+                        "block_id": block_id,
+                        "cost": str(stuck_cost),
+                    }
+                },
             )
         raise
 

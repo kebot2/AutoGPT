@@ -215,10 +215,10 @@ async def charge_for_direct_block_execution(
     ``executor/manager.py``, which the direct block-execute API
     endpoints bypass entirely.
     """
-    metadata = _direct_block_execution_metadata(block, input_data, source)
-    if metadata is None:
+    charge = _direct_block_execution_charge(block, input_data, source)
+    if charge is None:
         return
-    cost, _ = block_usage_cost(block, input_data)
+    cost, metadata = charge
     credit_model = await get_user_credit_model(user_id)
     await credit_model.spend_credits(
         user_id=user_id,
@@ -251,10 +251,10 @@ async def refund_for_failed_block_execution(
     means the user got nothing usable. TODO: revisit if direct-API
     blocks ever bill on stream-progress.
     """
-    metadata = _direct_block_execution_metadata(block, input_data, source)
-    if metadata is None:
+    charge = _direct_block_execution_charge(block, input_data, source)
+    if charge is None:
         return
-    cost, _ = block_usage_cost(block, input_data)
+    cost, metadata = charge
     credit_model = await get_user_credit_model(user_id)
     await credit_model.refund_credits(
         user_id=user_id,
@@ -263,16 +263,17 @@ async def refund_for_failed_block_execution(
     )
 
 
-def _direct_block_execution_metadata(
+def _direct_block_execution_charge(
     block: Block,
     input_data: BlockInput,
     source: Literal["internal", "external"],
-) -> UsageTransactionMetadata | None:
-    """Return paired charge/refund metadata, or None for free blocks."""
+) -> tuple[int, UsageTransactionMetadata] | None:
+    """Return ``(cost, metadata)`` for paired charge/refund, or None for free
+    blocks. Single ``block_usage_cost`` call shared by both helpers."""
     cost, cost_filter = block_usage_cost(block, input_data)
     if cost <= 0:
         return None
-    return UsageTransactionMetadata(
+    return cost, UsageTransactionMetadata(
         block_id=block.id,
         block=block.name,
         input=cost_filter,
