@@ -217,3 +217,52 @@ def test_execute_graph_block_allows_basic_tier_user(monkeypatch: pytest.MonkeyPa
 
     assert response.status_code == 200, f"got {response.status_code}: {response.text}"
     spend_mock.assert_awaited_once()
+
+
+def test_paid_block_logs_billing_leak_when_execute_raises(
+    monkeypatch: pytest.MonkeyPatch, test_user_id: str
+):
+    """If obj.execute() raises after a successful pre-flight charge, the
+    BILLING_LEAK observability log must fire with the originating user,
+    block, and cost — and the original exception must still bubble up
+    (no refund, matching graph-executor + copilot-tool-helper convention)."""
+    raising_block = MagicMock()
+    raising_block.id = "00000000-0000-0000-0000-000000000099"
+    raising_block.name = "RaisingPaidBlock"
+    raising_block.disabled = False
+
+    async def _execute(_data):
+        raise RuntimeError("provider 5xx")
+        yield  # pragma: no cover - make this an async generator
+
+    raising_block.execute = _execute
+
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: raising_block)
+    monkeypatch.setattr(
+        "backend.executor.utils.block_usage_cost", lambda *_a, **_k: (7, {})
+    )
+    spend_mock = AsyncMock(return_value=93)
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=MagicMock(spend_credits=spend_mock)),
+    )
+
+    leak_mock = MagicMock()
+    monkeypatch.setattr(
+        "backend.api.external.v1.routes.log_direct_block_execution_billing_leak",
+        leak_mock,
+    )
+
+    raising_client = fastapi.testclient.TestClient(app, raise_server_exceptions=True)
+    with pytest.raises(RuntimeError, match="provider 5xx"):
+        raising_client.post(f"/blocks/{raising_block.id}/execute", json={})
+
+    spend_mock.assert_awaited_once()
+    leak_mock.assert_called_once()
+    leak_kwargs = leak_mock.call_args.kwargs
+    assert leak_kwargs["user_id"] == test_user_id
+    assert leak_kwargs["block_id"] == raising_block.id
+    assert leak_kwargs["block_name"] == "RaisingPaidBlock"
+    assert leak_kwargs["cost"] == 7
+    assert leak_kwargs["source"] == "external"
+    assert isinstance(leak_kwargs["error"], RuntimeError)

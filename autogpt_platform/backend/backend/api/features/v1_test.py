@@ -418,6 +418,67 @@ def test_execute_graph_block_not_found(
     assert "not found" in response.json()["detail"]
 
 
+def test_execute_graph_block_logs_billing_leak_when_execute_raises(
+    mocker: pytest_mock.MockFixture,
+    test_user_id: str,
+) -> None:
+    """If obj.execute() raises after the pre-flight charge, the
+    BILLING_LEAK observability log must fire with the originating user,
+    block, and cost — and the original exception must still bubble up
+    (no refund, matching graph-executor + copilot-tool-helper convention)."""
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "paid-block"
+    mock_block.name = "PaidBlock"
+
+    async def mock_execute(*args, **kwargs):
+        raise RuntimeError("provider 5xx")
+        yield  # pragma: no cover - make this an async generator
+
+    mock_block.execute = mock_execute
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(11, {}),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    leak_mock = mocker.patch(
+        "backend.api.features.v1.execution_utils.log_direct_block_execution_billing_leak"
+    )
+
+    raising_client = fastapi.testclient.TestClient(app, raise_server_exceptions=True)
+    with pytest.raises(RuntimeError, match="provider 5xx"):
+        raising_client.post(
+            "/blocks/paid-block/execute",
+            json={"input_name": "x", "input_value": "y"},
+        )
+
+    mock_credit_model.spend_credits.assert_awaited_once()
+    leak_mock.assert_called_once()
+    leak_kwargs = leak_mock.call_args.kwargs
+    assert leak_kwargs["user_id"] == test_user_id
+    assert leak_kwargs["block_id"] == "paid-block"
+    assert leak_kwargs["block_name"] == "PaidBlock"
+    assert leak_kwargs["cost"] == 11
+    assert leak_kwargs["source"] == "internal"
+    assert isinstance(leak_kwargs["error"], RuntimeError)
+
+
 # Credits endpoints tests
 def test_get_user_credits(
     mocker: pytest_mock.MockFixture,

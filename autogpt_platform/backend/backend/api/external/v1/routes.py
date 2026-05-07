@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import urllib.parse
 from collections import defaultdict
@@ -21,6 +22,7 @@ from backend.data.block import BlockInput, CompletedBlockOutput
 from backend.executor.utils import (
     add_graph_execution,
     charge_for_direct_block_execution,
+    log_direct_block_execution_billing_leak,
 )
 from backend.integrations.webhooks.graph_lifecycle_hooks import on_graph_activate
 from backend.util.exceptions import InsufficientBalanceError, InsufficientTierError
@@ -96,7 +98,7 @@ async def execute_graph_block(
         raise HTTPException(status_code=403, detail=f"Block #{block_id} is disabled.")
 
     try:
-        await charge_for_direct_block_execution(
+        charged_cost = await charge_for_direct_block_execution(
             user_id=auth.user_id, block=obj, input_data=data, source="external"
         )
     except InsufficientBalanceError as e:
@@ -110,8 +112,22 @@ async def execute_graph_block(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
 
     output = defaultdict(list)
-    async for name, data in obj.execute(data):
-        output[name].append(data)
+    try:
+        async for name, data in obj.execute(data):
+            output[name].append(data)
+    except (Exception, asyncio.CancelledError) as exec_err:
+        # Best-effort observability: we charged but execute() failed.
+        # Matches the no-refund convention of the graph executor /
+        # copilot tool helper — log and re-raise; do NOT refund.
+        log_direct_block_execution_billing_leak(
+            user_id=auth.user_id,
+            block_id=obj.id,
+            block_name=obj.name,
+            cost=charged_cost,
+            source="external",
+            error=exec_err,
+        )
+        raise
     return output
 
 
