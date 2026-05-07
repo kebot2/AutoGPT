@@ -27,6 +27,7 @@ from backend.data.understanding import (
 from backend.util.exceptions import NotAuthorizedError, NotFoundError
 from backend.util.settings import AppEnvironment, Settings
 
+from .anthropic_rate_card import compute_anthropic_cost_usd
 from .config import ChatConfig, CopilotLlmModel
 from .model import (
     ChatMessage,
@@ -564,6 +565,25 @@ async def inject_user_context(
     return None
 
 
+def _normalize_title_model_for_aux() -> str:
+    """Return the title model in the form the aux client's transport expects.
+
+    OpenRouter routes by the full ``vendor/model`` slug, but Anthropic's
+    OpenAI-compat endpoint rejects the ``anthropic/`` prefix and dot-separated
+    versions. Shared by the API call (``_generate_session_title``) and the
+    cost recorder (``_record_title_generation_cost``) so both surfaces log /
+    transmit the same string — otherwise PlatformCostLog rows for direct-
+    Anthropic deployments fragment between normalized and unnormalized model
+    names, breaking the admin dashboard's per-model rollups.
+    """
+    title_model = config.title_model
+    if config.aux_provider_label == "anthropic":
+        if "/" in title_model:
+            title_model = title_model.split("/", 1)[1]
+        title_model = title_model.replace(".", "-")
+    return title_model
+
+
 async def _generate_session_title(
     message: str,
     user_id: str | None = None,
@@ -614,11 +634,7 @@ async def _generate_session_title(
         # deployments inherit the Anthropic-pointed aux client (see
         # ``aux_client_credentials`` fallback) so the title model
         # ``anthropic/claude-haiku-4-5`` would 400 without this strip.
-        title_model = config.title_model
-        if config.aux_provider_label == "anthropic":
-            if "/" in title_model:
-                title_model = title_model.split("/", 1)[1]
-            title_model = title_model.replace(".", "-")
+        title_model = _normalize_title_model_for_aux()
 
         response = await _get_aux_client().chat.completions.create(
             model=title_model,
@@ -706,12 +722,6 @@ async def _record_title_generation_cost(
     """
     prompt_tokens, completion_tokens, cost_usd = _title_usage_from_response(response)
 
-    # Nothing meaningful to record — skip the DB roundtrip entirely
-    # rather than writing a zero-valued row.  Covers the non-OR route
-    # (no ``usage.cost`` field) and the degenerate zero-tokens case.
-    if cost_usd is None and prompt_tokens == 0 and completion_tokens == 0:
-        return
-
     # Provider label tracks the aux client's actual transport — title
     # generation runs on the aux client (kept on OpenRouter when split
     # from the main client so the non-Anthropic title model keeps
@@ -720,6 +730,31 @@ async def _record_title_generation_cost(
     # deployment lands the cost row under ``anthropic`` instead of the
     # misleading ``openai`` fallback.
     provider = config.aux_provider_label
+
+    # Use the same normalized name for the cost log that we sent on the
+    # API call.  Without this the admin dashboard fragments between
+    # ``anthropic/claude-haiku-4.5`` (raw config) and ``claude-haiku-4-5``
+    # (the form the Anthropic OpenAI-compat endpoint actually saw).
+    model = _normalize_title_model_for_aux()
+
+    # Direct-Anthropic responses don't carry an OpenRouter-style ``cost``
+    # field on usage.model_extra, so ``_title_usage_from_response`` returns
+    # ``cost_usd=None``.  Compute it from the rate card instead — otherwise
+    # PlatformCostLog records a NULL cost row and the admin dashboard +
+    # rate-limit counter under-report direct-Anthropic title spend by 100%.
+    if cost_usd is None and provider == "anthropic":
+        cost_usd = compute_anthropic_cost_usd(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    # Nothing meaningful to record — skip the DB roundtrip entirely
+    # rather than writing a zero-valued row.  Covers the non-OR / non-
+    # Anthropic route (no ``usage.cost`` field, unknown rate card) and
+    # the degenerate zero-tokens case.
+    if cost_usd is None and prompt_tokens == 0 and completion_tokens == 0:
+        return
 
     # Intentionally pass ``session=None``.  ``persist_and_record_usage``
     # would otherwise append a ``Usage`` entry to the live session
@@ -738,7 +773,7 @@ async def _record_title_generation_cost(
         completion_tokens=completion_tokens,
         log_prefix="[title]",
         cost_usd=cost_usd,
-        model=config.title_model,
+        model=model,
         provider=provider,
     )
 
