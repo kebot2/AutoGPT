@@ -551,6 +551,60 @@ class TestGenerateSessionTitle:
         assert extra_body["session_id"] == "sess-abc"
 
     @pytest.mark.asyncio
+    async def test_title_model_normalized_when_aux_is_anthropic(self):
+        """When the aux client is pointed at api.anthropic.com (single-key
+        direct-Anthropic deployment), the title model must have its
+        ``anthropic/`` prefix and dot-separated version stripped before
+        being sent — Anthropic's OpenAI-compat endpoint rejects both."""
+        resp = _build_completion(content="Title")
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=resp)
+        with (
+            patch(
+                "backend.copilot.service._get_aux_client",
+                return_value=client,
+            ),
+            patch(
+                "backend.copilot.service.config",
+                MagicMock(
+                    aux_uses_openrouter=False,
+                    aux_provider_label="anthropic",
+                    title_model="anthropic/claude-haiku-4.5",
+                ),
+            ),
+        ):
+            await _generate_session_title("hello", user_id=None, session_id=None)
+        client.chat.completions.create.assert_awaited_once()
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert kwargs["model"] == "claude-haiku-4-5"
+
+    @pytest.mark.asyncio
+    async def test_title_model_unchanged_when_aux_is_openrouter(self):
+        """OpenRouter routes by full ``vendor/model`` slug — the
+        normalization branch must NOT fire for OR-routed aux."""
+        resp = _build_completion(content="Title")
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=resp)
+        with (
+            patch(
+                "backend.copilot.service._get_aux_client",
+                return_value=client,
+            ),
+            patch(
+                "backend.copilot.service.config",
+                MagicMock(
+                    aux_uses_openrouter=True,
+                    aux_provider_label="open_router",
+                    title_model="anthropic/claude-haiku-4.5",
+                ),
+            ),
+        ):
+            await _generate_session_title("hello", user_id=None, session_id=None)
+        client.chat.completions.create.assert_awaited_once()
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert kwargs["model"] == "anthropic/claude-haiku-4.5"
+
+    @pytest.mark.asyncio
     async def test_create_omits_extra_body_when_aux_not_openrouter(self):
         """When aux client is pointed at a non-OR endpoint (e.g.
         Anthropic OAI-compat), the OR-specific extras must not be sent
