@@ -147,3 +147,113 @@ def test_unknown_block_returns_404(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("backend.blocks.get_block", lambda _: None)
     response = client.post("/blocks/00000000-0000-0000-0000-deadbeef/execute", json={})
     assert response.status_code == 404
+
+
+def _stub_raising_block(
+    *,
+    block_id: str = "00000000-0000-0000-0000-000000000002",
+    name: str = "RaisingBlock",
+    exc: BaseException,
+):
+    """Stub block whose execute() raises after charge — covers the failure
+    path that the refund helper has to clean up."""
+    block = MagicMock()
+    block.id = block_id
+    block.name = name
+    block.disabled = False
+
+    async def _execute(_data):
+        raise exc
+        yield  # pragma: no cover - make this an async generator
+
+    block.execute = _execute
+    return block
+
+
+def test_paid_block_refunds_when_execute_raises(
+    monkeypatch: pytest.MonkeyPatch, test_user_id: str
+):
+    """If obj.execute() raises after the pre-flight charge, the refund
+    primitive must be called with the same cost+metadata."""
+    block = _stub_raising_block(name="PaidBlock", exc=RuntimeError("provider 5xx"))
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: block)
+    cost_filter = {"matched": True}
+    monkeypatch.setattr(
+        "backend.executor.utils.block_usage_cost",
+        lambda *_a, **_k: (3, cost_filter),
+    )
+    spend_mock = AsyncMock(return_value=97)
+    refund_mock = AsyncMock(return_value=100)
+    credit_model = MagicMock(spend_credits=spend_mock, refund_credits=refund_mock)
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=credit_model),
+    )
+
+    no_raise_client = fastapi.testclient.TestClient(app, raise_server_exceptions=False)
+    response = no_raise_client.post(f"/blocks/{block.id}/execute", json={})
+
+    assert response.status_code == 500
+    spend_mock.assert_awaited_once()
+    refund_mock.assert_awaited_once()
+    refund_kwargs = refund_mock.await_args.kwargs
+    assert refund_kwargs["user_id"] == test_user_id
+    assert refund_kwargs["cost"] == 3
+    assert refund_kwargs["metadata"].block_id == block.id
+    assert refund_kwargs["metadata"].block == "PaidBlock"
+    assert refund_kwargs["metadata"].input == cost_filter
+    assert (
+        refund_kwargs["metadata"].reason
+        == "Direct external block execution of PaidBlock"
+    )
+
+
+def test_free_block_no_refund_when_charge_skipped(monkeypatch: pytest.MonkeyPatch):
+    """Free blocks (cost == 0) skip the pre-flight charge — a failed
+    execute() must therefore NOT issue a refund."""
+    block = _stub_raising_block(name="FreeBlock", exc=RuntimeError("provider 5xx"))
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: block)
+    monkeypatch.setattr(
+        "backend.executor.utils.block_usage_cost", lambda *_a, **_k: (0, {})
+    )
+    spend_mock = AsyncMock()
+    refund_mock = AsyncMock()
+    credit_model = MagicMock(spend_credits=spend_mock, refund_credits=refund_mock)
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=credit_model),
+    )
+
+    no_raise_client = fastapi.testclient.TestClient(app, raise_server_exceptions=False)
+    response = no_raise_client.post(f"/blocks/{block.id}/execute", json={})
+
+    assert response.status_code == 500
+    spend_mock.assert_not_awaited()
+    refund_mock.assert_not_awaited()
+
+
+def test_paid_block_refund_failure_does_not_swallow_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """If the refund primitive itself raises, the ORIGINAL execute()
+    exception must still bubble up — refund failure is logged, not
+    propagated."""
+    block = _stub_raising_block(name="PaidBlock", exc=ValueError("provider 5xx"))
+    monkeypatch.setattr("backend.blocks.get_block", lambda _: block)
+    monkeypatch.setattr(
+        "backend.executor.utils.block_usage_cost", lambda *_a, **_k: (3, {})
+    )
+    spend_mock = AsyncMock(return_value=97)
+    refund_mock = AsyncMock(side_effect=ConnectionError("redis down"))
+    credit_model = MagicMock(spend_credits=spend_mock, refund_credits=refund_mock)
+    monkeypatch.setattr(
+        "backend.executor.utils.get_user_credit_model",
+        AsyncMock(return_value=credit_model),
+    )
+
+    raising_client = fastapi.testclient.TestClient(app, raise_server_exceptions=True)
+    with pytest.raises(ValueError, match="provider 5xx"):
+        raising_client.post(f"/blocks/{block.id}/execute", json={})
+
+    spend_mock.assert_awaited_once()
+    refund_mock.assert_awaited_once()

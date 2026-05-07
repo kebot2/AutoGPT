@@ -307,6 +307,163 @@ def test_execute_graph_block_not_found(
     assert "not found" in response.json()["detail"]
 
 
+def test_execute_graph_block_refunds_when_execute_raises(
+    mocker: pytest_mock.MockFixture,
+    test_user_id: str,
+) -> None:
+    """If obj.execute() raises after the pre-flight charge, the refund
+    primitive must be called with the same cost+metadata so the spend
+    and refund pair links cleanly in credit history."""
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "paid-block"
+    mock_block.name = "PaidBlock"
+
+    async def mock_execute(*args, **kwargs):
+        raise RuntimeError("provider 5xx")
+        yield  # pragma: no cover - make this an async generator
+
+    mock_block.execute = mock_execute
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+
+    cost_filter = {"model": "gpt-4"}
+    mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(42, cost_filter),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    # FastAPI's TestClient re-raises unhandled exceptions by default — assert
+    # the original exception bubbles up after the refund is issued.
+    no_raise_client = fastapi.testclient.TestClient(app, raise_server_exceptions=False)
+    response = no_raise_client.post(
+        "/blocks/paid-block/execute", json={"input_name": "x", "input_value": "y"}
+    )
+
+    assert response.status_code == 500
+    mock_credit_model.spend_credits.assert_awaited_once()
+    mock_credit_model.refund_credits.assert_awaited_once()
+    refund_kwargs = mock_credit_model.refund_credits.await_args.kwargs
+    assert refund_kwargs["user_id"] == test_user_id
+    assert refund_kwargs["cost"] == 42
+    metadata = refund_kwargs["metadata"]
+    assert metadata.block_id == "paid-block"
+    assert metadata.block == "PaidBlock"
+    assert metadata.input == cost_filter
+    assert metadata.reason == "Direct internal block execution of PaidBlock"
+
+
+def test_execute_graph_block_no_refund_when_charge_skipped(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """Free blocks (cost == 0) skip the pre-flight charge — a failed
+    execute() must therefore NOT issue a refund (nothing to refund)."""
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "free-block"
+    mock_block.name = "FreeBlock"
+
+    async def mock_execute(*args, **kwargs):
+        raise RuntimeError("provider 5xx")
+        yield  # pragma: no cover - make this an async generator
+
+    mock_block.execute = mock_execute
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(0, {}),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    no_raise_client = fastapi.testclient.TestClient(app, raise_server_exceptions=False)
+    response = no_raise_client.post(
+        "/blocks/free-block/execute", json={"input_name": "x", "input_value": "y"}
+    )
+
+    assert response.status_code == 500
+    mock_credit_model.spend_credits.assert_not_awaited()
+    mock_credit_model.refund_credits.assert_not_awaited()
+
+
+def test_execute_graph_block_refund_failure_does_not_swallow_original_error(
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """If the refund primitive itself raises, the ORIGINAL execute()
+    exception must still surface (refund failure is logged, not
+    propagated)."""
+    mock_block = Mock()
+    mock_block.disabled = False
+    mock_block.id = "paid-block"
+    mock_block.name = "PaidBlock"
+
+    async def mock_execute(*args, **kwargs):
+        raise ValueError("provider 5xx")
+        yield  # pragma: no cover - make this an async generator
+
+    mock_block.execute = mock_execute
+
+    mocker.patch(
+        "backend.api.features.v1.get_block",
+        return_value=mock_block,
+    )
+    mock_user = Mock()
+    mock_user.timezone = "UTC"
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.executor.utils.block_usage_cost",
+        return_value=(42, {}),
+    )
+    mock_credit_model = mocker.AsyncMock()
+    mock_credit_model.refund_credits.side_effect = ConnectionError("redis down")
+    mocker.patch(
+        "backend.executor.utils.get_user_credit_model",
+        return_value=mock_credit_model,
+    )
+
+    # Use raise_server_exceptions=True so we can assert the ORIGINAL exception
+    # type bubbles up — the refund's ConnectionError must not replace it.
+    raising_client = fastapi.testclient.TestClient(app, raise_server_exceptions=True)
+    with pytest.raises(ValueError, match="provider 5xx"):
+        raising_client.post(
+            "/blocks/paid-block/execute",
+            json={"input_name": "x", "input_value": "y"},
+        )
+
+    mock_credit_model.spend_credits.assert_awaited_once()
+    mock_credit_model.refund_credits.assert_awaited_once()
+
+
 # Credits endpoints tests
 def test_get_user_credits(
     mocker: pytest_mock.MockFixture,

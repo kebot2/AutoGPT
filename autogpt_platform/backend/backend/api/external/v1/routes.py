@@ -21,6 +21,7 @@ from backend.data.block import BlockInput, CompletedBlockOutput
 from backend.executor.utils import (
     add_graph_execution,
     charge_for_direct_block_execution,
+    refund_for_failed_block_execution,
 )
 from backend.integrations.webhooks.graph_lifecycle_hooks import on_graph_activate
 from backend.util.exceptions import InsufficientBalanceError
@@ -104,10 +105,35 @@ async def execute_graph_block(
             status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(e)
         ) from e
 
-    output = defaultdict(list)
-    async for name, data in obj.execute(data):
-        output[name].append(data)
-    return output
+    # Capture input separately — the `async for ... in obj.execute(data)` loop
+    # below shadows `data` with each yielded output, so we need a stable handle
+    # for the refund path's `block_usage_cost` recompute.
+    input_data = data
+    try:
+        output = defaultdict(list)
+        async for name, output_data in obj.execute(input_data):
+            output[name].append(output_data)
+        return output
+    except Exception:
+        # Refund the pre-flight charge so a failed execute() doesn't bill
+        # the user for output they never received. Wrap so a refund failure
+        # never swallows the original exception (the leak is logged instead).
+        try:
+            await refund_for_failed_block_execution(
+                user_id=auth.user_id,
+                block=obj,
+                input_data=input_data,
+                source="external",
+            )
+        except Exception as refund_err:
+            logger.warning(
+                "Refund failed for direct external block execution "
+                "(user_id=%s, block_id=%s): %s",
+                auth.user_id,
+                block_id,
+                refund_err,
+            )
+        raise
 
 
 @v1_router.post(

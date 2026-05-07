@@ -485,14 +485,18 @@ async def execute_graph_block(
         raise HTTPException(status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)) from e
 
     start_time = time.time()
+    # Capture input separately — the `async for ... in obj.execute(data, ...)`
+    # loop below shadows `data` with each yielded output, so we need a
+    # stable handle for the refund path's `block_usage_cost` recompute.
+    input_data = data
     try:
         output = defaultdict(list)
-        async for name, data in obj.execute(
-            data,
+        async for name, output_data in obj.execute(
+            input_data,
             user_id=user_id,
             # Note: graph_exec_id and graph_id are not available for direct block execution
         ):
-            output[name].append(data)
+            output[name].append(output_data)
 
         # Record successful block execution with duration
         duration = time.time() - start_time
@@ -503,6 +507,22 @@ async def execute_graph_block(
 
         return output
     except Exception:
+        # Refund the pre-flight charge so a failed execute() doesn't bill
+        # the user for output they never received. Wrap so a refund failure
+        # never swallows the original exception (the leak is logged instead).
+        try:
+            await execution_utils.refund_for_failed_block_execution(
+                user_id=user_id, block=obj, input_data=input_data, source="internal"
+            )
+        except Exception as refund_err:
+            logger.warning(
+                "Refund failed for direct internal block execution "
+                "(user_id=%s, block_id=%s): %s",
+                user_id,
+                block_id,
+                refund_err,
+            )
+
         # Record failed block execution
         duration = time.time() - start_time
         block_type = obj.__class__.__name__
