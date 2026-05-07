@@ -1457,8 +1457,36 @@ async def stream_chat_completion_baseline(
     # would be rejected by the direct client.  Pass the baseline-side
     # ``config`` so monkeypatch fixtures targeting this module's
     # ``config`` symbol drive the decision.
-    active_model = await _resolve_baseline_model(model, user_id)
-    active_model = normalize_model_for_transport(active_model, config)
+    resolved_model = await _resolve_baseline_model(model, user_id)
+    try:
+        active_model = normalize_model_for_transport(resolved_model, config)
+    except ValueError as exc:
+        # Mirror SDK's LD-reject soft-fallback (see ``copilot.sdk.service``):
+        # a per-user LD ``copilot-model-routing`` cell can pin a non-Anthropic
+        # slug (e.g. ``moonshotai/kimi-*``) on a direct-Anthropic deployment
+        # where the baseline transport rejects it.  Fall back to the
+        # TIER-SPECIFIC config default so the request still streams instead
+        # of erroring at the user.  Re-raises the original error if the
+        # config default is also invalid (deployment-level misconfig caught
+        # by the ``model_validator`` at startup).
+        tier_default = (
+            config.fast_advanced_model
+            if model == "advanced"
+            else config.fast_standard_model
+        )
+        try:
+            active_model = normalize_model_for_transport(tier_default, config)
+        except ValueError:
+            raise exc
+        logger.warning(
+            "[Baseline] [%s] LD model %r rejected for tier=%s (%s); falling "
+            "back to tier default %s",
+            session_id[:12] if session_id else "?",
+            resolved_model,
+            "advanced" if model == "advanced" else "standard",
+            exc,
+            active_model,
+        )
 
     # --- E2B sandbox setup (feature parity with SDK path) ---
     e2b_sandbox = None
