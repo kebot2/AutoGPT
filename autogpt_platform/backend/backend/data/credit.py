@@ -1289,6 +1289,8 @@ class UserCredit(UserCreditBase):
         ]
 
 
+
+
 class DisabledUserCredit(UserCreditBase):
     async def get_credits(self, *args, **kwargs) -> int:
         return 100
