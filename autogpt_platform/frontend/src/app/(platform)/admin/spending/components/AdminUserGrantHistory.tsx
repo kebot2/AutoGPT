@@ -31,9 +31,14 @@ export async function AdminUserGrantHistory({
     initialStatus,
   );
 
-  // Helper function to format the amount with color based on transaction type
+  // Helper function to format the amount with color based on transaction type.
+  // REFUND covers both block-execute refunds (positive amount → user-facing
+  // credit return) and Stripe clawbacks (negative amount → deduction); branch
+  // on sign so admins can tell them apart at a glance.
   const formatAmount = (amount: number, type: CreditTransactionType) => {
-    const isPositive = type === CreditTransactionType.GRANT;
+    const isPositive =
+      type === CreditTransactionType.GRANT ||
+      (type === CreditTransactionType.REFUND && amount > 0);
     const isNeutral = type === CreditTransactionType.TOP_UP;
     const color = isPositive
       ? "text-green-600"
@@ -44,19 +49,23 @@ export async function AdminUserGrantHistory({
   };
 
   // Helper function to format the transaction type with color
-  const formatType = (type: CreditTransactionType) => {
+  const formatType = (type: CreditTransactionType, amount: number) => {
     const isGrant = type === CreditTransactionType.GRANT;
     const isPurchased = type === CreditTransactionType.TOP_UP;
     const isSpent = type === CreditTransactionType.USAGE;
+    const isRefundCredit =
+      type === CreditTransactionType.REFUND && amount > 0;
+    const isRefundClawback =
+      type === CreditTransactionType.REFUND && amount < 0;
 
     const displayText = type;
     let bgColor = "";
 
-    if (isGrant) {
+    if (isGrant || isRefundCredit) {
       bgColor = "bg-green-100 text-green-800";
     } else if (isPurchased) {
       bgColor = "bg-blue-100 text-blue-800";
-    } else if (isSpent) {
+    } else if (isSpent || isRefundClawback) {
       bgColor = "bg-red-100 text-red-800";
     }
 
@@ -120,7 +129,7 @@ export async function AdminUserGrantHistory({
                   </TableCell>
 
                   <TableCell>
-                    {formatType(transaction.transaction_type)}
+                    {formatType(transaction.transaction_type, transaction.amount)}
                   </TableCell>
                   <TableCell className="text-gray-600">
                     {formatDate(transaction.transaction_time)}
