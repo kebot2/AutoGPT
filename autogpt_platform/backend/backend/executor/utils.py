@@ -193,13 +193,28 @@ def block_usage_cost(
     return 0, {}
 
 
+class DirectBlockExecutionReceipt(BaseModel):
+    """Captured pre-flight charge metadata, threaded into the paired refund.
+
+    Returned by :func:`charge_for_direct_block_execution` so the route can
+    pass the *exact* charged ``(cost, metadata)`` back to
+    :func:`refund_for_failed_block_execution` if ``obj.execute()`` raises.
+    Avoids a TOCTOU window where ``block_usage_cost`` is recomputed against
+    a (possibly mutated) ``input_data`` after the failure and produces a
+    different amount than was originally charged.
+    """
+
+    cost: int
+    metadata: UsageTransactionMetadata
+
+
 async def charge_for_direct_block_execution(
     user_id: str,
     block: Block,
     input_data: BlockInput,
     *,
     source: Literal["internal", "external"],
-) -> None:
+) -> DirectBlockExecutionReceipt | None:
     """Pre-flight charge for a direct block-execute API call.
 
     Shared by both ``POST /api/blocks/{id}/execute`` (internal UI) and
@@ -209,40 +224,53 @@ async def charge_for_direct_block_execution(
     ``reason`` so transactions remain attributable to the originating
     surface.
 
+    Returns a :class:`DirectBlockExecutionReceipt` capturing the
+    actually-charged ``(cost, metadata)`` so the caller can hand it back
+    to :func:`refund_for_failed_block_execution` on failure without
+    recomputing ``block_usage_cost`` against possibly-mutated state.
+    Returns ``None`` when the block is free (cost <= 0) — no charge made,
+    no refund needed.
+
     Dynamic-cost blocks (TOKENS / COST_USD / SECOND / ITEMS) return 0
     from ``block_usage_cost`` pre-flight and are NOT charged on this
     code path — the post-flight reconciliation only runs inside
     ``executor/manager.py``, which the direct block-execute API
     endpoints bypass entirely.
     """
-    charge = _direct_block_execution_charge(block, input_data, source)
-    if charge is None:
-        return
-    cost, metadata = charge
+    cost, cost_filter = block_usage_cost(block, input_data)
+    if cost <= 0:
+        return None
+    receipt = DirectBlockExecutionReceipt(
+        cost=cost,
+        metadata=UsageTransactionMetadata(
+            block_id=block.id,
+            block=block.name,
+            input=cost_filter,
+            reason=f"Direct {source} block execution of {block.name}",
+        ),
+    )
     credit_model = await get_user_credit_model(user_id)
     await credit_model.spend_credits(
         user_id=user_id,
-        cost=cost,
-        metadata=metadata,
+        cost=receipt.cost,
+        metadata=receipt.metadata,
     )
+    return receipt
 
 
 async def refund_for_failed_block_execution(
     user_id: str,
-    block: Block,
-    input_data: BlockInput,
-    *,
-    source: Literal["internal", "external"],
+    receipt: DirectBlockExecutionReceipt,
 ) -> None:
     """Refund a pre-flight charge when ``obj.execute()`` raises.
 
     Paired with :func:`charge_for_direct_block_execution` to close the
     charge-without-output gap on the direct block-execute API surface
-    (PR #13023). Recomputes ``block_usage_cost`` against the same
-    ``input_data`` so the refunded amount matches the charge exactly,
-    and threads the same ``UsageTransactionMetadata`` (block_id, block
-    name, input cost_filter, source) so credit history pairs the
-    spend and refund rows cleanly.
+    (PR #13023). Refunds the *captured* ``(cost, metadata)`` from the
+    pre-flight receipt — never recomputes ``block_usage_cost`` after
+    ``execute()`` ran, so an input mutated by the block or a state-
+    dependent cost calculation can't make the refund diverge from the
+    original charge.
 
     Partial-output policy (v1): an ``async for`` over ``obj.execute()``
     can yield N outputs and *then* raise. We refund the full pre-flight
@@ -251,33 +279,11 @@ async def refund_for_failed_block_execution(
     means the user got nothing usable. TODO: revisit if direct-API
     blocks ever bill on stream-progress.
     """
-    charge = _direct_block_execution_charge(block, input_data, source)
-    if charge is None:
-        return
-    cost, metadata = charge
     credit_model = await get_user_credit_model(user_id)
     await credit_model.refund_credits(
         user_id=user_id,
-        cost=cost,
-        metadata=metadata,
-    )
-
-
-def _direct_block_execution_charge(
-    block: Block,
-    input_data: BlockInput,
-    source: Literal["internal", "external"],
-) -> tuple[int, UsageTransactionMetadata] | None:
-    """Return ``(cost, metadata)`` for paired charge/refund, or None for free
-    blocks. Single ``block_usage_cost`` call shared by both helpers."""
-    cost, cost_filter = block_usage_cost(block, input_data)
-    if cost <= 0:
-        return None
-    return cost, UsageTransactionMetadata(
-        block_id=block.id,
-        block=block.name,
-        input=cost_filter,
-        reason=f"Direct {source} block execution of {block.name}",
+        cost=receipt.cost,
+        metadata=receipt.metadata,
     )
 
 

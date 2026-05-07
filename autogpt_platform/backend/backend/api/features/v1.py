@@ -478,21 +478,20 @@ async def execute_graph_block(
         raise HTTPException(status_code=404, detail="User not found.")
 
     try:
-        await execution_utils.charge_for_direct_block_execution(
+        # Capture the pre-flight charge so the refund path uses the
+        # exact same `(cost, metadata)` rather than recomputing
+        # `block_usage_cost` against possibly-mutated state.
+        charge_receipt = await execution_utils.charge_for_direct_block_execution(
             user_id=user_id, block=obj, input_data=data, source="internal"
         )
     except InsufficientBalanceError as e:
         raise HTTPException(status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)) from e
 
     start_time = time.time()
-    # Capture input separately — the `async for ... in obj.execute(data, ...)`
-    # loop below shadows `data` with each yielded output, so we need a
-    # stable handle for the refund path's `block_usage_cost` recompute.
-    input_data = data
     try:
         output = defaultdict(list)
         async for name, output_data in obj.execute(
-            input_data,
+            data,
             user_id=user_id,
             # Note: graph_exec_id and graph_id are not available for direct block execution
         ):
@@ -507,33 +506,33 @@ async def execute_graph_block(
 
         return output
     except Exception:
-        # Refund the pre-flight charge so a failed execute() doesn't bill
-        # the user for output they never received. Wrap so a refund failure
-        # never swallows the original exception (the leak is logged with
-        # the stuck cost so reconciliation can recover it).
-        try:
-            await execution_utils.refund_for_failed_block_execution(
-                user_id=user_id, block=obj, input_data=input_data, source="internal"
-            )
-        except Exception as refund_err:
-            stuck_cost, _ = execution_utils.block_usage_cost(obj, input_data)
-            logger.warning(
-                "BILLING_LEAK[REFUND_FAILED]: direct internal block execution "
-                "(user_id=%s, block_id=%s, cost=%s): %s",
-                user_id,
-                block_id,
-                stuck_cost,
-                refund_err,
-                extra={
-                    "json_fields": {
-                        "billing_leak": True,
-                        "leak_type": "REFUND_FAILED",
-                        "user_id": user_id,
-                        "block_id": block_id,
-                        "cost": str(stuck_cost),
-                    }
-                },
-            )
+        # Refund the captured pre-flight charge (only if we actually
+        # charged — free blocks return None). Wrap so a refund failure
+        # never swallows the original exception (logged with cost so
+        # reconciliation can recover it).
+        if charge_receipt is not None:
+            try:
+                await execution_utils.refund_for_failed_block_execution(
+                    user_id=user_id, receipt=charge_receipt
+                )
+            except Exception as refund_err:
+                logger.warning(
+                    "BILLING_LEAK[REFUND_FAILED]: direct internal block execution "
+                    "(user_id=%s, block_id=%s, cost=%s): %s",
+                    user_id,
+                    block_id,
+                    charge_receipt.cost,
+                    refund_err,
+                    extra={
+                        "json_fields": {
+                            "billing_leak": True,
+                            "leak_type": "REFUND_FAILED",
+                            "user_id": user_id,
+                            "block_id": block_id,
+                            "cost": str(charge_receipt.cost),
+                        }
+                    },
+                )
 
         # Record failed block execution
         duration = time.time() - start_time
