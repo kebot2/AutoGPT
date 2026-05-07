@@ -1552,6 +1552,7 @@ class TestRegressionUserSettings:
         mock_user.notifyOnAgentApproved = False
         mock_user.notifyOnAgentRejected = False
         mock_user.maxEmailsPerDay = 3
+        mock_user.subscriptionTier = "NO_TIER"
         self.mock_user_actions.update = AsyncMock(return_value=mock_user)
 
         from backend.data.user import update_user_timezone

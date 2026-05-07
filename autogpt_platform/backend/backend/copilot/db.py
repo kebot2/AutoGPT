@@ -66,6 +66,7 @@ async def get_chat_messages_paginated(
     limit: int = 50,
     before_sequence: int | None = None,
     user_id: str | None = None,
+    organization_id: str | None = None,
 ) -> PaginatedMessages | None:
     """Get paginated messages for a session, newest first.
 
@@ -82,6 +83,8 @@ async def get_chat_messages_paginated(
     session_where: ChatSessionWhereInput = {"id": session_id}
     if user_id is not None:
         session_where["userId"] = user_id
+    if organization_id is not None:
+        session_where["organizationId"] = organization_id
 
     # Build message include — fetch paginated messages in the same query
     msg_include: FindManyChatMessageArgsFromChatSession = {
@@ -498,10 +501,14 @@ async def get_user_chat_sessions(
     user_id: str,
     limit: int = 50,
     offset: int = 0,
+    organization_id: str | None = None,
 ) -> list[ChatSessionInfo]:
     """Get chat sessions for a user, ordered by most recent."""
+    where: ChatSessionWhereInput = {"userId": user_id}
+    if organization_id is not None:
+        where["organizationId"] = organization_id
     prisma_sessions = await PrismaChatSession.prisma().find_many(
-        where={"userId": user_id},
+        where=where,
         order={"updatedAt": "desc"},
         take=limit,
         skip=offset,
@@ -509,12 +516,22 @@ async def get_user_chat_sessions(
     return [ChatSessionInfo.from_db(s) for s in prisma_sessions]
 
 
-async def get_user_session_count(user_id: str) -> int:
+async def get_user_session_count(
+    user_id: str,
+    organization_id: str | None = None,
+) -> int:
     """Get the total number of chat sessions for a user."""
-    return await PrismaChatSession.prisma().count(where={"userId": user_id})
+    where: ChatSessionWhereInput = {"userId": user_id}
+    if organization_id is not None:
+        where["organizationId"] = organization_id
+    return await PrismaChatSession.prisma().count(where=where)
 
 
-async def delete_chat_session(session_id: str, user_id: str | None = None) -> bool:
+async def delete_chat_session(
+    session_id: str,
+    user_id: str | None = None,
+    organization_id: str | None = None,
+) -> bool:
     """Delete a chat session and all its messages.
 
     Args:
@@ -522,6 +539,8 @@ async def delete_chat_session(session_id: str, user_id: str | None = None) -> bo
         user_id: If provided, validates that the session belongs to this user
             before deletion. This prevents unauthorized deletion of other
             users' sessions.
+        organization_id: If provided, scopes the deletion to sessions
+            belonging to this organization.
 
     Returns:
         True if deleted successfully, False otherwise.
@@ -531,6 +550,8 @@ async def delete_chat_session(session_id: str, user_id: str | None = None) -> bo
         where_clause: ChatSessionWhereInput = {"id": session_id}
         if user_id is not None:
             where_clause["userId"] = user_id
+        if organization_id is not None:
+            where_clause["organizationId"] = organization_id
 
         result = await PrismaChatSession.prisma().delete_many(where=where_clause)
         if result == 0:

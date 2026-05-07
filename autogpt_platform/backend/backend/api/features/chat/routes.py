@@ -311,6 +311,7 @@ class UpdateSessionTitleRequest(BaseModel):
 )
 async def list_sessions(
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> ListSessionsResponse:
@@ -328,7 +329,9 @@ async def list_sessions(
     Returns:
         ListSessionsResponse: List of session summaries and total count.
     """
-    sessions, total_count = await get_user_sessions(user_id, limit, offset)
+    sessions, total_count = await get_user_sessions(
+        user_id, limit, offset, organization_id=ctx.org_id
+    )
 
     # Batch-check Redis for active stream status on each session
     processing_set: set[str] = set()
@@ -375,6 +378,7 @@ async def list_sessions(
 )
 async def create_session(
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
     request: CreateSessionRequest | None = None,
 ) -> CreateSessionResponse:
     """Create (or get-or-create) a chat session.
@@ -411,9 +415,19 @@ async def create_session(
     )
 
     if builder_graph_id:
-        session = await get_or_create_builder_session(user_id, builder_graph_id)
+        session = await get_or_create_builder_session(
+            user_id,
+            builder_graph_id,
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
+        )
     else:
-        session = await create_chat_session(user_id, dry_run=dry_run)
+        session = await create_chat_session(
+            user_id,
+            dry_run=dry_run,
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
+        )
 
     return CreateSessionResponse(
         id=session.session_id,
@@ -432,6 +446,7 @@ async def create_session(
 async def delete_session(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
 ) -> Response:
     """
     Delete a chat session.
@@ -449,7 +464,9 @@ async def delete_session(
     Raises:
         HTTPException: 404 if session not found or not owned by user.
     """
-    deleted = await delete_chat_session(session_id, user_id)
+    deleted = await delete_chat_session(
+        session_id, user_id, organization_id=ctx.org_id
+    )
 
     if not deleted:
         raise HTTPException(
@@ -540,6 +557,7 @@ async def update_session_title_route(
 async def get_session(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
     limit: int = Query(default=50, ge=1, le=200),
     before_sequence: int | None = Query(default=None, ge=0),
 ) -> SessionDetailResponse:
@@ -550,7 +568,8 @@ async def get_session(
     When no pagination params are provided, returns the most recent messages.
     """
     page = await get_chat_messages_paginated(
-        session_id, limit, before_sequence, user_id=user_id
+        session_id, limit, before_sequence, user_id=user_id,
+        organization_id=ctx.org_id,
     )
     if page is None:
         raise NotFoundError(f"Session {session_id} not found.")
