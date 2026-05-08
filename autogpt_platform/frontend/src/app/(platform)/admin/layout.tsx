@@ -7,7 +7,7 @@ import {
   Receipt,
   FileText,
   Heartbeat,
-  Calculator,
+  CalculatorIcon,
 } from "@phosphor-icons/react/dist/ssr";
 
 import { IconSliders } from "@/components/__legacy__/ui/icons";
@@ -53,7 +53,7 @@ const sidebarLinkGroups = [
       {
         text: "Block Cost Estimates",
         href: "/admin/block-cost-estimates",
-        icon: <Calculator className="h-6 w-6" />,
+        icon: <CalculatorIcon className="h-6 w-6" />,
       },
       {
         text: "Admin User Management",
