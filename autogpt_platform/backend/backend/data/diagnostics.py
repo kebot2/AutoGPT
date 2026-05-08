@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 SYSTEM_JOB_IDS = {
     "cleanup_expired_files",
     "report_late_executions",
-    "reap_orphan_node_executions",
     "report_block_error_rates",
     "process_existing_batches",
     "process_weekly_summary",

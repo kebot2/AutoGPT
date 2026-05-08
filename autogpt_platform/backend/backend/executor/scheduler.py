@@ -32,7 +32,6 @@ from backend.monitoring import (
     NotificationJobArgs,
     process_existing_batches,
     process_weekly_summary,
-    reap_orphan_node_executions,
     report_block_error_rates,
     report_execution_accuracy_alerts,
     report_late_executions,
@@ -561,18 +560,6 @@ class Scheduler(AppService):
                 jobstore=Jobstores.EXECUTION.value,
             )
 
-            # Reap orphan RUNNING node_executions whose parent graph_exec is
-            # already in a terminal state. Runs alongside the late-execution
-            # alert on the same cadence.
-            self.scheduler.add_job(
-                reap_orphan_node_executions,
-                id="reap_orphan_node_executions",
-                trigger="interval",
-                replace_existing=True,
-                seconds=config.execution_late_notification_threshold_secs,
-                jobstore=Jobstores.EXECUTION.value,
-            )
-
             # Block Error Rate Monitoring
             self.scheduler.add_job(
                 report_block_error_rates,
@@ -801,11 +788,6 @@ class Scheduler(AppService):
     @expose
     def execute_report_late_executions(self):
         return report_late_executions()
-
-    @expose
-    def execute_reap_orphan_node_executions(self):
-        """Manually trigger reaping of orphan RUNNING node_executions."""
-        return reap_orphan_node_executions()
 
     @expose
     def execute_report_block_error_rates(self):

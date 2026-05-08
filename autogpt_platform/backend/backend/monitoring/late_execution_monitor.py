@@ -14,28 +14,11 @@ from backend.util.settings import Config
 logger = logging.getLogger(__name__)
 config = Config()
 
-# How long a node_exec must have been RUNNING before it's eligible for reaping.
-# Avoids racing with healthy executions in the brief window between graph
-# terminal-status update and node-task cleanup.
-ORPHAN_REAP_MIN_AGE_SECONDS = 300
-
 
 class LateExecutionException(Exception):
     """Exception raised when late executions are detected."""
 
     pass
-
-
-def reap_orphan_node_executions() -> str:
-    """Mark node_executions as FAILED when their parent graph_execution is
-    already in a terminal state. Returns a status string for logging."""
-    reaped = get_database_manager_client().reap_orphan_node_executions(
-        min_age_seconds=ORPHAN_REAP_MIN_AGE_SECONDS,
-    )
-    msg = f"Reaped {reaped} orphan node executions."
-    if reaped:
-        logger.info(msg)
-    return msg
 
 
 class LateExecutionMonitor:

@@ -5,7 +5,6 @@ from .block_error_monitor import BlockErrorMonitor, report_block_error_rates
 from .late_execution_monitor import (
     LateExecutionException,
     LateExecutionMonitor,
-    reap_orphan_node_executions,
     report_late_executions,
 )
 from .notification_monitor import (
@@ -21,7 +20,6 @@ __all__ = [
     "LateExecutionException",
     "NotificationJobArgs",
     "report_execution_accuracy_alerts",
-    "reap_orphan_node_executions",
     "report_block_error_rates",
     "report_late_executions",
     "process_existing_batches",
