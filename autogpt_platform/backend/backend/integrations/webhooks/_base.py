@@ -2,7 +2,6 @@ import logging
 import secrets
 from abc import ABC, abstractmethod
 from typing import ClassVar, Generic, Optional, TypeVar
-from uuid import uuid4
 
 from fastapi import Request
 from strenum import StrEnum
@@ -11,6 +10,7 @@ import backend.data.integrations as integrations
 from backend.data.model import Credentials
 from backend.integrations.providers import ProviderName
 from backend.util.exceptions import MissingConfigError
+from backend.util.ids import new_uuid
 from backend.util.settings import Config
 
 from .utils import webhook_ingress_url
@@ -204,7 +204,7 @@ class BaseWebhooksManager(ABC, Generic[WT]):
                 "PLATFORM_BASE_URL must be set to use Webhook functionality"
             )
 
-        id = str(uuid4())
+        id = new_uuid()
         secret = secrets.token_hex(32)
         provider_name: ProviderName = self.PROVIDER_NAME
         ingress_url = webhook_ingress_url(provider_name=provider_name, webhook_id=id)
