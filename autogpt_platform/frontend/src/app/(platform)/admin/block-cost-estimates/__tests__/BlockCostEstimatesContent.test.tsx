@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { BlockCostEstimatesContent } from "../components/BlockCostEstimatesContent";
+import type { getV2ExportBlockCostEstimatesResponse200 } from "@/app/api/__generated__/endpoints/admin/admin";
 
 const toastSpy = vi.fn();
 vi.mock("@/components/molecules/Toast/use-toast", () => ({
@@ -28,9 +29,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
-const sampleResponse = {
+const sampleResponse: getV2ExportBlockCostEstimatesResponse200 = {
   status: 200,
   data: {
     estimates: [

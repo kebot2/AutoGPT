@@ -57,10 +57,11 @@ def _load() -> dict[str, BlockPreflightEstimate]:
             "Failed to load %s; preflight estimates disabled",
             _ESTIMATES_PATH.name,
         )
-        # Don't bump _cache_mtime_ns on a failed parse — otherwise a same-mtime
-        # in-place fix (low-resolution FS, atomic-rename to a buffer with the
-        # same timestamp) leaves the empty cache poisoned forever.
-        _cache = {}
+        # Don't update _cache_mtime_ns on failure — a transient read error
+        # (e.g. mid-write truncation, atomic-rename to a same-mtime buffer)
+        # would otherwise pin the empty cache until the file's mtime
+        # changes again. Preserve a previously-good cache when one exists.
+        _cache = _cache if _cache is not None else {}
         return _cache
 
     if not isinstance(raw, dict):
@@ -69,13 +70,10 @@ def _load() -> dict[str, BlockPreflightEstimate]:
             "preflight estimates disabled",
             _ESTIMATES_PATH.name,
         )
-        _cache = {}
-        return _cache
-
-    estimates = raw.get("estimates", {}) or {}
-    loaded: dict[str, BlockPreflightEstimate] = (
-        estimates if isinstance(estimates, dict) else {}
-    )
+        loaded: dict[str, BlockPreflightEstimate] = {}
+    else:
+        estimates = raw.get("estimates", {}) or {}
+        loaded = estimates if isinstance(estimates, dict) else {}
 
     _cache = loaded
     _cache_mtime_ns = current_mtime
