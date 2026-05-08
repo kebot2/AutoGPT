@@ -249,15 +249,22 @@ async def generate_activity_status_for_execution(
             "correctness_score": execution_stats.correctness_score,
         }
 
-    # Acquire an OpenRouter-backed OpenAI client. Activity-status generation is
-    # only meaningful when we can record real USD cost in PlatformCostLog;
-    # without OpenRouter the upstream platform cost would be tokens-only, so
-    # we skip rather than fall back to direct-OpenAI which produces no
-    # provider_cost. Same gating pattern as backend/executor/simulator.py.
+    # Acquire an OpenRouter-backed (or local-transport) OpenAI client.
+    # Activity-status generation under OpenRouter is only meaningful when we
+    # can record real USD cost in PlatformCostLog; without OpenRouter the
+    # upstream platform cost would be tokens-only, so we skip rather than
+    # fall back to direct-OpenAI which produces no provider_cost. Under
+    # ``CHAT_USE_LOCAL=true`` the helper instead returns a client pointed at
+    # the operator's Ollama / vLLM / LiteLLM endpoint and we generate the
+    # status off the local model — there's no provider_cost field on
+    # local-stack usage chunks but the status itself is still useful.
+    # ``None`` means neither path is configured, in which case skip.
+    # Same gating pattern as backend/executor/simulator.py.
     client = get_openai_client(prefer_openrouter=True)
     if client is None:
         logger.debug(
-            "OpenRouter API key not configured, skipping activity status generation"
+            "No LLM client configured (OpenRouter or local) — "
+            "skipping activity status generation"
         )
         return None
 
@@ -323,7 +330,11 @@ async def generate_activity_status_for_execution(
         #   ``use_local`` and is already shaped for the local backend.
         # - ``extra_body={"usage": {"include": True}}`` is OpenRouter's
         #   piggybacked-cost extension; local backends don't implement it
-        #   and may reject the request body.
+        #   and may reject the request body. Swap it for the same
+        #   ``options.num_ctx`` forward ``baseline/service.py`` uses so
+        #   Ollama's OpenAI shim doesn't silently cap context at its 4 k
+        #   default (see ollama/ollama#2714). Non-Ollama OpenAI-compat
+        #   backends ignore unknown ``options`` keys.
         #
         # Same gating pattern as ``backend/copilot/baseline/service.py`` and
         # ``backend/executor/simulator.py`` — keep the three in sync.
@@ -332,7 +343,9 @@ async def generate_activity_status_for_execution(
         is_local_transport = chat_cfg.transport.name == "local"
         if is_local_transport:
             or_model = chat_cfg.title_model
-            extra_body: dict[str, Any] = {}
+            extra_body: dict[str, Any] = {
+                "options": {"num_ctx": chat_cfg.local_num_ctx}
+            }
         else:
             # Model values arriving without a provider prefix (e.g. "gpt-4o-mini")
             # need to be remapped to OpenRouter's namespaced form. Already-prefixed
