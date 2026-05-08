@@ -31,7 +31,11 @@ async def _user_paywalled_handler(_request: Request, exc: UserPaywalledError):
 async def _concurrent_task_limit_handler(
     _request: Request, exc: ConcurrentTaskLimitError
 ):
-    return JSONResponse(status_code=429, content={"detail": str(exc)})
+    return JSONResponse(
+        status_code=429,
+        content={"detail": str(exc)},
+        headers={"Retry-After": "60"},
+    )
 
 
 # Add Prometheus instrumentation

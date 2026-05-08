@@ -1808,6 +1808,22 @@ async def test_add_graph_execution_bypass_paywall_skips_check(
 # ============================================================================
 
 
+def _make_noop_redis_lock(mocker: MockerFixture):
+    """Return a mock get_redis_async whose .lock() is a no-op async context manager."""
+    lock_cm = mocker.MagicMock()
+    lock_cm.__aenter__ = mocker.AsyncMock(return_value=None)
+    lock_cm.__aexit__ = mocker.AsyncMock(return_value=False)
+    # MagicMock (not AsyncMock) so .lock() is a regular callable returning lock_cm,
+    # not an async method that returns a coroutine.
+    mock_redis = mocker.MagicMock()
+    mock_redis.lock.return_value = lock_cm
+    mock_get_redis = mocker.patch(
+        "backend.data.redis_client.get_redis_async",
+        new=mocker.AsyncMock(return_value=mock_redis),
+    )
+    return mock_get_redis
+
+
 @pytest.mark.asyncio
 async def test_add_graph_execution_concurrent_limit_blocks_at_15(
     mocker: MockerFixture,
@@ -1820,6 +1836,11 @@ async def test_add_graph_execution_concurrent_limit_blocks_at_15(
         new=mocker.AsyncMock(return_value=False),
     )
     mocker.patch("backend.executor.utils.prisma").is_connected.return_value = True
+    _make_noop_redis_lock(mocker)
+    mocker.patch(
+        "backend.executor.utils.validate_and_construct_node_execution_input",
+        new=mocker.AsyncMock(return_value=(mocker.MagicMock(version=1), [], {}, set())),
+    )
     mock_edb = mocker.patch("backend.executor.utils.execution_db")
     mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=15)
     mock_edb.create_graph_execution = mocker.AsyncMock()
@@ -1840,24 +1861,23 @@ async def test_add_graph_execution_concurrent_limit_allows_at_14(
         new=mocker.AsyncMock(return_value=False),
     )
     mocker.patch("backend.executor.utils.prisma").is_connected.return_value = True
-    mocker.patch("backend.executor.utils.user_db")
-    mocker.patch("backend.executor.utils.graph_db")
-    mocker.patch("backend.executor.utils.workspace_db")
-    mocker.patch("backend.executor.utils.onboarding_db")
+    _make_noop_redis_lock(mocker)
+    mocker.patch(
+        "backend.executor.utils.validate_and_construct_node_execution_input",
+        new=mocker.AsyncMock(return_value=(mocker.MagicMock(version=1), [], {}, set())),
+    )
     mock_edb = mocker.patch("backend.executor.utils.execution_db")
     mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=14)
-    # Force an early sentinel error after the gate to confirm it was passed.
-    mock_edb.get_graph_execution = mocker.AsyncMock(
+    # Force a sentinel error at create_graph_execution to confirm the limit gate
+    # was passed. No graph_exec_id so this is a genuine new top-level execution.
+    mock_edb.create_graph_execution = mocker.AsyncMock(
         side_effect=RuntimeError("passed limit gate")
     )
-    mock_edb.create_graph_execution = mocker.AsyncMock()
 
     with pytest.raises(RuntimeError, match="passed limit gate"):
-        await add_graph_execution(
-            graph_id="g",
-            user_id="normal-user",
-            graph_exec_id="existing-id",
-        )
+        await add_graph_execution(graph_id="g", user_id="normal-user")
+
+    mock_edb.get_graph_executions_count.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1876,6 +1896,10 @@ async def test_add_graph_execution_concurrent_limit_skipped_for_sub_graphs(
     mocker.patch("backend.executor.utils.graph_db")
     mocker.patch("backend.executor.utils.workspace_db")
     mocker.patch("backend.executor.utils.onboarding_db")
+    mocker.patch(
+        "backend.executor.utils.validate_and_construct_node_execution_input",
+        new=mocker.AsyncMock(return_value=(mocker.MagicMock(version=1), [], {}, set())),
+    )
     mock_edb = mocker.patch("backend.executor.utils.execution_db")
     mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=99)
     mock_edb.create_graph_execution = mocker.AsyncMock(

@@ -12,6 +12,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from backend.blocks import get_block
 from backend.blocks._base import Block, BlockCostType, BlockType
 from backend.copilot.rate_limit import (
+    CONCURRENT_TASK_LIMIT,
     ConcurrentTaskLimitError,
     UserPaywalledError,
     is_user_paywalled,
@@ -528,9 +529,9 @@ async def _validate_node_input_credentials(
             except ValidationError as e:
                 # Validation error means credentials were provided but invalid
                 # This should always be an error, even if optional
-                credential_errors[node.id][
-                    field_name
-                ] = f"{CRED_ERR_INVALID_PREFIX} {e}"
+                credential_errors[node.id][field_name] = (
+                    f"{CRED_ERR_INVALID_PREFIX} {e}"
+                )
                 continue
 
             try:
@@ -541,15 +542,15 @@ async def _validate_node_input_credentials(
             except Exception as e:
                 # Handle any errors fetching credentials
                 # If credentials were explicitly configured but unavailable, it's an error
-                credential_errors[node.id][
-                    field_name
-                ] = f"{CRED_ERR_NOT_AVAILABLE_PREFIX} {e}"
+                credential_errors[node.id][field_name] = (
+                    f"{CRED_ERR_NOT_AVAILABLE_PREFIX} {e}"
+                )
                 continue
 
             if not credentials:
-                credential_errors[node.id][
-                    field_name
-                ] = f"{CRED_ERR_UNKNOWN_PREFIX}{credentials_meta.id}"
+                credential_errors[node.id][field_name] = (
+                    f"{CRED_ERR_UNKNOWN_PREFIX}{credentials_meta.id}"
+                )
                 continue
 
             if (
@@ -659,18 +660,18 @@ async def _validate_node_input_credentials(
                             _mark_optional_skip()
                             continue
                         has_missing_credentials = True
-                        credential_errors[node.id][
-                            field_name
-                        ] = f"{CRED_ERR_NOT_AVAILABLE_PREFIX} {e}"
+                        credential_errors[node.id][field_name] = (
+                            f"{CRED_ERR_NOT_AVAILABLE_PREFIX} {e}"
+                        )
                         continue
                     if not creds:
                         if field_is_optional:
                             _mark_optional_skip()
                             continue
                         has_missing_credentials = True
-                        credential_errors[node.id][
-                            field_name
-                        ] = f"{CRED_ERR_UNKNOWN_PREFIX}{cred_id}"
+                        credential_errors[node.id][field_name] = (
+                            f"{CRED_ERR_UNKNOWN_PREFIX}{cred_id}"
+                        )
 
         # If node has optional credentials and any are missing, skip the
         # node so the executor doesn't try to execute it with None creds.
@@ -1241,20 +1242,13 @@ async def add_graph_execution(
     is_top_level_new_execution = not graph_exec_id and (
         execution_context is None or execution_context.parent_execution_id is None
     )
-    if is_top_level_new_execution:
-        _CONCURRENT_TASK_LIMIT = 15
-        active_count = await edb.get_graph_executions_count(
-            user_id=user_id,
-            statuses=[
-                ExecutionStatus.INCOMPLETE,
-                ExecutionStatus.QUEUED,
-                ExecutionStatus.RUNNING,
-                ExecutionStatus.REVIEW,
-            ],
-            top_level_only=True,
-        )
-        if active_count >= _CONCURRENT_TASK_LIMIT:
-            raise ConcurrentTaskLimitError()
+
+    _active_statuses = [
+        ExecutionStatus.INCOMPLETE,
+        ExecutionStatus.QUEUED,
+        ExecutionStatus.RUNNING,
+        ExecutionStatus.REVIEW,
+    ]
 
     # Get or create the graph execution
     if graph_exec_id:
@@ -1302,18 +1296,48 @@ async def add_graph_execution(
             dry_run=dry_run,
         )
 
-        graph_exec = await edb.create_graph_execution(
-            user_id=user_id,
-            graph_id=graph_id,
-            graph_version=graph.version,
-            inputs=inputs or {},
-            credential_inputs=graph_credentials_inputs,
-            nodes_input_masks=nodes_input_masks,
-            starting_nodes_input=starting_nodes_input,
-            preset_id=preset_id,
-            parent_graph_exec_id=parent_exec_id,
-            is_dry_run=dry_run,
-        )
+        if is_top_level_new_execution:
+            # Acquire a per-user Redis lock so the count check and row insert
+            # are atomic — prevents two simultaneous requests from both reading
+            # count=14 and both sneaking through before either insert lands.
+            from backend.data.redis_client import get_redis_async
+
+            redis = await get_redis_async()
+            lock_key = f"concurrent_task_limit:{user_id}"
+            async with redis.lock(lock_key, timeout=10, blocking_timeout=15):
+                active_count = await edb.get_graph_executions_count(
+                    user_id=user_id,
+                    statuses=_active_statuses,
+                    top_level_only=True,
+                )
+                if active_count >= CONCURRENT_TASK_LIMIT:
+                    raise ConcurrentTaskLimitError()
+
+                graph_exec = await edb.create_graph_execution(
+                    user_id=user_id,
+                    graph_id=graph_id,
+                    graph_version=graph.version,
+                    inputs=inputs or {},
+                    credential_inputs=graph_credentials_inputs,
+                    nodes_input_masks=nodes_input_masks,
+                    starting_nodes_input=starting_nodes_input,
+                    preset_id=preset_id,
+                    parent_graph_exec_id=parent_exec_id,
+                    is_dry_run=dry_run,
+                )
+        else:
+            graph_exec = await edb.create_graph_execution(
+                user_id=user_id,
+                graph_id=graph_id,
+                graph_version=graph.version,
+                inputs=inputs or {},
+                credential_inputs=graph_credentials_inputs,
+                nodes_input_masks=nodes_input_masks,
+                starting_nodes_input=starting_nodes_input,
+                preset_id=preset_id,
+                parent_graph_exec_id=parent_exec_id,
+                is_dry_run=dry_run,
+            )
 
         logger.info(
             f"Created graph execution #{graph_exec.id} for graph "

@@ -486,8 +486,11 @@ class UserPaywalledError(Exception):
         super().__init__(message)
 
 
+CONCURRENT_TASK_LIMIT = 15
+
+
 class ConcurrentTaskLimitError(Exception):
-    """User has reached the maximum number of concurrent active tasks (15).
+    """User has reached the maximum number of concurrent active tasks.
 
     Raised by ``add_graph_execution`` for every entry point so the limit is
     enforced consistently across HTTP routes, external API, and scheduled runs.
@@ -496,7 +499,7 @@ class ConcurrentTaskLimitError(Exception):
 
     def __init__(
         self,
-        message: str = "You've reached the limit of 15 active tasks. Please wait for one of your current tasks to finish before starting a new one.",
+        message: str = f"You've reached the limit of {CONCURRENT_TASK_LIMIT} active tasks. Please wait for one of your current tasks to finish before starting a new one.",
     ) -> None:
         super().__init__(message)
 
