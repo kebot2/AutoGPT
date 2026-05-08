@@ -13,7 +13,6 @@ import {
   ContentMessage,
 } from "../../components/ToolAccordion/AccordionContent";
 import { ToolAccordion } from "../../components/ToolAccordion/ToolAccordion";
-import { ClarificationQuestionsCard } from "./components/ClarificationQuestionsCard";
 import { MiniGame } from "../../components/MiniGame/MiniGame";
 import { SuggestedGoalCard } from "./components/SuggestedGoalCard";
 import {
@@ -23,12 +22,10 @@ import {
   getCreateAgentToolOutput,
   isAgentPreviewOutput,
   isAgentSavedOutput,
-  isClarificationNeededOutput,
   isErrorOutput,
   isSuggestedGoalOutput,
   ToolIcon,
   truncateText,
-  normalizeClarifyingQuestions,
   type CreateAgentToolOutput,
 } from "./helpers";
 
@@ -63,15 +60,6 @@ function getAccordionMeta(output: CreateAgentToolOutput | null) {
       description: `${output.node_count} block${output.node_count === 1 ? "" : "s"}`,
     };
   }
-  if (isClarificationNeededOutput(output)) {
-    const questions = output.questions ?? [];
-    return {
-      icon,
-      title: "Needs clarification",
-      description: `${questions.length} question${questions.length === 1 ? "" : "s"}`,
-      expanded: true,
-    };
-  }
   if (isSuggestedGoalOutput(output)) {
     return {
       icon,
@@ -102,24 +90,6 @@ export function CreateAgentTool({ part }: Props) {
 
   function handleUseSuggestedGoal(goal: string) {
     onSend(`Please create an agent with this goal: ${goal}`);
-  }
-
-  function handleClarificationAnswers(answers: Record<string, string>) {
-    const questions =
-      output && isClarificationNeededOutput(output)
-        ? (output.questions ?? [])
-        : [];
-
-    const contextMessage = questions
-      .map((q) => {
-        const answer = answers[q.keyword] || "";
-        return `> ${q.question}\n\n${answer}`;
-      })
-      .join("\n\n");
-
-    onSend(
-      `**Here are my answers:**\n\n${contextMessage}\n\nPlease proceed with creating the agent.`,
-    );
   }
 
   return (
@@ -154,44 +124,42 @@ export function CreateAgentTool({ part }: Props) {
         />
       )}
 
-      {hasExpandableContent &&
-        !(output && isClarificationNeededOutput(output)) &&
-        !(output && isAgentSavedOutput(output)) && (
-          <ToolAccordion {...getAccordionMeta(output)}>
-            {isOperating && (
-              <ContentGrid>
-                <MiniGame />
-                <ContentHint>
-                  This could take a few minutes — play while you wait!
-                </ContentHint>
-              </ContentGrid>
-            )}
+      {hasExpandableContent && !(output && isAgentSavedOutput(output)) && (
+        <ToolAccordion {...getAccordionMeta(output)}>
+          {isOperating && (
+            <ContentGrid>
+              <MiniGame />
+              <ContentHint>
+                This could take a few minutes — play while you wait!
+              </ContentHint>
+            </ContentGrid>
+          )}
 
-            {output && isAgentPreviewOutput(output) && (
-              <ContentGrid>
-                <ContentMessage>{output.message}</ContentMessage>
-                {output.description?.trim() && (
-                  <ContentCardDescription>
-                    {output.description}
-                  </ContentCardDescription>
-                )}
-                <ContentCodeBlock>
-                  {truncateText(formatMaybeJson(output.agent_json), 1600)}
-                </ContentCodeBlock>
-              </ContentGrid>
-            )}
+          {output && isAgentPreviewOutput(output) && (
+            <ContentGrid>
+              <ContentMessage>{output.message}</ContentMessage>
+              {output.description?.trim() && (
+                <ContentCardDescription>
+                  {output.description}
+                </ContentCardDescription>
+              )}
+              <ContentCodeBlock>
+                {truncateText(formatMaybeJson(output.agent_json), 1600)}
+              </ContentCodeBlock>
+            </ContentGrid>
+          )}
 
-            {output && isSuggestedGoalOutput(output) && (
-              <SuggestedGoalCard
-                message={output.message}
-                suggestedGoal={output.suggested_goal}
-                reason={output.reason}
-                goalType={output.goal_type ?? "vague"}
-                onUseSuggestedGoal={handleUseSuggestedGoal}
-              />
-            )}
-          </ToolAccordion>
-        )}
+          {output && isSuggestedGoalOutput(output) && (
+            <SuggestedGoalCard
+              message={output.message}
+              suggestedGoal={output.suggested_goal}
+              reason={output.reason}
+              goalType={output.goal_type ?? "vague"}
+              onUseSuggestedGoal={handleUseSuggestedGoal}
+            />
+          )}
+        </ToolAccordion>
+      )}
 
       {output && isAgentSavedOutput(output) && (
         <AgentSavedCard
@@ -199,14 +167,6 @@ export function CreateAgentTool({ part }: Props) {
           message="has been saved to your library!"
           libraryAgentLink={output.library_agent_link}
           agentPageLink={output.agent_page_link}
-        />
-      )}
-
-      {output && isClarificationNeededOutput(output) && (
-        <ClarificationQuestionsCard
-          questions={normalizeClarifyingQuestions(output.questions ?? [])}
-          message={output.message}
-          onSubmitAnswers={handleClarificationAnswers}
         />
       )}
     </div>
