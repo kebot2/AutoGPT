@@ -959,6 +959,14 @@ GRAPH_EXECUTION_CANCEL_QUEUE_NAME = "graph_execution_cancel_queue_v2"
 # that allows long-running executions to complete naturally
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 24 * 60 * 60  # 1 day to complete active executions
 
+# Hard cap on a single node_exec's wall-clock runtime. Blocks that loop over
+# many sub-calls (chunked summarizer, agentic loops, retry storms) can compound
+# per-call timeouts into multi-hour worst cases — this is the outer ceiling
+# regardless of internal iteration count. Set to 30 min so legitimate long-tail
+# blocks (large summarizer, deep agent runs) still fit, but a stuck block can't
+# park the executor pool indefinitely.
+NODE_EXECUTION_TIMEOUT_SECONDS = 30 * 60
+
 
 def create_execution_queue_config() -> RabbitMQConfig:
     """

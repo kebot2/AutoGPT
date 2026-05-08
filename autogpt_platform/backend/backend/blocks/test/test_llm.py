@@ -1514,3 +1514,37 @@ class TestLLMRequestTimeout:
             )
 
         assert captured_kwargs.get("timeout") == llm.LLM_REQUEST_TIMEOUT_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_structured_block_does_not_retry_on_timeout(self, monkeypatch):
+        """A timed-out llm_call must not be retried — retrying a hung request
+        wastes another full timeout window per attempt."""
+        monkeypatch.setattr(llm, "LLM_REQUEST_TIMEOUT_SECONDS", 0.05)
+
+        call_count = {"n": 0}
+
+        async def always_timeout(*args, **kwargs):
+            call_count["n"] += 1
+            await asyncio.sleep(60)
+
+        with patch("openai.AsyncOpenAI") as mock_openai:
+            mock_client = AsyncMock()
+            mock_openai.return_value = mock_client
+            mock_client.responses.create = AsyncMock(side_effect=always_timeout)
+
+            block = llm.AIStructuredResponseGeneratorBlock()
+            input_data = llm.AIStructuredResponseGeneratorBlock.Input(
+                prompt="Hello",
+                expected_format={"key": "value"},
+                model=llm.DEFAULT_LLM_MODEL,
+                credentials=llm.TEST_CREDENTIALS_INPUT,  # type: ignore
+                retry=5,  # would be 5 attempts × timeout if retry kicked in
+            )
+
+            with pytest.raises(RuntimeError):
+                async for _ in block.run(input_data, credentials=llm.TEST_CREDENTIALS):
+                    pass
+
+        assert (
+            call_count["n"] == 1
+        ), f"Expected exactly 1 call (no retry on timeout), got {call_count['n']}"

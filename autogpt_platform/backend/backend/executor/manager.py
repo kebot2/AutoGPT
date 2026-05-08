@@ -85,6 +85,7 @@ from .utils import (
     GRAPH_EXECUTION_EXCHANGE,
     GRAPH_EXECUTION_QUEUE_NAME,
     GRAPH_EXECUTION_ROUTING_KEY,
+    NODE_EXECUTION_TIMEOUT_SECONDS,
     CancelExecutionEvent,
     ExecutionOutputEntry,
     LogMetadata,
@@ -615,7 +616,15 @@ class ExecutionProcessor:
         # blocks produce a zero delta; dynamic types (SECOND/ITEMS/COST_USD/
         # TOKENS) settle their post-flight charge or refund here. Dry runs
         # skip reconciliation so simulation never touches the user's wallet.
-        if status == ExecutionStatus.COMPLETED:
+        # Reconcile on FAILED / TERMINATED too — partial work consumed real
+        # provider tokens, and the pre-flight charge should be refunded down
+        # to the actually-tracked usage rather than being absorbed wholesale
+        # by the user.
+        if status in (
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.TERMINATED,
+        ):
             await log_system_credential_cost(
                 node_exec=node_exec,
                 block=node.block,
@@ -705,14 +714,7 @@ class ExecutionProcessor:
                 )
             )
 
-        try:
-            log_metadata.info(f"Start node execution {node_exec.node_exec_id}")
-            await async_update_node_execution_status(
-                db_client=db_client,
-                exec_id=node_exec.node_exec_id,
-                status=ExecutionStatus.RUNNING,
-            )
-
+        async def _drive_execution() -> None:
             async for output_name, output_data in execute_node(
                 node=node,
                 data=node_exec,
@@ -723,8 +725,36 @@ class ExecutionProcessor:
             ):
                 await persist_output(output_name, output_data)
 
+        try:
+            log_metadata.info(f"Start node execution {node_exec.node_exec_id}")
+            await async_update_node_execution_status(
+                db_client=db_client,
+                exec_id=node_exec.node_exec_id,
+                status=ExecutionStatus.RUNNING,
+            )
+
+            # Hard outer wall-clock cap on the block's run. Per-LLM-call
+            # timeouts and per-call retry classifiers handle their own bounds,
+            # but a block that loops over many sub-calls can compound those
+            # into hours. This is the executor-level ceiling so the pool can't
+            # be parked by a single runaway block.
+            await asyncio.wait_for(
+                _drive_execution(),
+                timeout=NODE_EXECUTION_TIMEOUT_SECONDS,
+            )
+
             log_metadata.info(f"Finished node execution {node_exec.node_exec_id}")
             status = ExecutionStatus.COMPLETED
+
+        except asyncio.TimeoutError as e:
+            stats.error = TimeoutError(
+                f"Node execution exceeded {NODE_EXECUTION_TIMEOUT_SECONDS}s wall-clock cap"
+            )
+            log_metadata.warning(
+                f"Node execution {node_exec.node_exec_id} timed out after "
+                f"{NODE_EXECUTION_TIMEOUT_SECONDS}s — marking FAILED"
+            )
+            status = ExecutionStatus.FAILED
 
         except BaseException as e:
             stats.error = e

@@ -57,10 +57,13 @@ fmt = TextFormatter(autoescape=False)
 # HTTP status codes for user-caused errors that should not be reported to Sentry.
 USER_ERROR_STATUS_CODES = (401, 403, 429)
 
-# Hard cap on a single provider HTTP request. Without this, a stalled connection
-# parks the executor thread until the pod's terminationGracePeriodSeconds expires
-# (24h in prod), and the orphan node_exec rows linger as RUNNING.
-LLM_REQUEST_TIMEOUT_SECONDS = 600
+# Hard cap on a single provider HTTP request. Healthy non-streaming Responses /
+# Messages calls finish in seconds; anything past this is almost certainly a
+# stalled socket (server keeping connection alive but starving response bytes,
+# which the SDK's read-timeout doesn't reliably detect on its own). Lower than
+# the SDK defaults (typically 600s) so retries-on-timeout don't compound into
+# multi-hour worst cases when a block makes many sequential calls.
+LLM_REQUEST_TIMEOUT_SECONDS = 120
 
 LLMProviderName = Literal[
     ProviderName.AIML_API,
@@ -1713,8 +1716,15 @@ class AIStructuredResponseGeneratorBlock(AIBlockBase):
                     logger.warning(f"Error calling LLM: {e}")
                     error_feedback_message = f"Error calling LLM: {e}"
                     break
-                else:
-                    logger.exception(f"Error calling LLM: {e}")
+                if isinstance(e, TimeoutError):
+                    # A request that hung once will most likely hang again on
+                    # retry — the underlying issue (server-side starvation,
+                    # network partition, etc.) doesn't clear on a fresh socket.
+                    # Skip retries to avoid the N×timeout wait cascade.
+                    logger.warning(f"LLM call timed out, not retrying: {e}")
+                    error_feedback_message = f"Error calling LLM: {e}"
+                    break
+                logger.exception(f"Error calling LLM: {e}")
                 if (
                     "maximum context length" in str(e).lower()
                     or "token limit" in str(e).lower()
