@@ -471,6 +471,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_graph_execution = d.get_graph_execution
     get_graph_execution_meta = d.get_graph_execution_meta
     get_graph_executions = d.get_graph_executions
+    get_graph_executions_count = d.get_graph_executions_count
     get_node_execution = d.get_node_execution
     get_node_executions = d.get_node_executions
     update_graph_execution_stats = d.update_graph_execution_stats

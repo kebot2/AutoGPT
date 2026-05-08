@@ -53,7 +53,7 @@ from backend.api.features.library.exceptions import (
     FolderValidationError,
 )
 from backend.blocks.llm import DEFAULT_LLM_MODEL
-from backend.copilot.rate_limit import UserPaywalledError
+from backend.copilot.rate_limit import ConcurrentTaskLimitError, UserPaywalledError
 from backend.data.model import Credentials
 from backend.integrations.providers import ProviderName
 from backend.monitoring.instrumentation import instrument_fastapi
@@ -314,6 +314,9 @@ app.add_exception_handler(ValueError, handle_internal_http_error(400))
 # server's perspective — the user just lacks entitlement.
 app.add_exception_handler(
     UserPaywalledError, handle_internal_http_error(402, log_error=False)
+)
+app.add_exception_handler(
+    ConcurrentTaskLimitError, handle_internal_http_error(429, log_error=False)
 )
 app.add_exception_handler(PreconditionFailed, handle_internal_http_error(428))
 app.add_exception_handler(Exception, handle_internal_http_error(500))

@@ -618,6 +618,7 @@ async def get_graph_executions_count(
     started_time_lte: Optional[datetime] = None,
     updated_time_gte: Optional[datetime] = None,
     updated_time_lte: Optional[datetime] = None,
+    top_level_only: bool = False,
 ) -> int:
     """
     Get count of graph executions with optional filters.
@@ -666,6 +667,9 @@ async def get_graph_executions_count(
 
     if statuses:
         where_filter["OR"] = [{"executionStatus": status} for status in statuses]
+
+    if top_level_only:
+        where_filter["parentGraphExecutionId"] = None
 
     count = await AgentGraphExecution.prisma().count(where=where_filter)
     return count

@@ -1800,3 +1800,91 @@ async def test_add_graph_execution_bypass_paywall_skips_check(
         )
 
     paywall_mock.assert_not_called()
+
+
+# ============================================================================
+# Concurrent task limit: users with 15+ active top-level executions must be
+# rejected before any new execution is created.
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_add_graph_execution_concurrent_limit_blocks_at_15(
+    mocker: MockerFixture,
+):
+    """User at exactly 15 active top-level executions is rejected."""
+    from backend.copilot.rate_limit import ConcurrentTaskLimitError
+
+    mocker.patch(
+        "backend.executor.utils.is_user_paywalled",
+        new=mocker.AsyncMock(return_value=False),
+    )
+    mocker.patch("backend.executor.utils.prisma").is_connected.return_value = True
+    mock_edb = mocker.patch("backend.executor.utils.execution_db")
+    mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=15)
+    mock_edb.create_graph_execution = mocker.AsyncMock()
+
+    with pytest.raises(ConcurrentTaskLimitError):
+        await add_graph_execution(graph_id="g", user_id="heavy-user")
+
+    mock_edb.create_graph_execution.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_graph_execution_concurrent_limit_allows_at_14(
+    mocker: MockerFixture,
+):
+    """User with 14 active tasks is allowed past the concurrent limit gate."""
+    mocker.patch(
+        "backend.executor.utils.is_user_paywalled",
+        new=mocker.AsyncMock(return_value=False),
+    )
+    mocker.patch("backend.executor.utils.prisma").is_connected.return_value = True
+    mocker.patch("backend.executor.utils.user_db")
+    mocker.patch("backend.executor.utils.graph_db")
+    mocker.patch("backend.executor.utils.workspace_db")
+    mocker.patch("backend.executor.utils.onboarding_db")
+    mock_edb = mocker.patch("backend.executor.utils.execution_db")
+    mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=14)
+    # Force an early sentinel error after the gate to confirm it was passed.
+    mock_edb.get_graph_execution = mocker.AsyncMock(
+        side_effect=RuntimeError("passed limit gate")
+    )
+    mock_edb.create_graph_execution = mocker.AsyncMock()
+
+    with pytest.raises(RuntimeError, match="passed limit gate"):
+        await add_graph_execution(
+            graph_id="g",
+            user_id="normal-user",
+            graph_exec_id="existing-id",
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_graph_execution_concurrent_limit_skipped_for_sub_graphs(
+    mocker: MockerFixture,
+):
+    """Sub-graph executions (execution_context with a parent) bypass the limit."""
+    from backend.data.execution import ExecutionContext
+
+    mocker.patch(
+        "backend.executor.utils.is_user_paywalled",
+        new=mocker.AsyncMock(return_value=False),
+    )
+    mocker.patch("backend.executor.utils.prisma").is_connected.return_value = True
+    mocker.patch("backend.executor.utils.user_db")
+    mocker.patch("backend.executor.utils.graph_db")
+    mocker.patch("backend.executor.utils.workspace_db")
+    mocker.patch("backend.executor.utils.onboarding_db")
+    mock_edb = mocker.patch("backend.executor.utils.execution_db")
+    mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=99)
+    mock_edb.create_graph_execution = mocker.AsyncMock(
+        side_effect=RuntimeError("reached create")
+    )
+
+    ctx = ExecutionContext(parent_execution_id="parent-exec")
+
+    with pytest.raises(RuntimeError, match="reached create"):
+        await add_graph_execution(graph_id="g", user_id="user", execution_context=ctx)
+
+    mock_edb.get_graph_executions_count.assert_not_called()

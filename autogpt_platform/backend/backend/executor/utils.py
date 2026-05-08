@@ -11,7 +11,11 @@ from pydantic import BaseModel, JsonValue, ValidationError
 
 from backend.blocks import get_block
 from backend.blocks._base import Block, BlockCostType, BlockType
-from backend.copilot.rate_limit import UserPaywalledError, is_user_paywalled
+from backend.copilot.rate_limit import (
+    ConcurrentTaskLimitError,
+    UserPaywalledError,
+    is_user_paywalled,
+)
 from backend.data import execution as execution_db
 from backend.data import graph as graph_db
 from backend.data import human_review as human_review_db
@@ -1233,6 +1237,24 @@ async def add_graph_execution(
         wdb = workspace_db
     else:
         edb = udb = gdb = odb = wdb = get_database_manager_async_client()
+
+    is_top_level_new_execution = not graph_exec_id and (
+        execution_context is None or execution_context.parent_execution_id is None
+    )
+    if is_top_level_new_execution:
+        _CONCURRENT_TASK_LIMIT = 15
+        active_count = await edb.get_graph_executions_count(
+            user_id=user_id,
+            statuses=[
+                ExecutionStatus.INCOMPLETE,
+                ExecutionStatus.QUEUED,
+                ExecutionStatus.RUNNING,
+                ExecutionStatus.REVIEW,
+            ],
+            top_level_only=True,
+        )
+        if active_count >= _CONCURRENT_TASK_LIMIT:
+            raise ConcurrentTaskLimitError()
 
     # Get or create the graph execution
     if graph_exec_id:

@@ -486,6 +486,21 @@ class UserPaywalledError(Exception):
         super().__init__(message)
 
 
+class ConcurrentTaskLimitError(Exception):
+    """User has reached the maximum number of concurrent active tasks (15).
+
+    Raised by ``add_graph_execution`` for every entry point so the limit is
+    enforced consistently across HTTP routes, external API, and scheduled runs.
+    Maps to HTTP 429 in the API layer.
+    """
+
+    def __init__(
+        self,
+        message: str = "You've reached the limit of 15 active tasks. Please wait for one of your current tasks to finish before starting a new one.",
+    ) -> None:
+        super().__init__(message)
+
+
 async def get_usage_status(
     user_id: str,
     daily_cost_limit: int,
