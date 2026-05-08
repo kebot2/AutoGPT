@@ -1300,31 +1300,38 @@ async def add_graph_execution(
             # Acquire a per-user Redis lock so the count check and row insert
             # are atomic — prevents two simultaneous requests from both reading
             # count=14 and both sneaking through before either insert lands.
+            from redis.exceptions import LockError
+
             from backend.data.redis_client import get_redis_async
 
             redis = await get_redis_async()
             lock_key = f"concurrent_task_limit:{user_id}"
-            async with redis.lock(lock_key, timeout=10, blocking_timeout=15):
-                active_count = await edb.get_graph_executions_count(
-                    user_id=user_id,
-                    statuses=_active_statuses,
-                    top_level_only=True,
-                )
-                if active_count >= CONCURRENT_TASK_LIMIT:
-                    raise ConcurrentTaskLimitError()
+            try:
+                async with redis.lock(lock_key, timeout=10, blocking_timeout=15):
+                    active_count = await edb.get_graph_executions_count(
+                        user_id=user_id,
+                        statuses=_active_statuses,
+                        top_level_only=True,
+                    )
+                    if active_count >= CONCURRENT_TASK_LIMIT:
+                        raise ConcurrentTaskLimitError()
 
-                graph_exec = await edb.create_graph_execution(
-                    user_id=user_id,
-                    graph_id=graph_id,
-                    graph_version=graph.version,
-                    inputs=inputs or {},
-                    credential_inputs=graph_credentials_inputs,
-                    nodes_input_masks=nodes_input_masks,
-                    starting_nodes_input=starting_nodes_input,
-                    preset_id=preset_id,
-                    parent_graph_exec_id=parent_exec_id,
-                    is_dry_run=dry_run,
-                )
+                    graph_exec = await edb.create_graph_execution(
+                        user_id=user_id,
+                        graph_id=graph_id,
+                        graph_version=graph.version,
+                        inputs=inputs or {},
+                        credential_inputs=graph_credentials_inputs,
+                        nodes_input_masks=nodes_input_masks,
+                        starting_nodes_input=starting_nodes_input,
+                        preset_id=preset_id,
+                        parent_graph_exec_id=parent_exec_id,
+                        is_dry_run=dry_run,
+                    )
+            except ConcurrentTaskLimitError:
+                raise
+            except LockError:
+                raise ConcurrentTaskLimitError()
         else:
             graph_exec = await edb.create_graph_execution(
                 user_id=user_id,
