@@ -394,6 +394,7 @@ async def test_add_graph_execution_is_repeatable(mocker: MockerFixture):
         nodes_to_skip,
     )
     mock_prisma.is_connected.return_value = True
+    mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=0)
     mock_edb.create_graph_execution = mocker.AsyncMock(return_value=mock_graph_exec)
     mock_edb.update_graph_execution_stats = mocker.AsyncMock(
         return_value=mock_graph_exec
@@ -548,6 +549,7 @@ async def test_add_graph_execution_via_rpc_returns_typed_user(
             human_in_the_loop_safe_mode=False, sensitive_action_safe_mode=False
         )
     )
+    mock_db_client.get_graph_executions_count = mocker.AsyncMock(return_value=0)
     mock_db_client.create_graph_execution = mocker.AsyncMock(
         return_value=mock_graph_exec
     )
@@ -773,6 +775,7 @@ async def test_add_graph_execution_with_nodes_to_skip(mocker: MockerFixture):
         nodes_to_skip,  # This should be passed through
     )
     mock_prisma.is_connected.return_value = True
+    mock_edb.get_graph_executions_count = mocker.AsyncMock(return_value=0)
     mock_edb.create_graph_execution = mocker.AsyncMock(return_value=mock_graph_exec)
     mock_edb.update_graph_execution_stats = mocker.AsyncMock(
         return_value=mock_graph_exec
