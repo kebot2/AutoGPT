@@ -1,5 +1,4 @@
 import logging
-import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Self, cast
@@ -28,6 +27,7 @@ from backend.data.graph import GraphSettings
 from backend.data.redis_client import get_redis_async
 from backend.util import json
 from backend.util.exceptions import DatabaseError, NotFoundError, RedisError
+from backend.util.ids import new_uuid
 
 from .config import ChatConfig
 
@@ -236,7 +236,7 @@ class ChatSession(ChatSessionInfo):
         builder_graph_id: str | None = None,
     ) -> Self:
         return cls(
-            session_id=str(uuid.uuid4()),
+            session_id=new_uuid(),
             user_id=user_id,
             title=None,
             messages=[],

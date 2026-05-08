@@ -572,7 +572,7 @@ class UserCreditBase(ABC):
                         $4::jsonb,
                         $5::boolean,
                         COALESCE(balance_update."updatedAt", CURRENT_TIMESTAMP),
-                        COALESCE($9, gen_random_uuid()::text)
+                        COALESCE($9, uuid_generate_v7()::text)
                     FROM user_balance_lock
                     LEFT JOIN balance_update ON true
                     WHERE (
