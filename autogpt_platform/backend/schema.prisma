@@ -345,8 +345,8 @@ model AgentGraph {
   LibraryAgents        LibraryAgent[]
   StoreListingVersions StoreListingVersion[]
 
-  // Tenancy columns
-  organizationId String
+  // Tenancy columns (nullable until cutover migration backfills existing data)
+  organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
   Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -685,8 +685,8 @@ model AgentGraphExecution {
   sharedAt             DateTime?
   SharedExecutionFiles SharedExecutionFile[]
 
-  // Tenancy
-  organizationId String
+  // Tenancy (nullable until cutover migration backfills existing data)
+  organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
   Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -1267,11 +1267,11 @@ model StoreListing {
   // Relations
   Versions StoreListingVersion[] @relation("ListingVersions")
 
-  // Tenancy — owningOrgId is the canonical owner
-  owningOrgId String
-  OwningOrg   Organization @relation("OrgStoreListings", fields: [owningOrgId], references: [id])
+  // Tenancy — owningOrgId will be NOT NULL after cutover migration
+  owningOrgId String?
+  OwningOrg   Organization? @relation("OrgStoreListings", fields: [owningOrgId], references: [id])
 
-  @@unique([owningOrgId, slug])
+  @@unique([owningUserId, slug])
   // Used in the view query
   @@index([isDeleted, hasApprovedVersion])
   @@index([owningOrgId])
