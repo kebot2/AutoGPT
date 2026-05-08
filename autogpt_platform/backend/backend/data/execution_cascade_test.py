@@ -5,6 +5,7 @@ import pytest
 from backend.blocks._base import DEFAULT_BLOCK_EXECUTION_TIMEOUT_SECONDS
 from backend.blocks.agent import AgentExecutorBlock
 from backend.blocks.autopilot import AutoPilotBlock
+from backend.blocks.orchestrator import OrchestratorBlock
 from backend.data.execution import ExecutionStatus, update_graph_execution_stats
 
 
@@ -20,10 +21,12 @@ def test_default_block_has_execution_timeout():
 
 
 def test_coordination_blocks_opt_out_of_timeout():
-    """AgentExecutorBlock and AutoPilotBlock must not have a wall-clock cap;
-    they wait on sub-graphs that have their own per-node timeouts."""
+    """Coordination blocks must not have a wall-clock cap — they wait on
+    sub-graphs / multi-iteration agentic loops that have their own per-call
+    timeouts and per-node-exec caps in the child graph."""
     assert AgentExecutorBlock().execution_timeout_seconds is None
     assert AutoPilotBlock().execution_timeout_seconds is None
+    assert OrchestratorBlock().execution_timeout_seconds is None
 
 
 @pytest.mark.asyncio

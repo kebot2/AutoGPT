@@ -376,6 +376,13 @@ class OrchestratorBlock(Block):
     re-raise carve-out for this reason.
     """
 
+    # Coordination block: in agent mode (`agent_mode_max_iterations` != 0) this
+    # is a multi-iteration LLM tool-calling loop that can dispatch sub-graphs
+    # and run for hours legitimately. Per-LLM-call timeouts and the iteration
+    # count cap bound the work; the leaf-block wall-clock cap would
+    # false-positive on long but healthy runs.
+    execution_timeout_seconds: int | None = None
+
     # OrchestratorBlock bills via BlockCostType.TOKENS + compute_token_credits,
     # which aggregates input_token_count / output_token_count / cache_read /
     # cache_creation across every LLM iteration into one post-flight charge.
