@@ -931,6 +931,11 @@ def test_result_orphan_tool_use_then_empty_assistant_emits_empty_completion():
     # StreamFinish is required so ``acc.stream_completed`` flips True and
     # the post-stream branch doesn't append a second STREAM_INCOMPLETE_MARKER.
     assert "StreamFinish" in types, types
+    # Wire-order pin (mirrors ``test_result_empty_success_emits_error_and_finish``):
+    # the open step must be closed before the error marker, and the marker
+    # must precede StreamFinish.
+    assert types.index("StreamFinishStep") < types.index("StreamError"), types
+    assert types.index("StreamError") < types.index("StreamFinish"), types
 
 
 def test_result_orphan_tool_use_with_thinking_only_assistant_does_not_fire():
