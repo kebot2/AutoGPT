@@ -480,7 +480,7 @@ async def execute_graph_block(
         raise HTTPException(status_code=404, detail="User not found.")
 
     try:
-        charged_cost = await execution_utils.charge_for_direct_block_execution(
+        await execution_utils.charge_for_direct_block_execution(
             user_id=user_id, block=obj, input_data=data, source="internal"
         )
     except InsufficientBalanceError as e:
@@ -507,22 +507,11 @@ async def execute_graph_block(
         )
 
         return output
-    except (Exception, asyncio.CancelledError) as exec_err:
-        # Record failed block execution + best-effort billing-leak log.
-        # Matches the no-refund convention of the graph executor /
-        # copilot tool helper: charge stays in place, leak logged for
-        # observability, original exception re-raised.
+    except Exception:
+        # Record failed block execution
         duration = time.time() - start_time
         block_type = obj.__class__.__name__
         record_block_execution(block_type=block_type, status="error", duration=duration)
-        execution_utils.log_direct_block_execution_billing_leak(
-            user_id=user_id,
-            block_id=obj.id,
-            block_name=obj.name,
-            cost=charged_cost,
-            source="internal",
-            error=exec_err,
-        )
         raise
 
 

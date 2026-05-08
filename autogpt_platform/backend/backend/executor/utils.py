@@ -58,11 +58,6 @@ from backend.util.type import coerce_inputs_to_schema
 
 config = Config()
 logger = TruncatedLogger(logging.getLogger(__name__), prefix="[GraphExecutorUtil]")
-# Plain stdlib logger for the billing-leak observability call site.
-# TruncatedLogger.warning() doesn't do %-formatting and accepts only
-# (msg, **extra) — the leak-log path needs the stdlib (msg, *args, extra=)
-# signature so %s placeholders + json_fields both flow through.
-_leak_logger = logging.getLogger(__name__)
 
 # ============ Resource Helpers ============ #
 
@@ -205,7 +200,7 @@ async def charge_for_direct_block_execution(
     input_data: BlockInput,
     *,
     source: Literal["internal", "external"],
-) -> int:
+) -> None:
     """Pre-flight charge for a direct block-execute API call.
 
     Shared by both ``POST /api/blocks/{id}/execute`` (internal UI) and
@@ -214,11 +209,6 @@ async def charge_for_direct_block_execution(
     and 402 mapping. ``source`` is recorded in the credit-history
     ``reason`` so transactions remain attributable to the originating
     surface.
-
-    Returns the charged cost (0 for free / dynamic-cost blocks) so
-    callers can attribute a downstream ``execute()`` failure to a
-    specific charge in observability logs (see
-    :func:`log_direct_block_execution_billing_leak`).
 
     Dynamic-cost blocks (TOKENS / COST_USD / SECOND / ITEMS) return 0
     from ``block_usage_cost`` pre-flight and are NOT charged on this
@@ -257,7 +247,7 @@ async def charge_for_direct_block_execution(
 
     cost, cost_filter = block_usage_cost(block, input_data)
     if cost <= 0:
-        return 0
+        return
     credit_model = await get_user_credit_model(user_id)
     await credit_model.spend_credits(
         user_id=user_id,
@@ -268,61 +258,6 @@ async def charge_for_direct_block_execution(
             input=cost_filter,
             reason=f"Direct {source} block execution of {block.name}",
         ),
-    )
-    return cost
-
-
-def log_direct_block_execution_billing_leak(
-    *,
-    user_id: str,
-    block_id: str,
-    block_name: str,
-    cost: int,
-    source: Literal["internal", "external"],
-    error: BaseException,
-) -> None:
-    """Observability log when ``obj.execute()`` raises after a pre-flight
-    charge on the direct block-execute API.
-
-    No-op if ``cost == 0`` (free / dynamic-cost block — nothing to leak).
-    Mirrors the structured-log shape of
-    ``backend/copilot/tools/helpers.py:_charge_block_credits`` so a
-    single dashboards/alerting query covers both surfaces.
-
-    Best-effort observability only — does NOT refund the charge.
-    Matches the no-refund convention of the graph executor and the
-    copilot tool helper: users pay for invocations, not outcomes.
-    """
-    if cost <= 0:
-        return
-    leak_type = (
-        "EXECUTE_CANCELLED"
-        if isinstance(error, asyncio.CancelledError)
-        else "EXECUTE_FAILED"
-    )
-    # Use stdlib logger (not module-level TruncatedLogger) so %-formatting
-    # and `extra={"json_fields": ...}` flow through unchanged. Mirrors
-    # backend/copilot/tools/helpers.py:_charge_block_credits.
-    _leak_logger.warning(
-        "BILLING_LEAK[%s]: direct %s block execution charged but execute() raised — "
-        "user_id=%s, block_id=%s, cost=%s: %s",
-        leak_type,
-        source,
-        user_id,
-        block_id,
-        cost,
-        error,
-        extra={
-            "json_fields": {
-                "billing_leak": True,
-                "leak_type": leak_type,
-                "source": source,
-                "user_id": user_id,
-                "block_id": block_id,
-                "block_name": block_name,
-                "cost": str(cost),
-            }
-        },
     )
 
 
