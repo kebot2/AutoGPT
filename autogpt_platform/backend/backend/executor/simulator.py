@@ -158,9 +158,7 @@ async def _call_llm_for_simulation(
     from backend.copilot.sdk.env import config as chat_cfg
 
     if chat_cfg.transport.name == "local":
-        extra_body: dict[str, Any] | None = {
-            "options": {"num_ctx": chat_cfg.local_num_ctx}
-        }
+        extra_body: dict[str, Any] = {"options": {"num_ctx": chat_cfg.local_num_ctx}}
     else:
         extra_body = _OPENROUTER_INCLUDE_USAGE_COST
 
@@ -176,9 +174,8 @@ async def _call_llm_for_simulation(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
+                "extra_body": extra_body,
             }
-            if extra_body is not None:
-                create_kwargs["extra_body"] = extra_body
             response = await client.chat.completions.create(**create_kwargs)
             if not response.choices:
                 raise ValueError("LLM returned empty choices array")
