@@ -143,7 +143,7 @@ async def create_orgs_for_existing_users() -> int:
         # Create TeamMember
         await prisma.teammember.create(
             data={
-                "Workspace": {"connect": {"id": workspace.id}},
+                "Team": {"connect": {"id": workspace.id}},
                 "User": {"connect": {"id": user_id}},
                 "isAdmin": True,
                 "status": "ACTIVE",
