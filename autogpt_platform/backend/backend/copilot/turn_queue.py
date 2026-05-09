@@ -277,17 +277,14 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # independent conversation contexts.
     busy_sessions = await get_running_session_ids(user_id)
     queued = await chat_db().list_queued_turns_for_user(user_id)
-    head = next(
-        (
-            r
-            for r in queued
-            if r.id is not None
-            and r.session_id is not None
-            and r.session_id not in busy_sessions
-        ),
-        None,
-    )
-    if head is None:
+    head_id: str | None = None
+    head_session_id: str | None = None
+    for r in queued:
+        if r.id and r.session_id and r.session_id not in busy_sessions:
+            head_id = r.id
+            head_session_id = r.session_id
+            break
+    if head_id is None or head_session_id is None:
         return False
 
     if await is_user_paywalled(user_id):
@@ -297,7 +294,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         logger.info(
             "dispatch_next_for_user: user=%s paywalled, leaving message=%s queued",
             user_id,
-            head.id,
+            head_id,
         )
         return False
 
@@ -320,7 +317,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
             "dispatch_next_for_user: user=%s rate-limited (%s), leaving message=%s queued",
             user_id,
             exc,
-            head.id,
+            head_id,
         )
         return False
     except RateLimitUnavailable:
@@ -335,7 +332,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # between validation and claim must reject this dispatch, not promote
     # a *different* (unvalidated) row that happens to be next in the
     # queue.
-    row = await claim_queued_turn_by_id(head.id)
+    row = await claim_queued_turn_by_id(head_id)
     if row is None or row.id is None or row.session_id is None:
         # ``head`` was cancelled / blocked / claimed by a concurrent
         # dispatcher. Caller's loop decides whether to retry; the next
