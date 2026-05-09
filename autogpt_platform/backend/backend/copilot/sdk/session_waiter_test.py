@@ -142,6 +142,10 @@ async def test_idle_session_enqueues_normally():
             new=AsyncMock(return_value=False),
         ),
         patch(
+            "backend.copilot.turn_queue.count_inflight_turns",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",
             new=create_session,
         ),
@@ -189,6 +193,10 @@ async def test_idle_session_concurrent_turn_cap_returns_rejected_outcome():
         patch(
             "backend.copilot.executor.utils.acquire_turn_slot",
             side_effect=ConcurrentTurnLimitError(),
+        ),
+        patch(
+            "backend.copilot.turn_queue.count_inflight_turns",
+            new=AsyncMock(return_value=0),
         ),
         patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",

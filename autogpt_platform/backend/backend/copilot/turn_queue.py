@@ -296,14 +296,36 @@ async def mark_queued_turn_blocked(*, message_id: str, reason: str) -> None:
             await invalidate_session_cache(row.sessionId)
 
 
-async def claim_next_queued_turn(user_id: str) -> ChatMessage | None:
-    """Atomically pop the user's oldest queued row and clear its queue
-    columns — the row becomes a normal chat message and the dispatcher
-    proceeds to schedule the turn.
+async def claim_queued_turn_by_id(message_id: str) -> ChatMessage | None:
+    """Atomically claim the specific queued row identified by
+    ``message_id`` (clear ``queueStatus`` and stamp ``queueStartedAt``).
+    Returns the claimed row, or ``None`` if it was cancelled / blocked /
+    already claimed by a concurrent dispatcher between the gate check
+    and this call.
 
-    Two concurrent dispatchers see only one win the row; the loser
-    sees ``None`` (the conditional ``UPDATE WHERE queueStatus='queued'``
-    only matches the still-queued row).
+    The caller passes the exact ``message_id`` they validated (paywall,
+    rate-limit) so a parallel cancel of the validated head doesn't
+    silently promote a *different* — unvalidated — queued row.
+    """
+    claimed = await ChatMessage.prisma().update_many(
+        where={"id": message_id, "queueStatus": STATUS_QUEUED},
+        data={"queueStatus": None, "queueStartedAt": datetime.now(timezone.utc)},
+    )
+    if claimed == 0:
+        return None
+    return await ChatMessage.prisma().find_unique(where={"id": message_id})
+
+
+async def claim_next_queued_turn(user_id: str) -> ChatMessage | None:
+    """Find the user's oldest queued row and claim it atomically.
+
+    Convenience wrapper — finds head then delegates to
+    :func:`claim_queued_turn_by_id`. Two concurrent dispatchers see only
+    one win the row; the loser sees ``None``.
+
+    Prefer :func:`claim_queued_turn_by_id` directly when the caller has
+    already validated a specific row, so a parallel cancel doesn't
+    promote a *different*, unvalidated row.
     """
     head = await ChatMessage.prisma().find_first(
         where={
@@ -423,11 +445,15 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         )
         return False
 
-    row = await claim_next_queued_turn(user_id)
+    # Claim by the validated head's id, NOT find-then-claim-head: a
+    # parallel cancel of ``head`` between validation and claim would
+    # otherwise let ``claim_next_queued_turn`` claim a *different* row
+    # that never went through paywall / rate-limit re-validation.
+    row = await claim_queued_turn_by_id(head.id)
     if row is None:
-        # Cancelled or lost-race after the head check. Caller's loop
-        # decides whether to retry; the next slot-free event will fire
-        # this again anyway.
+        # ``head`` was cancelled / blocked / claimed by a concurrent
+        # dispatcher. Caller's loop decides whether to retry; the next
+        # slot-free event will fire this again anyway.
         return False
 
     metadata = _decode_metadata(row.queueMetadata)
