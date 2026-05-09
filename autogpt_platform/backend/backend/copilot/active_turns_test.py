@@ -142,9 +142,13 @@ async def test_count_active_turns_returns_zero_on_redis_error(
 def test_default_limit_is_15() -> None:
     """Default hard cap. Operators can override via the
     ``max_concurrent_copilot_turns_per_user`` setting; this test pins the
-    default-without-override value so a config drift doesn't silently
-    relax the abuse-protection cap."""
-    assert get_concurrent_turn_limit() == 15
+    schema default so a config drift doesn't silently relax the
+    abuse-protection cap. Reads the field default directly so a local
+    ``.env`` override (e.g. lower cap for development) doesn't break
+    the assertion."""
+    from backend.util.settings import Config
+
+    assert Config.model_fields["max_concurrent_copilot_turns_per_user"].default == 15
 
 
 # ── acquire_turn_slot context manager ─────────────────────────────────
