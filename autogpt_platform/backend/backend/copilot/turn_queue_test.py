@@ -12,6 +12,18 @@ import pytest
 
 from backend.copilot import turn_queue
 
+
+class _NoopAsyncCM:
+    """Stand-in for the Redis NX session lock context manager. The lock
+    only matters in production for cross-replica serialisation; in unit
+    tests there's no concurrent submitter so we just no-op."""
+
+    async def __aenter__(self):
+        return True
+
+    async def __aexit__(self, *exc):
+        return None
+
 # ── enqueue_turn payload encoding ──────────────────────────────────────
 
 
@@ -22,17 +34,30 @@ async def test_enqueue_turn_packs_metadata_into_queue_metadata_json() -> None:
     ``queueMetadata`` JSON column so the dispatcher can replay the
     original turn shape later."""
     create = AsyncMock(return_value=MagicMock(id="msg-1"))
-    with patch.object(
-        turn_queue.ChatMessage,
-        "prisma",
-        return_value=MagicMock(create=create),
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(create=create),
+        ),
+        patch(
+            "backend.copilot.db.get_next_sequence",
+            new=AsyncMock(return_value=42),
+        ),
+        patch(
+            "backend.copilot.model._get_session_lock",
+            return_value=_NoopAsyncCM(),
+        ),
+        patch(
+            "backend.copilot.model.invalidate_session_cache",
+            new=AsyncMock(),
+        ),
     ):
         await turn_queue.enqueue_turn(
             user_id="u1",
             session_id="s1",
             message="hello",
             message_id="msg-1",
-            sequence=42,
             context={"url": "https://example.com"},
             file_ids=["f1", "f2"],
             mode="extended_thinking",
@@ -62,16 +87,29 @@ async def test_enqueue_turn_omits_null_fields_from_metadata() -> None:
     ``queueMetadata`` NULL rather than an empty object — keeps the
     column tiny on the hot ChatMessage table."""
     create = AsyncMock(return_value=MagicMock(id="msg-1"))
-    with patch.object(
-        turn_queue.ChatMessage,
-        "prisma",
-        return_value=MagicMock(create=create),
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(create=create),
+        ),
+        patch(
+            "backend.copilot.db.get_next_sequence",
+            new=AsyncMock(return_value=1),
+        ),
+        patch(
+            "backend.copilot.model._get_session_lock",
+            return_value=_NoopAsyncCM(),
+        ),
+        patch(
+            "backend.copilot.model.invalidate_session_cache",
+            new=AsyncMock(),
+        ),
     ):
         await turn_queue.enqueue_turn(
             user_id="u1",
             session_id="s1",
             message="hello",
-            sequence=1,
         )
     args, kwargs = create.call_args
     assert kwargs["data"]["queueMetadata"] is None

@@ -58,6 +58,27 @@ vi.mock("../components/AssistantMessageActions", () => ({
   AssistantMessageActions: () => null,
 }));
 
+vi.mock("../components/QueueBadge", () => ({
+  QueueBadge: ({
+    queueStatus,
+    queueBlockedReason,
+    rawMessageId,
+  }: {
+    queueStatus: "queued" | "blocked";
+    queueBlockedReason?: string | null;
+    rawMessageId?: string | null;
+  }) => (
+    <span
+      data-testid="queue-badge"
+      data-status={queueStatus}
+      data-reason={queueBlockedReason ?? ""}
+      data-raw-id={rawMessageId ?? ""}
+    >
+      QueueBadge:{queueStatus}
+    </span>
+  ),
+}));
+
 vi.mock("../components/CopyButton", () => ({ CopyButton: () => null }));
 vi.mock("../components/CollapsedToolGroup", () => ({
   CollapsedToolGroup: () => null,
@@ -514,5 +535,108 @@ describe("ChatMessagesContainer — turnStats", () => {
       /2026/.test(el?.textContent ?? ""),
     );
     expect(labels.length).toBe(0);
+  });
+});
+
+// ── per-message queue badge ───────────────────────────────────────────────
+
+describe("ChatMessagesContainer — queue badges on user messages", () => {
+  beforeEach(() => {
+    mockScrollEl.scrollHeight = 100;
+    mockScrollEl.scrollTop = 0;
+    mockScrollEl.clientHeight = 500;
+    MockIntersectionObserver.lastCallback = null;
+    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders a QueueBadge when the user message has queueStatus='queued'", () => {
+    const userId = "user-q1";
+    const turnStats = new Map([
+      [
+        userId,
+        {
+          queueStatus: "queued" as const,
+          rawMessageId: "uuid-q1",
+        },
+      ],
+    ]);
+    const messages = [
+      {
+        id: userId,
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "queue me", state: "done" }],
+      },
+    ];
+    render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <ChatMessagesContainer
+        {...(baseProps as any)}
+        messages={messages as any}
+        turnStats={turnStats as any}
+      />,
+    );
+    const badge = screen.getByTestId("queue-badge");
+    expect(badge.getAttribute("data-status")).toBe("queued");
+    expect(badge.getAttribute("data-raw-id")).toBe("uuid-q1");
+  });
+
+  it("renders a blocked QueueBadge with the blocked_reason for tooltip text", () => {
+    const userId = "user-b1";
+    const turnStats = new Map([
+      [
+        userId,
+        {
+          queueStatus: "blocked" as const,
+          queueBlockedReason: "Subscription required",
+          rawMessageId: "uuid-b1",
+        },
+      ],
+    ]);
+    const messages = [
+      {
+        id: userId,
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "blocked", state: "done" }],
+      },
+    ];
+    render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <ChatMessagesContainer
+        {...(baseProps as any)}
+        messages={messages as any}
+        turnStats={turnStats as any}
+      />,
+    );
+    const badge = screen.getByTestId("queue-badge");
+    expect(badge.getAttribute("data-status")).toBe("blocked");
+    expect(badge.getAttribute("data-reason")).toBe("Subscription required");
+  });
+
+  it("does NOT render a QueueBadge for normal (non-queued) user messages", () => {
+    const userId = "user-n1";
+    const turnStats = new Map([
+      [userId, { createdAt: "2026-04-23T08:32:09.000Z" }],
+    ]);
+    const messages = [
+      {
+        id: userId,
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "hi", state: "done" }],
+      },
+    ];
+    render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <ChatMessagesContainer
+        {...(baseProps as any)}
+        messages={messages as any}
+        turnStats={turnStats as any}
+      />,
+    );
+    expect(screen.queryByTestId("queue-badge")).toBeNull();
   });
 });

@@ -34,6 +34,7 @@ import { CopyButton } from "./components/CopyButton";
 import { CollapsedToolGroup } from "./components/CollapsedToolGroup";
 import { MessageAttachments } from "./components/MessageAttachments";
 import { MessagePartRenderer } from "./components/MessagePartRenderer";
+import { QueueBadge } from "./components/QueueBadge";
 import { StepsCollapse } from "./components/StepsCollapse";
 import { ThinkingIndicator } from "./components/ThinkingIndicator";
 
@@ -561,6 +562,27 @@ export function ChatMessagesContainer({
                 )}
                 {isLastAssistant && showIndicator && indicator}
               </MessageContent>
+              {message.role === "user" &&
+                (() => {
+                  const stats = turnStats?.get(message.id);
+                  const queueStatus = stats?.queueStatus;
+                  if (queueStatus !== "queued" && queueStatus !== "blocked") {
+                    return null;
+                  }
+                  return (
+                    <MessageActions
+                      className="mt-1 items-center justify-end gap-1.5"
+                      data-testid="queue-status-row"
+                    >
+                      <QueueBadge
+                        queueStatus={queueStatus}
+                        queueBlockedReason={stats?.queueBlockedReason}
+                        rawMessageId={stats?.rawMessageId}
+                        sessionID={sessionID ?? null}
+                      />
+                    </MessageActions>
+                  );
+                })()}
               {message.role === "user" && textParts.length > 0 && (
                 <MessageActions className="mt-1 items-center justify-end gap-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
                   {(() => {

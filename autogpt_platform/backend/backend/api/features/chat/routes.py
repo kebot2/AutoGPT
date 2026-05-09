@@ -138,15 +138,11 @@ async def _enqueue_chat_turn(
 ) -> None:
     """Persist a user message that hit the running cap into the queue.
 
-    The next-sequence lookup uses the same chat-db path as
-    ``append_and_save_message`` so the queued row sits at the end of
-    the conversation. We rely on the ``ChatMessage.id`` PK uniqueness
-    for retransmit dedup (caller passes ``request.message_id`` if the
-    frontend supplied one).
+    ``turn_queue.enqueue_turn`` takes the Redis NX session lock + reads
+    the next sequence inside it, matching ``append_and_save_message``'s
+    ordering guarantee — concurrent submits to the same session cannot
+    PK-collide on ``(sessionId, sequence)``.
     """
-    from backend.data.db_accessors import chat_db
-
-    next_sequence = await chat_db().get_next_sequence(session_id)
     permissions_payload = (
         builder_permissions.model_dump(exclude_none=True)
         if builder_permissions
@@ -158,7 +154,6 @@ async def _enqueue_chat_turn(
         message=request.message,
         message_id=request.message_id,
         is_user_message=request.is_user_message,
-        sequence=next_sequence,
         context=request.context,
         file_ids=sanitized_file_ids,
         mode=request.mode,

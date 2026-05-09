@@ -384,3 +384,83 @@ describe("concatWithAssistantMerge", () => {
     expect(result).toHaveLength(2);
   });
 });
+
+describe("convertChatSessionMessagesToUiMessages — queue lifecycle", () => {
+  it("captures queue_status + raw id on user messages so the badge can render", () => {
+    const result = convertChatSessionMessagesToUiMessages(
+      SESSION_ID,
+      [
+        {
+          id: "uuid-user-1",
+          role: "user",
+          content: "queue me",
+          sequence: 0,
+          queue_status: "queued",
+        },
+      ],
+      { isComplete: true },
+    );
+
+    expect(result.messages).toHaveLength(1);
+    const stats = result.stats.get(result.messages[0].id);
+    expect(stats?.queueStatus).toBe("queued");
+    expect(stats?.rawMessageId).toBe("uuid-user-1");
+  });
+
+  it("captures blocked status + reason for tooltip", () => {
+    const result = convertChatSessionMessagesToUiMessages(
+      SESSION_ID,
+      [
+        {
+          id: "uuid-user-2",
+          role: "user",
+          content: "blocked",
+          sequence: 0,
+          queue_status: "blocked",
+          queue_blocked_reason: "Subscription required",
+        },
+      ],
+      { isComplete: true },
+    );
+
+    const stats = result.stats.get(result.messages[0].id);
+    expect(stats?.queueStatus).toBe("blocked");
+    expect(stats?.queueBlockedReason).toBe("Subscription required");
+  });
+
+  it("hides cancelled queued messages from the conversation view", () => {
+    const result = convertChatSessionMessagesToUiMessages(
+      SESSION_ID,
+      [
+        { role: "user", content: "first", sequence: 0 },
+        {
+          role: "user",
+          content: "this got cancelled",
+          sequence: 1,
+          queue_status: "cancelled",
+        },
+        { role: "assistant", content: "reply", sequence: 2 },
+      ],
+      { isComplete: true },
+    );
+
+    const userTexts = result.messages
+      .filter((m) => m.role === "user")
+      .flatMap((m) => m.parts)
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text: string }).text);
+    expect(userTexts).toEqual(["first"]);
+  });
+
+  it("leaves queue fields undefined for normal (non-queued) user messages", () => {
+    const result = convertChatSessionMessagesToUiMessages(
+      SESSION_ID,
+      [{ role: "user", content: "normal", sequence: 0 }],
+      { isComplete: true },
+    );
+
+    const stats = result.stats.get(result.messages[0].id);
+    expect(stats?.queueStatus).toBeNull();
+    expect(stats?.queueBlockedReason).toBeNull();
+  });
+});

@@ -112,7 +112,6 @@ async def enqueue_turn(
     message: str,
     message_id: str | None = None,
     is_user_message: bool = True,
-    sequence: int,
     context: Mapping[str, str] | None = None,
     file_ids: list[str] | None = None,
     mode: str | None = None,
@@ -144,17 +143,32 @@ async def enqueue_turn(
     if request_arrival_at:
         metadata["request_arrival_at"] = request_arrival_at
 
-    return await ChatMessage.prisma().create(
-        data={
-            "id": message_id or _generate_id(),
-            "sessionId": session_id,
-            "role": "user" if is_user_message else "assistant",
-            "content": message,
-            "sequence": sequence,
-            "queueStatus": STATUS_QUEUED,
-            "queueMetadata": SafeJson(metadata) if metadata else None,
-        }
-    )
+    # The Redis NX session lock serialises with ``append_and_save_message``
+    # so two concurrent submits to the same session can't pick the same
+    # ``sequence`` and PK-collide on ``(sessionId, sequence)``. The caller's
+    # ``get_next_sequence`` was an optimistic read; re-fetch inside the
+    # lock so the authoritative value is whatever the lock holder sees now.
+    from backend.copilot.db import get_next_sequence
+    from backend.copilot.model import _get_session_lock, invalidate_session_cache
+
+    async with _get_session_lock(session_id):
+        live_sequence = await get_next_sequence(session_id)
+        row = await ChatMessage.prisma().create(
+            data={
+                "id": message_id or _generate_id(),
+                "sessionId": session_id,
+                "role": "user" if is_user_message else "assistant",
+                "content": message,
+                "sequence": live_sequence,
+                "queueStatus": STATUS_QUEUED,
+                "queueMetadata": SafeJson(metadata) if metadata else None,
+            }
+        )
+    # The chat-session cache holds the message list; invalidate so the
+    # next /chat read picks up the queued row (frontend renders a
+    # 'Queued' badge based on ``queueStatus``).
+    await invalidate_session_cache(session_id)
+    return row
 
 
 async def cancel_queued_turn(*, user_id: str, message_id: str) -> bool:
