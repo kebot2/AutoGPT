@@ -38,7 +38,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-SessionOutcome = Literal["completed", "failed", "running", "queued"]
+SessionOutcome = Literal[
+    "completed",
+    "failed",
+    "running",
+    "queued",
+    "rejected_concurrent_turn_cap",
+]
 
 
 @dataclass
@@ -218,17 +224,18 @@ async def run_copilot_turn_via_queue(
         )
     except ConcurrentTurnLimitError:
         # Sub-AutoPilot / run_sub_session caller is at the cap (this is
-        # the graph-block / tool path, not the HTTP route). Surface as
-        # the existing "failed" SessionOutcome — callers already handle
-        # that branch, so AutoPilotBlock / run_sub_session propagate the
-        # cap rejection to the parent turn without a new branch.
+        # the graph-block / tool path, not the HTTP route). Use a
+        # distinct ``rejected_concurrent_turn_cap`` outcome so callers
+        # render an actionable "wait for an in-flight turn to finish"
+        # error instead of a generic "see transcript" pointer (the
+        # session was never created, so the transcript is empty).
         logger.warning(
             "[queue] session=%s user=%s rejected by concurrent-turn cap (tool=%s)",
             session_id[:12],
             user_id[:8] if user_id else "?",
             tool_name,
         )
-        return "failed", SessionResult()
+        return "rejected_concurrent_turn_cap", SessionResult()
     return await wait_for_session_result(
         session_id=session_id,
         user_id=user_id,

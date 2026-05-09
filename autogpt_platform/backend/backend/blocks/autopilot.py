@@ -353,6 +353,14 @@ class AutoPilotBlock(Block):
                 tool_call_id=_AUTOPILOT_TOOL_CALL_ID,
                 tool_name=_AUTOPILOT_TOOL_NAME,
             )
+            if outcome == "rejected_concurrent_turn_cap":
+                # No session record / transcript was created — the slot
+                # cap rejected before ``create_session`` ran. Surface a
+                # message that points at the actionable cause rather
+                # than the empty transcript.
+                from backend.copilot.active_turns import concurrent_turn_limit_message
+
+                raise RuntimeError(concurrent_turn_limit_message())
             if outcome == "failed":
                 raise RuntimeError(
                     "AutoPilot turn failed — see the session's transcript"

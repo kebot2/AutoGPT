@@ -7,7 +7,7 @@ hundreds of simultaneous turns and exhaust shared infrastructure.
 Storage is a Redis sorted set per user (``copilot:user_active_turns:{user_id}``),
 member = ``session_id`` (one in-flight turn per session at most), score =
 unix timestamp of acquisition. The atomic admit / sweep / cap logic lives
-in :func:`backend.data.redis_helpers.try_zadd_under_limit` — this module
+in :func:`backend.data.redis_helpers.try_reserve_slot` — this module
 just supplies the per-user keying, the lifecycle context manager, and the
 fail-open posture on Redis errors.
 

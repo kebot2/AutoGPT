@@ -233,6 +233,23 @@ def response_from_outcome(
             elapsed_seconds=round(elapsed, 2),
         )
 
+    if outcome == "rejected_concurrent_turn_cap":
+        # No sub-session record / transcript exists yet — the per-user
+        # concurrent-turn cap rejected before ``create_session`` ran.
+        # Render the actionable message instead of a "see transcript"
+        # pointer to nothing.
+        from backend.copilot.active_turns import concurrent_turn_limit_message
+
+        return SubSessionStatusResponse(
+            message=concurrent_turn_limit_message(),
+            session_id=parent_session_id,
+            status="error",
+            sub_session_id=inner_session_id,
+            sub_autopilot_session_id=inner_session_id,
+            sub_autopilot_session_link=link,
+            elapsed_seconds=round(elapsed, 2),
+        )
+
     if outcome == "failed":
         return SubSessionStatusResponse(
             message="Sub-AutoPilot failed. See the sub's transcript for details.",

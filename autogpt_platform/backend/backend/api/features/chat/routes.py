@@ -21,7 +21,7 @@ from backend.copilot.active_turns import (
 from backend.copilot.builder_context import resolve_session_permissions
 from backend.copilot.config import ChatConfig, CopilotLlmModel, CopilotMode
 from backend.copilot.db import get_chat_messages_paginated
-from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
+from backend.copilot.executor.utils import dispatch_turn, enqueue_cancel_task
 from backend.copilot.model import (
     ChatMessage,
     ChatSession,
@@ -1095,18 +1095,19 @@ async def stream_chat_post(
             turn_id = "" if is_duplicate_message else str(uuid4())
             if turn_id:
                 log_meta["turn_id"] = turn_id
-                await stream_registry.create_session(
+                # Shared with session_waiter / AutoPilotBlock /
+                # run_sub_session via ``schedule_turn`` (which is
+                # acquire_turn_slot + dispatch_turn). The HTTP route
+                # opens its own slot context manager because it must
+                # save the user message *inside* the slot before
+                # dispatching, but the create-session + enqueue + keep
+                # sequence is the shared layer.
+                await dispatch_turn(
+                    slot,
                     session_id=session_id,
                     user_id=user_id,
-                    tool_call_id="chat_stream",
-                    tool_name="chat",
                     turn_id=turn_id,
-                )
-                await enqueue_copilot_turn(
-                    session_id=session_id,
-                    user_id=user_id,
                     message=request.message,
-                    turn_id=turn_id,
                     is_user_message=request.is_user_message,
                     context=request.context,
                     file_ids=sanitized_file_ids,
@@ -1115,9 +1116,6 @@ async def stream_chat_post(
                     permissions=builder_permissions,
                     request_arrival_at=request_arrival_at,
                 )
-                # Successfully scheduled — hand the slot off to
-                # ``mark_session_completed`` for the rest of the turn.
-                slot.keep()
             # Duplicate-message branch: no turn was scheduled. If this
             # caller refreshed an existing reservation (the normal retry
             # path), the context manager's exit is a no-op — the

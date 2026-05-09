@@ -6,6 +6,7 @@ Defines two exchanges and queues following the graph executor pattern:
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -13,6 +14,9 @@ from backend.copilot.config import CopilotLlmModel, CopilotMode
 from backend.copilot.permissions import CopilotPermissions
 from backend.data.rabbitmq import Exchange, ExchangeType, Queue, RabbitMQConfig
 from backend.util.logging import TruncatedLogger, is_structured_logging_enabled
+
+if TYPE_CHECKING:
+    from backend.copilot.active_turns import TurnSlot
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,16 @@ async def schedule_turn(
     slot, register the session in the stream registry, then publish the
     work to the executor queue.
 
+    Convenience wrapper for callers that don't need to interleave any
+    work between slot acquisition and dispatch (no message persistence,
+    no duplicate-detection, etc.). Used by ``run_sub_session`` and
+    ``AutoPilotBlock`` via ``session_waiter.run_copilot_turn_via_queue``.
+
+    The HTTP chat route uses :func:`acquire_turn_slot` + :func:`dispatch_turn`
+    directly because it must save the user message *inside* the slot
+    context (so a 429 cannot leave a ghost message in chat history) and
+    skip dispatch entirely when the message is a duplicate.
+
     Atomicity guarantees:
 
     * If the user is at the configured concurrent-turn cap,
@@ -305,15 +319,10 @@ async def schedule_turn(
       a RabbitMQ blip cannot leak a slot until the stale-cutoff sweep.
     * On success the slot is *kept*: ownership transfers to
       ``mark_session_completed``, which releases it when the turn ends.
-
-    Centralised here so the chat HTTP route, the AutoPilotBlock session
-    waiter, and the future queue dispatcher all fan in to one code path
-    instead of repeating the slot/create/enqueue dance.
     """
     # Local imports to keep the cold-start path of this module light and
     # avoid importing copilot.active_turns / stream_registry into modules
     # that only need the queue-config dataclasses.
-    from backend.copilot import stream_registry
     from backend.copilot.active_turns import (
         acquire_turn_slot,
         get_concurrent_turn_limit,
@@ -324,18 +333,14 @@ async def schedule_turn(
         session_id=session_id,
         limit=get_concurrent_turn_limit(),
     ) as slot:
-        await stream_registry.create_session(
+        await dispatch_turn(
+            slot,
             session_id=session_id,
             user_id=user_id,
+            turn_id=turn_id,
+            message=message,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            turn_id=turn_id,
-        )
-        await enqueue_copilot_turn(
-            session_id=session_id,
-            user_id=user_id,
-            message=message,
-            turn_id=turn_id,
             is_user_message=is_user_message,
             context=context,
             file_ids=file_ids,
@@ -344,7 +349,63 @@ async def schedule_turn(
             permissions=permissions,
             request_arrival_at=request_arrival_at,
         )
-        slot.keep()
+
+
+async def dispatch_turn(
+    slot: "TurnSlot",
+    *,
+    session_id: str,
+    user_id: str | None,
+    turn_id: str,
+    message: str,
+    tool_call_id: str = "chat_stream",
+    tool_name: str = "chat",
+    is_user_message: bool = True,
+    context: dict[str, str] | None = None,
+    file_ids: list[str] | None = None,
+    mode: CopilotMode | None = None,
+    model: CopilotLlmModel | None = None,
+    permissions: CopilotPermissions | None = None,
+    request_arrival_at: float = 0.0,
+) -> None:
+    """Within an already-held turn slot, register the session in the
+    stream registry, publish the work to the executor queue, and
+    transfer slot ownership to ``mark_session_completed``.
+
+    Caller is responsible for acquiring ``slot`` via
+    :func:`acquire_turn_slot`. This function is the post-acquire dispatch
+    glue — extracted so the HTTP chat route (which needs to save the
+    user message between acquire and dispatch) can share the same
+    create-session + enqueue + keep sequence as :func:`schedule_turn`'s
+    callers without inlining it.
+
+    Failure semantics: if ``create_session`` or the queue publish raises,
+    ``slot.keep()`` is never reached, so the context manager that owns
+    ``slot`` releases it on exit — no leak.
+    """
+    from backend.copilot import stream_registry
+
+    await stream_registry.create_session(
+        session_id=session_id,
+        user_id=user_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        turn_id=turn_id,
+    )
+    await enqueue_copilot_turn(
+        session_id=session_id,
+        user_id=user_id,
+        message=message,
+        turn_id=turn_id,
+        is_user_message=is_user_message,
+        context=context,
+        file_ids=file_ids,
+        mode=mode,
+        model=model,
+        permissions=permissions,
+        request_arrival_at=request_arrival_at,
+    )
+    slot.keep()
 
 
 async def enqueue_cancel_task(session_id: str) -> None:
