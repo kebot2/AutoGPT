@@ -241,8 +241,12 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # Local imports to keep the cold-start path light and avoid pulling
     # the rate-limit + executor pipeline into modules that just want
     # queue counts.
+    import uuid
+
+    from backend.copilot.active_turns import acquire_turn_slot
     from backend.copilot.config import ChatConfig
-    from backend.copilot.executor.utils import schedule_chat_turn
+    from backend.copilot.executor.utils import dispatch_turn
+    from backend.copilot.model import invalidate_session_cache
     from backend.copilot.rate_limit import (
         RateLimitExceeded,
         RateLimitUnavailable,
@@ -308,20 +312,29 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         return False
 
     metadata = _decode_metadata(row.queueMetadata)
+    turn_id = str(uuid.uuid4())
     try:
-        await schedule_chat_turn(
-            session_id=row.sessionId,
-            user_id=user_id,
-            message=row.content or "",
-            message_id=row.id,
-            is_user_message=row.role == "user",
-            context=metadata.get("context"),
-            file_ids=metadata.get("file_ids"),
-            mode=metadata.get("mode"),
-            model=metadata.get("model"),
-            permissions=metadata.get("permissions"),
-            request_arrival_at=float(metadata.get("request_arrival_at") or 0.0),
-        )
+        # The user's message is already persisted in ``ChatMessage``
+        # from ``enqueue_turn``; the dispatcher must NOT route through
+        # ``schedule_chat_turn``, which would re-save the row, hit the
+        # PK-collision dedup, return None, and silently drop the
+        # dispatch. Acquire the running slot ourselves and go straight
+        # to the create-session + enqueue layer.
+        async with acquire_turn_slot(user_id, row.sessionId) as slot:
+            await dispatch_turn(
+                slot,
+                session_id=row.sessionId,
+                user_id=user_id,
+                turn_id=turn_id,
+                message=row.content or "",
+                is_user_message=row.role == "user",
+                context=metadata.get("context"),
+                file_ids=metadata.get("file_ids"),
+                mode=metadata.get("mode"),
+                model=metadata.get("model"),
+                permissions=metadata.get("permissions"),
+                request_arrival_at=float(metadata.get("request_arrival_at") or 0.0),
+            )
     except Exception:
         # Roll the claim back so a missed-dispatch tick or the next
         # slot-free event can retry. We re-set queueStatus rather than
@@ -331,6 +344,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
             data={"queueStatus": STATUS_QUEUED, "queueStartedAt": None},
         )
         raise
+    # The promoted row's queue columns were cleared in
+    # ``claim_next_queued_turn``; refresh the chat session cache so the
+    # frontend stops rendering the 'Queued' badge for this message.
+    await invalidate_session_cache(row.sessionId)
     return True
 
 

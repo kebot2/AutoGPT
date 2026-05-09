@@ -4,11 +4,22 @@ import type { FileUIPart, UIMessage, UIDataTypes, UITools } from "ai";
 export interface TurnStats {
   durationMs?: number;
   createdAt?: string;
+  /**
+   * SECRT-2339: queue lifecycle for the user-row that initiated this turn.
+   * Populated only on user messages whose ChatMessage row carries
+   * ``queueStatus``. Surfaces a "Queued" / "Blocked" badge + cancel button
+   * in the chat view.
+   */
+  queueStatus?: "queued" | "blocked" | "cancelled" | null;
+  queueBlockedReason?: string | null;
+  /** Raw ChatMessage.id (UUID). Required to call DELETE /chat/queued-tasks/{id}. */
+  rawMessageId?: string | null;
 }
 
 export type TurnStatsMap = Map<string, TurnStats>;
 
 interface SessionChatMessage {
+  id: string | null;
   role: string;
   content: string | null;
   tool_call_id: string | null;
@@ -16,6 +27,8 @@ interface SessionChatMessage {
   sequence: number | null;
   duration_ms: number | null;
   created_at: string | null;
+  queue_status: "queued" | "blocked" | "cancelled" | null;
+  queue_blocked_reason: string | null;
 }
 
 function coerceSessionChatMessages(

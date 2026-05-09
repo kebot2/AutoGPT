@@ -12,7 +12,6 @@ import pytest
 
 from backend.copilot import turn_queue
 
-
 # ── enqueue_turn payload encoding ──────────────────────────────────────
 
 
