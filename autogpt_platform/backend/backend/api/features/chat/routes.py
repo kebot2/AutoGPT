@@ -15,14 +15,12 @@ from backend.copilot import service as chat_service
 from backend.copilot import stream_registry
 from backend.copilot.active_turns import (
     CONCURRENT_TURN_LIMIT_MESSAGE,
-    MAX_CONCURRENT_TURNS_PER_USER,
     ConcurrentTurnLimitError,
-    acquire_turn_slot,
 )
 from backend.copilot.builder_context import resolve_session_permissions
 from backend.copilot.config import ChatConfig, CopilotLlmModel, CopilotMode
 from backend.copilot.db import get_chat_messages_paginated
-from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
+from backend.copilot.executor.utils import enqueue_cancel_task, schedule_turn
 from backend.copilot.model import (
     ChatMessage,
     ChatSession,
@@ -1057,88 +1055,55 @@ async def stream_chat_post(
     # near the start) — that path returns early.  Any request that
     # reaches this point is starting a fresh turn, so we always mint a
     # ``turn_id`` unless ``append_and_save_message`` reports a duplicate.
-    # Per-user concurrent-turn cap (SECRT-2335). Acquire the slot BEFORE
-    # persisting the user's message — a 429 must not leave a ghost message
-    # in chat history with no answer ever scheduled. The context manager
-    # auto-releases the slot on any exception before ``slot.keep()`` (the
-    # save fails, ``create_session`` fails, ``enqueue_copilot_turn`` fails,
-    # etc.); only a successfully enqueued turn transfers slot ownership to
-    # ``mark_session_completed``. Anonymous (no user_id) sessions skip the
-    # gate via the context manager's no-op handle.
-    try:
-        async with acquire_turn_slot(
-            user_id=user_id,
-            session_id=session_id,
-            limit=MAX_CONCURRENT_TURNS_PER_USER,
-        ) as slot:
-            is_duplicate_message = False
-            if request.message:
-                message = ChatMessage(
-                    id=request.message_id,
-                    role="user" if request.is_user_message else "assistant",
-                    content=request.message,
-                )
-                logger.info(f"[STREAM] Saving user message to session {session_id}")
-                is_duplicate_message = (
-                    await append_and_save_message(session_id, message)
-                ) is None
-                logger.info(f"[STREAM] User message saved for session {session_id}")
-                if not is_duplicate_message and request.is_user_message:
-                    track_user_message(
-                        user_id=user_id,
-                        session_id=session_id,
-                        message_length=len(request.message),
-                    )
+    is_duplicate_message = False
+    if request.message:
+        message = ChatMessage(
+            id=request.message_id,
+            role="user" if request.is_user_message else "assistant",
+            content=request.message,
+        )
+        logger.info(f"[STREAM] Saving user message to session {session_id}")
+        is_duplicate_message = (
+            await append_and_save_message(session_id, message)
+        ) is None
+        logger.info(f"[STREAM] User message saved for session {session_id}")
+        if not is_duplicate_message and request.is_user_message:
+            track_user_message(
+                user_id=user_id,
+                session_id=session_id,
+                message_length=len(request.message),
+            )
 
-            # Create a task in the stream registry for reconnection support.
-            # For duplicate messages, skip create_session entirely so the
-            # infra-retry client subscribes to the *existing* turn's Redis
-            # stream and receives the in-progress executor output rather
-            # than an empty stream.
-            turn_id = "" if is_duplicate_message else str(uuid4())
-            if turn_id:
-                log_meta["turn_id"] = turn_id
-                session_create_start = time.perf_counter()
-                await stream_registry.create_session(
-                    session_id=session_id,
-                    user_id=user_id,
-                    tool_call_id="chat_stream",
-                    tool_name="chat",
-                    turn_id=turn_id,
-                )
-                logger.info(
-                    f"[TIMING] create_session completed in {(time.perf_counter() - session_create_start) * 1000:.1f}ms",
-                    extra={
-                        "json_fields": {
-                            **log_meta,
-                            "duration_ms": (time.perf_counter() - session_create_start)
-                            * 1000,
-                        }
-                    },
-                )
-                await enqueue_copilot_turn(
-                    session_id=session_id,
-                    user_id=user_id,
-                    message=request.message,
-                    turn_id=turn_id,
-                    is_user_message=request.is_user_message,
-                    context=request.context,
-                    file_ids=sanitized_file_ids,
-                    mode=request.mode,
-                    model=request.model,
-                    permissions=builder_permissions,
-                    request_arrival_at=request_arrival_at,
-                )
-                # Successfully scheduled — hand the slot off to
-                # ``mark_session_completed`` for the rest of the turn.
-                slot.keep()
-            # ``turn_id == ""`` (duplicate message): let the context manager
-            # release the slot on exit — we did not schedule a new turn, so
-            # there is no completion event that would release it later.
-    except ConcurrentTurnLimitError as exc:
-        raise HTTPException(
-            status_code=429, detail=CONCURRENT_TURN_LIMIT_MESSAGE
-        ) from exc
+    # For duplicate messages, skip create_session entirely so the infra-retry
+    # client subscribes to the *existing* turn's Redis stream and receives the
+    # in-progress executor output rather than an empty stream.
+    turn_id = "" if is_duplicate_message else str(uuid4())
+    if turn_id:
+        log_meta["turn_id"] = turn_id
+        # ``schedule_turn`` reserves the per-user concurrency slot, registers
+        # the session, publishes the work, and hands slot ownership off to
+        # ``mark_session_completed``. On any exception before that handoff
+        # (Redis blip, RabbitMQ blip, …) the slot is auto-released, so a
+        # transient infrastructure error never leaks a slot until the
+        # stale-cutoff sweep.
+        try:
+            await schedule_turn(
+                session_id=session_id,
+                user_id=user_id,
+                turn_id=turn_id,
+                message=request.message,
+                is_user_message=request.is_user_message,
+                context=request.context,
+                file_ids=sanitized_file_ids,
+                mode=request.mode,
+                model=request.model,
+                permissions=builder_permissions,
+                request_arrival_at=request_arrival_at,
+            )
+        except ConcurrentTurnLimitError as exc:
+            raise HTTPException(
+                status_code=429, detail=CONCURRENT_TURN_LIMIT_MESSAGE
+            ) from exc
 
     if is_duplicate_message:
         logger.info(
