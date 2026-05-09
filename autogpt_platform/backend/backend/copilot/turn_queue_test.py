@@ -153,6 +153,141 @@ async def test_cancel_queued_turn_returns_false_when_not_owned_or_not_queued() -
     assert ok is False
 
 
+@pytest.mark.asyncio
+async def test_cancel_queued_turn_invalidates_session_cache() -> None:
+    """A successful cancel must invalidate the session cache so the
+    frontend's next refetch transitions the badge from queued → gone."""
+    update_many = AsyncMock(return_value=1)
+    find_unique = AsyncMock(return_value=MagicMock(sessionId="s1"))
+    invalidate = AsyncMock()
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(update_many=update_many, find_unique=find_unique),
+        ),
+        patch(
+            "backend.copilot.model.invalidate_session_cache",
+            new=invalidate,
+        ),
+    ):
+        ok = await turn_queue.cancel_queued_turn(user_id="u1", message_id="msg-1")
+    assert ok is True
+    invalidate.assert_awaited_once_with("s1")
+
+
+# ── mark_queued_turn_blocked ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_mark_queued_turn_blocked_guards_on_queued_status() -> None:
+    """The block transition must be gated on ``queueStatus='queued'`` so
+    a parallel cancel isn't silently overwritten with 'blocked'."""
+    update_many = AsyncMock(return_value=1)
+    find_unique = AsyncMock(return_value=MagicMock(sessionId="s1"))
+    invalidate = AsyncMock()
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(update_many=update_many, find_unique=find_unique),
+        ),
+        patch(
+            "backend.copilot.model.invalidate_session_cache",
+            new=invalidate,
+        ),
+    ):
+        await turn_queue.mark_queued_turn_blocked(message_id="msg-1", reason="paywall")
+    where = update_many.call_args.kwargs["where"]
+    assert where == {"id": "msg-1", "queueStatus": turn_queue.STATUS_QUEUED}
+    invalidate.assert_awaited_once_with("s1")
+
+
+@pytest.mark.asyncio
+async def test_mark_queued_turn_blocked_noop_when_not_queued() -> None:
+    """No invalidation if the row was already cancelled / claimed and the
+    update_many matched zero rows."""
+    update_many = AsyncMock(return_value=0)
+    invalidate = AsyncMock()
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(update_many=update_many),
+        ),
+        patch(
+            "backend.copilot.model.invalidate_session_cache",
+            new=invalidate,
+        ),
+    ):
+        await turn_queue.mark_queued_turn_blocked(message_id="msg-1", reason="paywall")
+    invalidate.assert_not_awaited()
+
+
+# ── claim_queued_turn_by_id ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_claim_queued_turn_by_id_returns_none_when_no_longer_queued() -> None:
+    """A parallel cancel / block that flipped queueStatus before the
+    claim's update_many matched any row → None, so the dispatcher
+    doesn't promote a different unvalidated row."""
+    update_many = AsyncMock(return_value=0)
+    with patch.object(
+        turn_queue.ChatMessage,
+        "prisma",
+        return_value=MagicMock(update_many=update_many),
+    ):
+        row = await turn_queue.claim_queued_turn_by_id("msg-1")
+    assert row is None
+
+
+@pytest.mark.asyncio
+async def test_claim_queued_turn_by_id_returns_row_when_claimed() -> None:
+    """update_many > 0 means we won the claim race; find_unique returns
+    the row (now with queueStatus=NULL) for downstream dispatch."""
+    update_many = AsyncMock(return_value=1)
+    claimed_row = MagicMock(id="msg-1", sessionId="s1")
+    find_unique = AsyncMock(return_value=claimed_row)
+    with patch.object(
+        turn_queue.ChatMessage,
+        "prisma",
+        return_value=MagicMock(update_many=update_many, find_unique=find_unique),
+    ):
+        row = await turn_queue.claim_queued_turn_by_id("msg-1")
+    assert row is claimed_row
+    where = update_many.call_args.kwargs["where"]
+    assert where == {"id": "msg-1", "queueStatus": turn_queue.STATUS_QUEUED}
+
+
+# ── try_enqueue_turn ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
+    """Pre-check rejects when running + queued already equals the cap."""
+    create = AsyncMock()
+    with (
+        patch.object(
+            turn_queue.ChatMessage,
+            "prisma",
+            return_value=MagicMock(create=create),
+        ),
+        patch(
+            "backend.copilot.turn_queue.count_inflight_turns",
+            new=AsyncMock(return_value=15),
+        ),
+    ):
+        with pytest.raises(turn_queue.InflightCapExceeded):
+            await turn_queue.try_enqueue_turn(
+                user_id="u1",
+                inflight_cap=15,
+                session_id="s1",
+                message="hi",
+            )
+    create.assert_not_awaited()
+
+
 # ── dispatch_next_for_user gating ──────────────────────────────────────
 
 
