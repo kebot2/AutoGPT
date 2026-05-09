@@ -49,13 +49,18 @@ logger = logging.getLogger(__name__)
 # is the single in-flight gate.
 MAX_CONCURRENT_TURNS_PER_USER = 15
 
-# Upper bound on how long a single turn can hold its slot before the
-# stale-cutoff sweep frees it. Matches the ``AutoPilotBlock`` 6h max-wait so a
-# legitimate long-running turn isn't prematurely released, while still
-# guaranteeing a crashed turn that never calls :func:`release_turn_slot`
-# cannot hold the slot forever. Far exceeds typical chat turn duration
-# (seconds-minutes); the normal release path is ``mark_session_completed``.
-STALE_TURN_CUTOFF_SECONDS = 6 * 60 * 60
+# Upper bound on a single AutoPilot turn's wall-clock duration. Beyond this
+# we treat the turn as abandoned: the slot is reclaimed by the stale-cutoff
+# sweep (so a crashed turn doesn't hold a slot forever) and the
+# :class:`AutoPilotBlock` execution wait gives up. Far exceeds typical chat
+# turn duration (seconds-minutes) so legitimate long-running tool calls
+# (E2B sandbox, deep web crawls, etc.) aren't penalised. The normal release
+# path is ``mark_session_completed``; this is the safety net.
+MAX_TURN_LIFETIME_SECONDS = 6 * 60 * 60
+
+# Backwards-compatible alias used by the active-turns sweep. Kept distinct
+# in case future tuning wants different bounds for the two consumers.
+STALE_TURN_CUTOFF_SECONDS = MAX_TURN_LIFETIME_SECONDS
 
 CONCURRENT_TURN_LIMIT_MESSAGE = (
     f"You've reached the limit of {MAX_CONCURRENT_TURNS_PER_USER} active tasks. "

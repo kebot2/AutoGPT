@@ -17,6 +17,7 @@ from backend.blocks._base import (
     BlockSchemaInput,
     BlockSchemaOutput,
 )
+from backend.copilot.active_turns import MAX_TURN_LIFETIME_SECONDS
 from backend.copilot.permissions import (
     DISABLED_LEGACY_TOOL_NAMES,
     CopilotPermissions,
@@ -42,11 +43,10 @@ _AUTOPILOT_TOOL_CALL_ID = "autopilot_block"
 _AUTOPILOT_TOOL_NAME = "autopilot_block"
 
 # Ceiling on how long AutoPilotBlock.execute_copilot will wait for the
-# enqueued turn's terminal event. Graph blocks run synchronously from
-# the caller's perspective so we wait effectively as long as needed; 6h
-# matches the previous abandoned-task cap and is much longer than any
-# legitimate AutoPilot turn.
-_AUTOPILOT_BLOCK_MAX_WAIT_SECONDS = 6 * 60 * 60  # 6 hours
+# enqueued turn's terminal event. Sourced from the shared turn-lifetime
+# constant so the block-level wait, the per-user slot stale-cutoff, and
+# any future per-turn timer all advance together.
+_AUTOPILOT_BLOCK_MAX_WAIT_SECONDS = MAX_TURN_LIFETIME_SECONDS
 
 
 class SubAgentRecursionError(BlockExecutionError):
