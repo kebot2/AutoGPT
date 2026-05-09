@@ -1057,46 +1057,48 @@ async def stream_chat_post(
     # near the start) — that path returns early.  Any request that
     # reaches this point is starting a fresh turn, so we always mint a
     # ``turn_id`` unless ``append_and_save_message`` reports a duplicate.
-    is_duplicate_message = False
-    if request.message:
-        message = ChatMessage(
-            id=request.message_id,
-            role="user" if request.is_user_message else "assistant",
-            content=request.message,
-        )
-        logger.info(f"[STREAM] Saving user message to session {session_id}")
-        is_duplicate_message = (
-            await append_and_save_message(session_id, message)
-        ) is None
-        logger.info(f"[STREAM] User message saved for session {session_id}")
-        if not is_duplicate_message and request.is_user_message:
-            track_user_message(
-                user_id=user_id,
-                session_id=session_id,
-                message_length=len(request.message),
-            )
+    # Per-user concurrent-turn cap (SECRT-2335). Acquire the slot BEFORE
+    # persisting the user's message — a 429 must not leave a ghost message
+    # in chat history with no answer ever scheduled. The context manager
+    # auto-releases the slot on any exception before ``slot.keep()`` (the
+    # save fails, ``create_session`` fails, ``enqueue_copilot_turn`` fails,
+    # etc.); only a successfully enqueued turn transfers slot ownership to
+    # ``mark_session_completed``. Anonymous (no user_id) sessions skip the
+    # gate via the context manager's no-op handle.
+    try:
+        async with acquire_turn_slot(
+            user_id=user_id,
+            session_id=session_id,
+            limit=MAX_CONCURRENT_TURNS_PER_USER,
+        ) as slot:
+            is_duplicate_message = False
+            if request.message:
+                message = ChatMessage(
+                    id=request.message_id,
+                    role="user" if request.is_user_message else "assistant",
+                    content=request.message,
+                )
+                logger.info(f"[STREAM] Saving user message to session {session_id}")
+                is_duplicate_message = (
+                    await append_and_save_message(session_id, message)
+                ) is None
+                logger.info(f"[STREAM] User message saved for session {session_id}")
+                if not is_duplicate_message and request.is_user_message:
+                    track_user_message(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message_length=len(request.message),
+                    )
 
-    # Create a task in the stream registry for reconnection support.
-    # For duplicate messages, skip create_session entirely so the infra-retry
-    # client subscribes to the *existing* turn's Redis stream and receives the
-    # in-progress executor output rather than an empty stream.
-    turn_id = "" if is_duplicate_message else str(uuid4())
-    if turn_id:
-        # Per-user concurrent-turn cap (SECRT-2335). Blocks API abuse where a
-        # single user (or compromised key) spawns hundreds of concurrent turns
-        # before cost-based rate limiting catches up. The context manager
-        # auto-releases the slot if anything between acquisition and
-        # ``slot.keep()`` raises (create_session / enqueue_copilot_turn
-        # failures, etc.) — only a successfully scheduled turn transfers
-        # slot ownership to ``mark_session_completed``.
-        log_meta["turn_id"] = turn_id
-        session_create_start = time.perf_counter()
-        try:
-            async with acquire_turn_slot(
-                user_id=user_id,
-                session_id=session_id,
-                limit=MAX_CONCURRENT_TURNS_PER_USER,
-            ) as slot:
+            # Create a task in the stream registry for reconnection support.
+            # For duplicate messages, skip create_session entirely so the
+            # infra-retry client subscribes to the *existing* turn's Redis
+            # stream and receives the in-progress executor output rather
+            # than an empty stream.
+            turn_id = "" if is_duplicate_message else str(uuid4())
+            if turn_id:
+                log_meta["turn_id"] = turn_id
+                session_create_start = time.perf_counter()
                 await stream_registry.create_session(
                     session_id=session_id,
                     user_id=user_id,
@@ -1130,11 +1132,15 @@ async def stream_chat_post(
                 # Successfully scheduled — hand the slot off to
                 # ``mark_session_completed`` for the rest of the turn.
                 slot.keep()
-        except ConcurrentTurnLimitError as exc:
-            raise HTTPException(
-                status_code=429, detail=CONCURRENT_TURN_LIMIT_MESSAGE
-            ) from exc
-    else:
+            # ``turn_id == ""`` (duplicate message): let the context manager
+            # release the slot on exit — we did not schedule a new turn, so
+            # there is no completion event that would release it later.
+    except ConcurrentTurnLimitError as exc:
+        raise HTTPException(
+            status_code=429, detail=CONCURRENT_TURN_LIMIT_MESSAGE
+        ) from exc
+
+    if is_duplicate_message:
         logger.info(
             f"[STREAM] Duplicate message detected for session {session_id}, skipping enqueue"
         )
