@@ -693,3 +693,214 @@ async def set_turn_duration(session_id: str, duration_ms: int) -> None:
                     msg.duration_ms = duration_ms
                     break
             await cache_chat_session(session)
+
+
+# ============================================================================
+# SECRT-2339 — running-turn tracking on ChatSession.
+#
+# Called both from the HTTP server (Prisma directly) and from the
+# CoPilotExecutor subprocess (RPC via DatabaseManager). The executor
+# has no Prisma connection so all access must go through the
+# ``backend.data.db_accessors.chat_db()`` indirection — see
+# ``backend/copilot/active_turns.py``.
+# ============================================================================
+
+
+async def count_running_turns_for_user(user_id: str, stale_cutoff: datetime) -> int:
+    """Count user's sessions whose ``currentTurnStartedAt`` is set and
+    fresher than ``stale_cutoff``."""
+    return await PrismaChatSession.prisma().count(
+        where={
+            "userId": user_id,
+            "currentTurnStartedAt": {"gt": stale_cutoff},
+        },
+    )
+
+
+async def list_running_session_ids_for_user(
+    user_id: str, stale_cutoff: datetime
+) -> list[str]:
+    """User's session ids currently running a turn, fresher than
+    ``stale_cutoff``."""
+    rows = await PrismaChatSession.prisma().find_many(
+        where={
+            "userId": user_id,
+            "currentTurnStartedAt": {"gt": stale_cutoff},
+        },
+    )
+    return [r.id for r in rows]
+
+
+async def get_session_current_turn_started_at(
+    session_id: str,
+) -> datetime | None:
+    """Return ``currentTurnStartedAt`` for ``session_id``, or ``None``
+    if the row doesn't exist or the column is NULL."""
+    row = await PrismaChatSession.prisma().find_unique(where={"id": session_id})
+    return row.currentTurnStartedAt if row else None
+
+
+async def stamp_session_current_turn(
+    session_id: str, user_id: str, when: datetime
+) -> None:
+    """Set ``currentTurnStartedAt = when`` on the given session; user-id
+    guard prevents stamping someone else's row under a misrouted call."""
+    await PrismaChatSession.prisma().update_many(
+        where={"id": session_id, "userId": user_id},
+        data={"currentTurnStartedAt": when},
+    )
+
+
+async def clear_session_current_turn(session_id: str, user_id: str) -> None:
+    """Clear ``currentTurnStartedAt`` on the given session. Idempotent;
+    user-id guard prevents clearing someone else's row."""
+    await PrismaChatSession.prisma().update_many(
+        where={"id": session_id, "userId": user_id},
+        data={"currentTurnStartedAt": None},
+    )
+
+
+# ============================================================================
+# SECRT-2339 — turn-queue mutations on ChatMessage.
+# ============================================================================
+
+
+_QUEUE_STATUS_QUEUED = "queued"
+_QUEUE_STATUS_BLOCKED = "blocked"
+_QUEUE_STATUS_CANCELLED = "cancelled"
+
+
+async def count_queued_turns_for_user(user_id: str) -> int:
+    """Count rows with ``queueStatus='queued'`` owned by ``user_id``."""
+    return await PrismaChatMessage.prisma().count(
+        where={
+            "queueStatus": _QUEUE_STATUS_QUEUED,
+            "Session": {"is": {"userId": user_id}},
+        },
+    )
+
+
+async def list_queued_turns_for_user(user_id: str) -> list[ChatMessage]:
+    """User's queued turns in FIFO order (oldest first)."""
+    rows = await PrismaChatMessage.prisma().find_many(
+        where={
+            "queueStatus": _QUEUE_STATUS_QUEUED,
+            "Session": {"is": {"userId": user_id}},
+        },
+        order={"createdAt": "asc"},
+    )
+    return [ChatMessage.from_db(r) for r in rows]
+
+
+async def list_blocked_turns_for_user(user_id: str) -> list[ChatMessage]:
+    """User's recently-blocked turns, newest first."""
+    rows = await PrismaChatMessage.prisma().find_many(
+        where={
+            "queueStatus": _QUEUE_STATUS_BLOCKED,
+            "Session": {"is": {"userId": user_id}},
+        },
+        order={"createdAt": "desc"},
+    )
+    return [ChatMessage.from_db(r) for r in rows]
+
+
+async def find_oldest_queued_turn_for_user(
+    user_id: str,
+) -> ChatMessage | None:
+    """Head of the user's queue (oldest queued row), or ``None`` if
+    empty. Used by the dispatcher to pick the next turn to validate."""
+    row = await PrismaChatMessage.prisma().find_first(
+        where={
+            "queueStatus": _QUEUE_STATUS_QUEUED,
+            "Session": {"is": {"userId": user_id}},
+        },
+        order={"createdAt": "asc"},
+    )
+    return ChatMessage.from_db(row) if row else None
+
+
+async def insert_queued_turn(
+    *,
+    message_id: str,
+    session_id: str,
+    role: str,
+    content: str,
+    sequence: int,
+    queue_metadata: dict[str, Any] | None,
+) -> ChatMessage:
+    """Insert a ``queueStatus='queued'`` ChatMessage row. ``queue_metadata``
+    is wrapped in :class:`SafeJson`; pass ``None`` to leave the column
+    NULL."""
+    data: ChatMessageCreateInput = {
+        "id": message_id,
+        "Session": {"connect": {"id": session_id}},
+        "role": role,
+        "content": content,
+        "sequence": sequence,
+        "queueStatus": _QUEUE_STATUS_QUEUED,
+    }
+    if queue_metadata:
+        data["queueMetadata"] = SafeJson(queue_metadata)
+    row = await PrismaChatMessage.prisma().create(data=data)
+    return ChatMessage.from_db(row)
+
+
+async def cancel_queued_turn_for_user(*, user_id: str, message_id: str) -> str | None:
+    """Atomic cancel gated on ``queueStatus='queued'`` AND user-owned.
+    Returns the row's ``sessionId`` on success (so the caller can
+    invalidate the session cache), ``None`` if no rows matched."""
+    where: ChatMessageWhereInput = {
+        "id": message_id,
+        "queueStatus": _QUEUE_STATUS_QUEUED,
+        "Session": {"is": {"userId": user_id}},
+    }
+    updated = await PrismaChatMessage.prisma().update_many(
+        where=where,
+        data={"queueStatus": _QUEUE_STATUS_CANCELLED},
+    )
+    if updated == 0:
+        return None
+    row = await PrismaChatMessage.prisma().find_unique(where={"id": message_id})
+    return row.sessionId if row else None
+
+
+async def mark_queued_turn_blocked_db(*, message_id: str, reason: str) -> str | None:
+    """Mark a queued row as ``blocked`` with a reason. Gated on
+    ``queueStatus='queued'`` so a parallel cancel isn't overwritten.
+    Returns the row's ``sessionId`` on success, ``None`` otherwise."""
+    updated = await PrismaChatMessage.prisma().update_many(
+        where={"id": message_id, "queueStatus": _QUEUE_STATUS_QUEUED},
+        data={
+            "queueStatus": _QUEUE_STATUS_BLOCKED,
+            "queueBlockedReason": reason,
+        },
+    )
+    if updated == 0:
+        return None
+    row = await PrismaChatMessage.prisma().find_unique(where={"id": message_id})
+    return row.sessionId if row else None
+
+
+async def claim_queued_turn_by_id_db(*, message_id: str) -> ChatMessage | None:
+    """Atomically claim the queued row identified by ``message_id``:
+    clear ``queueStatus`` and stamp ``queueStartedAt``. Returns the
+    claimed row, or ``None`` if a parallel cancel / dispatch won the
+    race."""
+    claimed = await PrismaChatMessage.prisma().update_many(
+        where={"id": message_id, "queueStatus": _QUEUE_STATUS_QUEUED},
+        data={"queueStatus": None, "queueStartedAt": datetime.now(UTC)},
+    )
+    if claimed == 0:
+        return None
+    row = await PrismaChatMessage.prisma().find_unique(where={"id": message_id})
+    return ChatMessage.from_db(row) if row else None
+
+
+async def restore_claimed_turn_to_queued(*, message_id: str) -> None:
+    """Roll a claim back to ``queued`` after a downstream dispatch
+    failure. Gated on ``queueStatus IS NULL`` so a successful concurrent
+    dispatch isn't overwritten."""
+    await PrismaChatMessage.prisma().update_many(
+        where={"id": message_id, "queueStatus": None},
+        data={"queueStatus": _QUEUE_STATUS_QUEUED, "queueStartedAt": None},
+    )

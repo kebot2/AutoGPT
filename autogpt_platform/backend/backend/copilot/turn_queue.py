@@ -24,6 +24,12 @@ Layered on top of:
   the dispatcher reuses it so queued + immediate dispatches share one
   code path.
 
+DB access goes through :func:`backend.data.db_accessors.chat_db` so
+the dispatcher works from both the HTTP server (Prisma directly) and
+the copilot_executor process (RPC via DatabaseManager) — the executor
+is the hot caller because it runs ``mark_session_completed`` which
+fires the slot-free dispatch.
+
 Caps are configured via:
 
 * :func:`backend.copilot.active_turns.get_running_turn_limit`   (soft / 5)
@@ -32,15 +38,11 @@ Caps are configured via:
 
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from prisma import Json
-from prisma.models import ChatMessage
-from prisma.types import ChatMessageWhereInput
-
 from backend.copilot.active_turns import count_running_turns
-from backend.util.json import SafeJson
+from backend.copilot.model import ChatMessage
+from backend.data.db_accessors import chat_db
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +60,8 @@ STATUS_CANCELLED = "cancelled"
 
 
 async def count_queued_turns(user_id: str) -> int:
-    """Number of ``queueStatus='queued'`` ChatMessage rows for ``user_id``.
-
-    The session→user join is cheap because ``ChatSession.userId`` is
-    indexed; the partial index on ``ChatMessage(queueStatus, createdAt)
-    WHERE queueStatus IS NOT NULL`` keeps the candidate set tiny.
-    """
-    return await ChatMessage.prisma().count(
-        where={
-            "queueStatus": STATUS_QUEUED,
-            "Session": {"is": {"userId": user_id}},
-        },
-    )
+    """Number of ``queueStatus='queued'`` ChatMessage rows for ``user_id``."""
+    return await chat_db().count_queued_turns_for_user(user_id)
 
 
 async def count_inflight_turns(user_id: str) -> int:
@@ -88,25 +80,13 @@ async def count_inflight_turns(user_id: str) -> int:
 async def list_queued_turns(user_id: str) -> list[ChatMessage]:
     """User's queued tasks, oldest-first (FIFO order). UX surface for the
     'your queued tasks' panel."""
-    return await ChatMessage.prisma().find_many(
-        where={
-            "queueStatus": STATUS_QUEUED,
-            "Session": {"is": {"userId": user_id}},
-        },
-        order={"createdAt": "asc"},
-    )
+    return await chat_db().list_queued_turns_for_user(user_id)
 
 
 async def list_blocked_turns(user_id: str) -> list[ChatMessage]:
     """Tasks the dispatcher gave up on (paywall / cap re-check failed).
     UX surface for the 'why didn't this run?' panel."""
-    return await ChatMessage.prisma().find_many(
-        where={
-            "queueStatus": STATUS_BLOCKED,
-            "Session": {"is": {"userId": user_id}},
-        },
-        order={"createdAt": "desc"},
-    )
+    return await chat_db().list_blocked_turns_for_user(user_id)
 
 
 # ============================================================================
@@ -202,21 +182,18 @@ async def enqueue_turn(
     # ``sequence`` and PK-collide on ``(sessionId, sequence)``. The caller's
     # ``get_next_sequence`` was an optimistic read; re-fetch inside the
     # lock so the authoritative value is whatever the lock holder sees now.
-    from backend.copilot.db import get_next_sequence
     from backend.copilot.model import _get_session_lock, invalidate_session_cache
 
+    db = chat_db()
     async with _get_session_lock(session_id):
-        live_sequence = await get_next_sequence(session_id)
-        row = await ChatMessage.prisma().create(
-            data={
-                "id": message_id or _generate_id(),
-                "sessionId": session_id,
-                "role": "user" if is_user_message else "assistant",
-                "content": message,
-                "sequence": live_sequence,
-                "queueStatus": STATUS_QUEUED,
-                "queueMetadata": SafeJson(metadata) if metadata else None,
-            }
+        live_sequence = await db.get_next_sequence(session_id)
+        row = await db.insert_queued_turn(
+            message_id=message_id or _generate_id(),
+            session_id=session_id,
+            role="user" if is_user_message else "assistant",
+            content=message,
+            sequence=live_sequence,
+            queue_metadata=metadata or None,
         )
     # The chat-session cache holds the message list; invalidate so the
     # next /chat read picks up the queued row (frontend renders a
@@ -234,23 +211,15 @@ async def cancel_queued_turn(*, user_id: str, message_id: str) -> bool:
     Invalidates the session cache on success so the frontend stops
     rendering the 'Queued' badge for this message on its next refetch.
     """
-    where: ChatMessageWhereInput = {
-        "id": message_id,
-        "queueStatus": STATUS_QUEUED,
-        "Session": {"is": {"userId": user_id}},
-    }
-    updated = await ChatMessage.prisma().update_many(
-        where=where,
-        data={"queueStatus": STATUS_CANCELLED},
+    session_id = await chat_db().cancel_queued_turn_for_user(
+        user_id=user_id, message_id=message_id
     )
-    if updated > 0:
-        from backend.copilot.model import invalidate_session_cache
+    if session_id is None:
+        return False
+    from backend.copilot.model import invalidate_session_cache
 
-        row = await ChatMessage.prisma().find_unique(where={"id": message_id})
-        if row is not None:
-            await invalidate_session_cache(row.sessionId)
-        return True
-    return False
+    await invalidate_session_cache(session_id)
+    return True
 
 
 async def mark_queued_turn_blocked(*, message_id: str, reason: str) -> None:
@@ -265,19 +234,14 @@ async def mark_queued_turn_blocked(*, message_id: str, reason: str) -> None:
     Invalidates the session cache on success so the frontend transitions
     from 'Queued' to 'Blocked' on its next refetch.
     """
-    updated = await ChatMessage.prisma().update_many(
-        where={"id": message_id, "queueStatus": STATUS_QUEUED},
-        data={
-            "queueStatus": STATUS_BLOCKED,
-            "queueBlockedReason": reason,
-        },
+    session_id = await chat_db().mark_queued_turn_blocked_db(
+        message_id=message_id, reason=reason
     )
-    if updated > 0:
-        from backend.copilot.model import invalidate_session_cache
+    if session_id is None:
+        return
+    from backend.copilot.model import invalidate_session_cache
 
-        row = await ChatMessage.prisma().find_unique(where={"id": message_id})
-        if row is not None:
-            await invalidate_session_cache(row.sessionId)
+    await invalidate_session_cache(session_id)
 
 
 async def claim_queued_turn_by_id(message_id: str) -> ChatMessage | None:
@@ -291,13 +255,7 @@ async def claim_queued_turn_by_id(message_id: str) -> ChatMessage | None:
     rate-limit) so a parallel cancel of the validated head doesn't
     silently promote a *different* — unvalidated — queued row.
     """
-    claimed = await ChatMessage.prisma().update_many(
-        where={"id": message_id, "queueStatus": STATUS_QUEUED},
-        data={"queueStatus": None, "queueStartedAt": datetime.now(timezone.utc)},
-    )
-    if claimed == 0:
-        return None
-    return await ChatMessage.prisma().find_unique(where={"id": message_id})
+    return await chat_db().claim_queued_turn_by_id_db(message_id=message_id)
 
 
 # ============================================================================
@@ -332,14 +290,8 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         is_user_paywalled,
     )
 
-    head = await ChatMessage.prisma().find_first(
-        where={
-            "queueStatus": STATUS_QUEUED,
-            "Session": {"is": {"userId": user_id}},
-        },
-        order={"createdAt": "asc"},
-    )
-    if head is None:
+    head = await chat_db().find_oldest_queued_turn_for_user(user_id)
+    if head is None or head.id is None or head.session_id is None:
         return False
 
     # Skip dispatch if the head's session already has a running turn.
@@ -349,12 +301,12 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # under the just-promoted turn. The next slot-free hook (or routine
     # timer) will retry once that session is idle.
     busy_sessions = await get_running_session_ids(user_id)
-    if head.sessionId in busy_sessions:
+    if head.session_id in busy_sessions:
         logger.debug(
             "dispatch_next_for_user: queued head %s targets busy session %s; "
             "deferring to next slot-free tick",
             head.id,
-            head.sessionId,
+            head.session_id,
         )
         return False
 
@@ -402,13 +354,13 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # a *different* (unvalidated) row that happens to be next in the
     # queue.
     row = await claim_queued_turn_by_id(head.id)
-    if row is None:
+    if row is None or row.id is None or row.session_id is None:
         # ``head`` was cancelled / blocked / claimed by a concurrent
         # dispatcher. Caller's loop decides whether to retry; the next
         # slot-free event will fire this again anyway.
         return False
 
-    metadata = _decode_metadata(row.queueMetadata)
+    metadata = row.queue_metadata or {}
     turn_id = str(uuid.uuid4())
     try:
         # The user's message is already persisted in ``ChatMessage``
@@ -417,10 +369,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # PK-collision dedup, return None, and silently drop the
         # dispatch. Acquire the running slot ourselves and go straight
         # to the create-session + enqueue layer.
-        async with acquire_turn_slot(user_id, row.sessionId) as slot:
+        async with acquire_turn_slot(user_id, row.session_id) as slot:
             await dispatch_turn(
                 slot,
-                session_id=row.sessionId,
+                session_id=row.session_id,
                 user_id=user_id,
                 turn_id=turn_id,
                 message=row.content or "",
@@ -436,29 +388,18 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # Roll the claim back so a missed-dispatch tick or the next
         # slot-free event can retry. We re-set queueStatus rather than
         # leaving the row half-promoted with stale metadata.
-        await ChatMessage.prisma().update_many(
-            where={"id": row.id, "queueStatus": None},
-            data={"queueStatus": STATUS_QUEUED, "queueStartedAt": None},
-        )
+        await chat_db().restore_claimed_turn_to_queued(message_id=row.id)
         raise
     # The promoted row's queueStatus was cleared by claim_queued_turn_by_id;
     # refresh the chat-session cache so the frontend stops rendering the
     # 'Queued' badge for this message.
-    await invalidate_session_cache(row.sessionId)
+    await invalidate_session_cache(row.session_id)
     return True
 
 
 # ============================================================================
 # Helpers
 # ============================================================================
-
-
-def _decode_metadata(raw: Json | None) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    return {}
 
 
 def _generate_id() -> str:

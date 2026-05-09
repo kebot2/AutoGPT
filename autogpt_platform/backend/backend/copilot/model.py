@@ -89,6 +89,11 @@ class ChatMessage(BaseModel):
     # tooltip based on these.
     queue_status: str | None = None
     queue_blocked_reason: str | None = None
+    # Owning session id and queue dispatch payload — needed when the
+    # dispatcher (running in the CoPilotExecutor subprocess where Prisma
+    # is not connected) loads queued rows over RPC and replays them.
+    session_id: str | None = None
+    queue_metadata: dict | None = None
 
     @staticmethod
     def from_db(prisma_message: PrismaChatMessage) -> "ChatMessage":
@@ -107,6 +112,8 @@ class ChatMessage(BaseModel):
             created_at=prisma_message.createdAt,
             queue_status=prisma_message.queueStatus,
             queue_blocked_reason=prisma_message.queueBlockedReason,
+            session_id=prisma_message.sessionId,
+            queue_metadata=_parse_json_field(prisma_message.queueMetadata),
         )
 
 

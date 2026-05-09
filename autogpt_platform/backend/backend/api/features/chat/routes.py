@@ -701,13 +701,15 @@ async def list_queued_tasks(
     running = await count_running_turns(user_id)
 
     def _to_item(row: Any, status: str) -> QueuedTaskItem:
+        # ``row`` is a copilot.model.ChatMessage (Pydantic) returned via
+        # the chat_db() accessor, so attributes are snake_case.
         return QueuedTaskItem(
             id=row.id,
-            session_id=row.sessionId,
-            created_at=row.createdAt,
+            session_id=row.session_id,
+            created_at=row.created_at,
             message=(row.content or "")[:500] if row.content else None,
             queue_status=status,
-            blocked_reason=row.queueBlockedReason,
+            blocked_reason=row.queue_blocked_reason,
         )
 
     return QueuedTaskList(

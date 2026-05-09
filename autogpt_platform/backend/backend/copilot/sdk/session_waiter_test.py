@@ -137,8 +137,11 @@ async def test_idle_session_enqueues_normally():
     create_session = AsyncMock()
     enqueue = AsyncMock()
     wait_result = AsyncMock(return_value=("completed", SessionResult()))
-    idle_row = MagicMock()
-    idle_row.currentTurnStartedAt = None
+    idle_db = MagicMock()
+    idle_db.get_session_current_turn_started_at = AsyncMock(return_value=None)
+    idle_db.count_running_turns_for_user = AsyncMock(return_value=0)
+    idle_db.stamp_session_current_turn = AsyncMock()
+    idle_db.clear_session_current_turn = AsyncMock()
 
     with (
         patch(
@@ -149,15 +152,7 @@ async def test_idle_session_enqueues_normally():
             "backend.copilot.turn_queue.count_inflight_turns",
             new=AsyncMock(return_value=0),
         ),
-        patch.object(
-            active_turns.ChatSession,
-            "prisma",
-            return_value=MagicMock(
-                find_unique=AsyncMock(return_value=idle_row),
-                count=AsyncMock(return_value=0),
-                update_many=AsyncMock(return_value=1),
-            ),
-        ),
+        patch.object(active_turns, "chat_db", return_value=idle_db),
         patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",
             new=create_session,

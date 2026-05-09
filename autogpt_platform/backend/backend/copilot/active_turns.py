@@ -29,14 +29,17 @@ trade-off the graph-execution credit rate-limit accepts on its
 ``INCRBY`` path: the cap is a safeguard, not a budget. Going to 16/17
 in-flight under burst is acceptable; the row-locked alternative would
 add a transaction round trip per admit for no real correctness gain.
+
+DB access goes through :func:`backend.data.db_accessors.chat_db` so
+the dispatcher works from both the HTTP server (Prisma directly) and
+the copilot_executor process (RPC via DatabaseManager).
 """
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
-from prisma.models import ChatSession
-
+from backend.data.db_accessors import chat_db
 from backend.util.settings import Settings
 
 # Upper bound on a single AutoPilot turn's wall-clock duration. Beyond
@@ -134,12 +137,7 @@ def _now() -> datetime:
 
 async def count_running_turns(user_id: str) -> int:
     """User's current running-turn count, excluding stale entries."""
-    return await ChatSession.prisma().count(
-        where={
-            "userId": user_id,
-            "currentTurnStartedAt": {"gt": _stale_cutoff()},
-        },
-    )
+    return await chat_db().count_running_turns_for_user(user_id, _stale_cutoff())
 
 
 async def get_running_session_ids(user_id: str) -> set[str]:
@@ -150,13 +148,9 @@ async def get_running_session_ids(user_id: str) -> set[str]:
     would silently replace its ``currentTurnStartedAt`` and the first
     completion would clear it for both.
     """
-    rows = await ChatSession.prisma().find_many(
-        where={
-            "userId": user_id,
-            "currentTurnStartedAt": {"gt": _stale_cutoff()},
-        },
+    return set(
+        await chat_db().list_running_session_ids_for_user(user_id, _stale_cutoff())
     )
-    return {r.id for r in rows}
 
 
 # ============================================================================
@@ -173,10 +167,7 @@ async def release_turn_slot(user_id: str, session_id: str) -> None:
     """
     if not user_id:
         return
-    await ChatSession.prisma().update_many(
-        where={"id": session_id, "userId": user_id},
-        data={"currentTurnStartedAt": None},
-    )
+    await chat_db().clear_session_current_turn(session_id, user_id)
 
 
 class TurnSlot:
@@ -240,14 +231,9 @@ async def acquire_turn_slot(
         return
 
     resolved_capacity = capacity if capacity is not None else get_running_turn_limit()
-    session = await ChatSession.prisma().find_unique(
-        where={"id": session_id},
-    )
-    is_refresh = (
-        session is not None
-        and session.currentTurnStartedAt is not None
-        and session.currentTurnStartedAt > _stale_cutoff()
-    )
+    db = chat_db()
+    started_at = await db.get_session_current_turn_started_at(session_id)
+    is_refresh = started_at is not None and started_at > _stale_cutoff()
 
     if not is_refresh:
         if await count_running_turns(user_id) >= resolved_capacity:
@@ -259,10 +245,7 @@ async def acquire_turn_slot(
     # Idempotent stamp — bumps the timestamp on refresh, sets it on a
     # fresh admit. ``userId`` guard prevents stamping someone else's
     # session under a misrouted request.
-    await ChatSession.prisma().update_many(
-        where={"id": session_id, "userId": user_id},
-        data={"currentTurnStartedAt": _now()},
-    )
+    await db.stamp_session_current_turn(session_id, user_id, _now())
 
     try:
         yield handle
