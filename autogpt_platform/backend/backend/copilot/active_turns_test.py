@@ -6,10 +6,10 @@ import pytest
 
 from backend.copilot import active_turns as active_turns_module
 from backend.copilot.active_turns import (
-    MAX_CONCURRENT_TURNS_PER_USER,
     ConcurrentTurnLimitError,
     acquire_turn_slot,
     count_active_turns,
+    get_concurrent_turn_limit,
     release_turn_slot,
     try_acquire_turn_slot,
 )
@@ -139,10 +139,12 @@ async def test_count_active_turns_returns_zero_on_redis_error(
     assert await count_active_turns("user-1") == 0
 
 
-def test_default_limit_constant_is_15() -> None:
-    """Hard cap. If you change this, update the user-facing
-    error message and the linear ticket."""
-    assert MAX_CONCURRENT_TURNS_PER_USER == 15
+def test_default_limit_is_15() -> None:
+    """Default hard cap. Operators can override via the
+    ``max_concurrent_copilot_turns_per_user`` setting; this test pins the
+    default-without-override value so a config drift doesn't silently
+    relax the abuse-protection cap."""
+    assert get_concurrent_turn_limit() == 15
 
 
 # ── acquire_turn_slot context manager ─────────────────────────────────

@@ -297,7 +297,7 @@ async def schedule_turn(
 
     Atomicity guarantees:
 
-    * If the user is at :data:`MAX_CONCURRENT_TURNS_PER_USER` active turns,
+    * If the user is at the configured concurrent-turn cap,
       :class:`ConcurrentTurnLimitError` is raised before any side-effects
       (no stream registry write, no queue publish). Caller maps to HTTP 429.
     * If ``create_session`` or ``publish_message`` raises, the slot is
@@ -315,14 +315,14 @@ async def schedule_turn(
     # that only need the queue-config dataclasses.
     from backend.copilot import stream_registry
     from backend.copilot.active_turns import (
-        MAX_CONCURRENT_TURNS_PER_USER,
         acquire_turn_slot,
+        get_concurrent_turn_limit,
     )
 
     async with acquire_turn_slot(
         user_id=user_id,
         session_id=session_id,
-        limit=MAX_CONCURRENT_TURNS_PER_USER,
+        limit=get_concurrent_turn_limit(),
     ) as slot:
         await stream_registry.create_session(
             session_id=session_id,
