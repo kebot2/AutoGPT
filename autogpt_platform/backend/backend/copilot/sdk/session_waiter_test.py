@@ -11,7 +11,7 @@ Focuses on the queue-on-busy fallback:
   fresh dispatch.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -132,9 +132,13 @@ async def test_queue_branch_positive_timeout_rides_inflight_turn():
 @pytest.mark.asyncio
 async def test_idle_session_enqueues_normally():
     """Idle session → registry session created, enqueued, drain waits."""
+    from backend.copilot import active_turns
+
     create_session = AsyncMock()
     enqueue = AsyncMock()
     wait_result = AsyncMock(return_value=("completed", SessionResult()))
+    idle_row = MagicMock()
+    idle_row.currentTurnStartedAt = None
 
     with (
         patch(
@@ -144,6 +148,15 @@ async def test_idle_session_enqueues_normally():
         patch(
             "backend.copilot.turn_queue.count_inflight_turns",
             new=AsyncMock(return_value=0),
+        ),
+        patch.object(
+            active_turns.ChatSession,
+            "prisma",
+            return_value=MagicMock(
+                find_unique=AsyncMock(return_value=idle_row),
+                count=AsyncMock(return_value=0),
+                update_many=AsyncMock(return_value=1),
+            ),
         ),
         patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",

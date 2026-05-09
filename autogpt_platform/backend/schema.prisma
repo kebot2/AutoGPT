@@ -267,9 +267,18 @@ model ChatSession {
   totalPromptTokens     Int @default(0)
   totalCompletionTokens Int @default(0)
 
+  // SECRT-2339 — running-turn tracking. Set when a turn is admitted and
+  // cleared on completion. NULL = no active turn. Stale cleanup is
+  // implicit via the ``> now() - MAX_TURN_LIFETIME`` filter on reads.
+  currentTurnStartedAt DateTime?
+
   Messages ChatMessage[]
 
   @@index([userId, updatedAt])
+  // Partial index for the per-user running-turn count on the cap path.
+  // ``WHERE currentTurnStartedAt IS NOT NULL`` keeps it tiny since the
+  // column is NULL on every idle session (the 99% case).
+  @@index([userId, currentTurnStartedAt], name: "ChatSession_running_turns_idx")
 }
 
 model ChatMessage {

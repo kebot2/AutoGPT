@@ -17,8 +17,8 @@ cleared back to NULL — the row becomes a normal chat message.
 
 Layered on top of:
 
-* :mod:`backend.copilot.active_turns` — Redis sorted set per user
-  tracking *running* turns (soft cap, default 5).
+* :mod:`backend.copilot.active_turns` — Postgres-backed running-turn
+  tracker (one ``ChatSession.currentTurnStartedAt`` per session).
 * :mod:`backend.copilot.executor.utils` — :func:`schedule_chat_turn`
   is the same primitive the HTTP route uses for an immediate dispatch;
   the dispatcher reuses it so queued + immediate dispatches share one
@@ -73,12 +73,12 @@ async def count_queued_turns(user_id: str) -> int:
 
 
 async def count_inflight_turns(user_id: str) -> int:
-    """Running (Redis) + queued (DB). Hard cap is enforced against this.
+    """Running + queued. Hard cap is enforced against this.
 
-    Counts queued first, then running: a concurrent ``queued → running``
+    Counts queued first then running so a concurrent queued→running
     promotion between the two reads can be double-counted (safe — caller
-    rejects an extra task) but never missed entirely. The cap may
-    therefore briefly read high under burst load, but never low.
+    rejects one extra task) but never missed. The cap may briefly read
+    high under burst load, never low.
     """
     queued = await count_queued_turns(user_id)
     running = await count_running_turns(user_id)
@@ -136,22 +136,17 @@ async def try_enqueue_turn(
     permissions: Mapping[str, Any] | None = None,
     request_arrival_at: float = 0.0,
 ) -> ChatMessage:
-    """Atomically admit a queued turn against the user's hard cap.
+    """Admit a queued turn against the user's hard cap.
 
-    Optimistic protocol with post-insert recount: a concurrent submit
-    that races past the pre-check is detected by the recount and one of
-    the in-flight inserts is rolled back. The losing caller sees
-    :class:`InflightCapExceeded` and the route maps to HTTP 429.
-
-    The dispatcher race (claim between insert and recount) is handled
-    by gating the rollback delete on ``queueStatus='queued'`` — a row
-    already claimed by a concurrent dispatcher survives, and that
-    caller is admitted (the message is now running).
+    Non-locked count-then-insert: under burst, two concurrent submits
+    can both pass the count and both insert, leaving the user briefly
+    one or two over the cap. Same trade-off the graph-execution credit
+    rate-limit accepts on its INCRBY path; the cap is a safeguard, not
+    a budget.
     """
     if await count_inflight_turns(user_id) >= inflight_cap:
         raise InflightCapExceeded()
-
-    row = await enqueue_turn(
+    return await enqueue_turn(
         session_id=session_id,
         message=message,
         message_id=message_id,
@@ -163,17 +158,6 @@ async def try_enqueue_turn(
         permissions=permissions,
         request_arrival_at=request_arrival_at,
     )
-
-    if await count_inflight_turns(user_id) > inflight_cap:
-        deleted = await ChatMessage.prisma().delete_many(
-            where={"id": row.id, "queueStatus": STATUS_QUEUED},
-        )
-        if deleted > 0:
-            from backend.copilot.model import invalidate_session_cache
-
-            await invalidate_session_cache(session_id)
-            raise InflightCapExceeded()
-    return row
 
 
 async def enqueue_turn(
@@ -316,38 +300,6 @@ async def claim_queued_turn_by_id(message_id: str) -> ChatMessage | None:
     return await ChatMessage.prisma().find_unique(where={"id": message_id})
 
 
-async def claim_next_queued_turn(user_id: str) -> ChatMessage | None:
-    """Find the user's oldest queued row and claim it atomically.
-
-    Convenience wrapper — finds head then delegates to
-    :func:`claim_queued_turn_by_id`. Two concurrent dispatchers see only
-    one win the row; the loser sees ``None``.
-
-    Prefer :func:`claim_queued_turn_by_id` directly when the caller has
-    already validated a specific row, so a parallel cancel doesn't
-    promote a *different*, unvalidated row.
-    """
-    head = await ChatMessage.prisma().find_first(
-        where={
-            "queueStatus": STATUS_QUEUED,
-            "Session": {"is": {"userId": user_id}},
-        },
-        order={"createdAt": "asc"},
-    )
-    if head is None:
-        return None
-
-    claimed = await ChatMessage.prisma().update_many(
-        where={"id": head.id, "queueStatus": STATUS_QUEUED},
-        data={"queueStatus": None, "queueStartedAt": datetime.now(timezone.utc)},
-    )
-    if claimed == 0:
-        # Lost the race; caller should retry the loop or wait for the
-        # next slot-free event.
-        return None
-    return await ChatMessage.prisma().find_unique(where={"id": head.id})
-
-
 # ============================================================================
 # Dispatch
 # ============================================================================
@@ -390,12 +342,12 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     if head is None:
         return False
 
-    # Skip dispatch if the head's session already has a running turn —
-    # otherwise ``acquire_turn_slot`` returns ``REFRESHED`` instead of
-    # admitting a fresh slot, two turns share a single slot, and the
-    # first turn's completion releases the shared slot for both. The
-    # next slot-free hook (or routine timer) will retry once that
-    # session is idle.
+    # Skip dispatch if the head's session already has a running turn.
+    # Promoting here would refresh the same ChatSession's
+    # currentTurnStartedAt instead of getting a fresh slot, and the
+    # in-flight turn's completion would clear the timestamp out from
+    # under the just-promoted turn. The next slot-free hook (or routine
+    # timer) will retry once that session is idle.
     busy_sessions = await get_running_session_ids(user_id)
     if head.sessionId in busy_sessions:
         logger.debug(
@@ -445,10 +397,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         )
         return False
 
-    # Claim by the validated head's id, NOT find-then-claim-head: a
-    # parallel cancel of ``head`` between validation and claim would
-    # otherwise let ``claim_next_queued_turn`` claim a *different* row
-    # that never went through paywall / rate-limit re-validation.
+    # Claim by the validated head's id specifically: a parallel cancel
+    # between validation and claim must reject this dispatch, not promote
+    # a *different* (unvalidated) row that happens to be next in the
+    # queue.
     row = await claim_queued_turn_by_id(head.id)
     if row is None:
         # ``head`` was cancelled / blocked / claimed by a concurrent
@@ -489,9 +441,9 @@ async def dispatch_next_for_user(user_id: str) -> bool:
             data={"queueStatus": STATUS_QUEUED, "queueStartedAt": None},
         )
         raise
-    # The promoted row's queue columns were cleared in
-    # ``claim_next_queued_turn``; refresh the chat session cache so the
-    # frontend stops rendering the 'Queued' badge for this message.
+    # The promoted row's queueStatus was cleared by claim_queued_turn_by_id;
+    # refresh the chat-session cache so the frontend stops rendering the
+    # 'Queued' badge for this message.
     await invalidate_session_cache(row.sessionId)
     return True
 
