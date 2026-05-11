@@ -116,7 +116,7 @@ async def get_running_session_ids(user_id: str) -> set[str]:
     rows = await chat_db().list_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_RUNNING
     )
-    return {r.session_id for r in rows}
+    return {r.id for r in rows}
 
 
 async def release_turn_slot(user_id: str, session_id: str) -> None:

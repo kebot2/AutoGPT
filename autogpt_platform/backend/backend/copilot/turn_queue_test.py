@@ -42,12 +42,12 @@ def _pyd_message(**overrides) -> PydanticChatMessage:
 
 
 def _mock_session(session_id: str = "s1", title: str | None = "T") -> MagicMock:
-    """Build a ChatSessionInfo-ish mock for list_chat_sessions_by_status
-    return values.  Mirrors the Pydantic surface the dispatcher reads."""
+    """Build a Prisma-ish ChatSession mock for list_chat_sessions_by_status
+    return values."""
     s = MagicMock()
-    s.session_id = session_id
+    s.id = session_id
     s.title = title
-    s.updated_at = datetime.now(timezone.utc)
+    s.updatedAt = datetime.now(timezone.utc)
     return s
 
 

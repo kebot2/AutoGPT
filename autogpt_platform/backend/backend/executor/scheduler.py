@@ -248,16 +248,6 @@ def cleanup_expired_files():
     run_async(cleanup_expired_files_async())
 
 
-def dispatch_copilot_queues():
-    """Periodic backfill for the copilot per-user task queue.  The main
-    dispatcher is the per-turn slot-free hook in ``mark_session_completed``;
-    this job recovers items that hook missed (backend restart, hook
-    failure, paywall/rate-limit clears between events)."""
-    from backend.copilot.turn_queue import dispatch_for_all_queued_users
-
-    run_async(dispatch_for_all_queued_users())
-
-
 def cleanup_oauth_tokens():
     """Clean up expired OAuth tokens from the database."""
 
@@ -589,20 +579,6 @@ class Scheduler(AppService):
                 seconds=config.cloud_storage_cleanup_interval_hours
                 * 3600,  # Convert hours to seconds
                 jobstore=Jobstores.EXECUTION.value,
-            )
-
-            # Copilot per-user queue backfill - configurable interval (60s
-            # default). Belt-and-braces alongside the slot-free hook in
-            # ``mark_session_completed``: catches missed dispatches so a
-            # queued session never sits forever.
-            self.scheduler.add_job(
-                dispatch_copilot_queues,
-                id="dispatch_copilot_queues",
-                trigger="interval",
-                replace_existing=True,
-                seconds=config.copilot_queue_dispatch_interval_secs,
-                jobstore=Jobstores.EXECUTION.value,
-                max_instances=1,
             )
 
             # OAuth Token Cleanup - configurable interval

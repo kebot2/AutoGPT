@@ -635,35 +635,15 @@ async def test_count_chat_sessions_by_status_filters_by_user_and_status() -> Non
 
 @pytest.mark.asyncio
 async def test_list_chat_sessions_by_status_returns_rows_oldest_first() -> None:
-    """Returns RPC-safe ``ChatSessionInfo`` (not raw Prisma rows) — the
-    periodic dispatcher reaches this via the DB manager subprocess and
-    the serializer rejects raw Prisma objects."""
     from backend.copilot.db import list_chat_sessions_by_status
 
-    now = datetime.now(UTC)
-    _common: dict[str, Any] = {
-        "userId": "u1",
-        "chatStatus": "queued",
-        "createdAt": now,
-        "updatedAt": now,
-        "credentials": "{}",
-        "successfulAgentRuns": "{}",
-        "successfulAgentSchedules": "{}",
-        "metadata": "{}",
-        "totalPromptTokens": 0,
-        "totalCompletionTokens": 0,
-    }
-    rows = [
-        PrismaChatSession(id="s1", **_common),
-        PrismaChatSession(id="s2", **_common),
-    ]
+    rows = [AsyncMock(id="s1"), AsyncMock(id="s2")]
     find_many = AsyncMock(return_value=rows)
     with patch.object(
         PrismaChatSession, "prisma", return_value=AsyncMock(find_many=find_many)
     ):
         result = await list_chat_sessions_by_status(user_id="u1", status="queued")
-    assert [r.session_id for r in result] == ["s1", "s2"]
-    assert all(r.chat_status == "queued" for r in result)
+    assert result == rows
     kwargs = find_many.call_args.kwargs
     assert kwargs["where"] == {"userId": "u1", "chatStatus": "queued"}
     assert kwargs["order"] == {"updatedAt": "asc"}

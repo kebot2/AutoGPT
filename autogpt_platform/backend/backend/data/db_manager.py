@@ -400,8 +400,10 @@ class DatabaseManager(AppService):
     # ChatSession lifecycle primitives.  Three functions cover the
     # cap-count + cross-session queue (count/list/transition).
     count_chat_sessions_by_status = _(chat_db.count_chat_sessions_by_status)
-    list_chat_sessions_by_status = _(chat_db.list_chat_sessions_by_status)
-    list_users_with_queued_sessions = _(chat_db.list_users_with_queued_sessions)
+    # NOTE: list_chat_sessions_by_status is intentionally *not* exposed via
+    # RPC — it returns Prisma rows that don't survive the response serializer.
+    # Its two callers (mark_session_completed slot-free hook, count gate) run
+    # in the main API process where chat_db() resolves to the direct module.
     update_chat_session_status = _(chat_db.update_chat_session_status)
     get_chat_session_status = _(chat_db.get_chat_session_status)
     get_latest_user_message_in_session = _(chat_db.get_latest_user_message_in_session)
@@ -633,8 +635,6 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     update_chat_session_title = d.update_chat_session_title
     set_turn_duration = d.set_turn_duration
     count_chat_sessions_by_status = d.count_chat_sessions_by_status
-    list_chat_sessions_by_status = d.list_chat_sessions_by_status
-    list_users_with_queued_sessions = d.list_users_with_queued_sessions
     update_chat_session_status = d.update_chat_session_status
     get_chat_session_status = d.get_chat_session_status
     get_latest_user_message_in_session = d.get_latest_user_message_in_session
