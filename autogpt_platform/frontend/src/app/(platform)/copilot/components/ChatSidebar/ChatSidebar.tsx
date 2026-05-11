@@ -32,8 +32,11 @@ import {
   PencilSimpleIcon,
   PlusCircleIcon,
   PlusIcon,
+  ShareNetworkIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
+import { ShareChatDialog } from "../../sharing/ShareChatDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { parseAsString, useQueryState } from "nuqs";
@@ -75,8 +78,10 @@ export function ChatSidebar() {
   const [exportingSessionIds, setExportingSessionIds] = useState<Set<string>>(
     new Set(),
   );
+  const [sharingSessionId, setSharingSessionId] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameCancelledRef = useRef(false);
+  const chatSharingEnabled = useGetFlag(Flag.CHAT_SHARING);
 
   const { mutate: renameSession } = usePatchV2UpdateSessionTitle({
     mutation: {
@@ -482,6 +487,17 @@ export function ChatSidebar() {
                               ? "Exporting…"
                               : "Export chat"}
                           </DropdownMenuItem>
+                          {chatSharingEnabled && (
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSharingSessionId(session.id);
+                              }}
+                            >
+                              <ShareNetworkIcon className="mr-2 h-4 w-4" />
+                              Share chat
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem
                             onClick={(e) =>
                               handleDeleteClick(e, session.id, session.title)
@@ -509,6 +525,16 @@ export function ChatSidebar() {
         onConfirm={confirmDelete}
         onCancel={cancelDelete}
       />
+
+      {sharingSessionId && (
+        <ShareChatDialog
+          sessionId={sharingSessionId}
+          open={true}
+          onOpenChange={(next) => {
+            if (!next) setSharingSessionId(null);
+          }}
+        />
+      )}
     </>
   );
 }

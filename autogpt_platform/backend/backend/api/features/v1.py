@@ -2,7 +2,6 @@ import asyncio
 import base64
 import logging
 import time
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Sequence, cast, get_args
@@ -94,6 +93,7 @@ from backend.data.onboarding import (
     reset_user_onboarding,
     update_user_onboarding,
 )
+from backend.data.sharing.tokens import SHARE_TOKEN_PATTERN, generate_share_token
 from backend.data.tally import extract_business_understanding
 from backend.data.understanding import (
     BusinessUnderstandingInput,
@@ -1991,7 +1991,7 @@ async def enable_execution_sharing(
         raise HTTPException(status_code=404, detail="Execution not found")
 
     # Generate a unique share token
-    share_token = str(uuid.uuid4())
+    share_token = generate_share_token()
 
     # Remove stale allowlist records before updating the token — prevents a
     # window where old records + new token could coexist.
@@ -2056,7 +2056,7 @@ async def disable_execution_sharing(
 async def get_shared_execution(
     share_token: Annotated[
         str,
-        Path(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
+        Path(pattern=SHARE_TOKEN_PATTERN),
     ],
 ) -> execution_db.SharedExecutionResponse:
     """Get a shared graph execution by share token (no auth required)."""
@@ -2076,11 +2076,11 @@ async def get_shared_execution(
 async def download_shared_file(
     share_token: Annotated[
         str,
-        Path(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
+        Path(pattern=SHARE_TOKEN_PATTERN),
     ],
     file_id: Annotated[
         str,
-        Path(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
+        Path(pattern=SHARE_TOKEN_PATTERN),
     ],
 ) -> Response:
     """Download a workspace file from a shared execution (no auth required).
