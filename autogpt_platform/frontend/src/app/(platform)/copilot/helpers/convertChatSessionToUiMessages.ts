@@ -225,13 +225,9 @@ export function convertChatSessionMessagesToUiMessages(
   const messages = coerceSessionChatMessages(rawMessages);
   // Find the most-recent user message — when the session is queued, this
   // is the message that's waiting and renders the "Queued" badge.
-  let latestUserMessageIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      latestUserMessageIndex = i;
-      break;
-    }
-  }
+  const latestUserMessageIndex = messages.findLastIndex(
+    (m) => m.role === "user",
+  );
   const toolOutputsByCallId = new Map<string, unknown>();
 
   // Seed with extra tool outputs from adjacent pages first;
