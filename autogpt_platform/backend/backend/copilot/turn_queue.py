@@ -187,9 +187,11 @@ async def enqueue_turn(
         )
     # Flip the session to ``"queued"``.  CAS-gated on ``"idle"`` so a
     # double-submit (session already queued/running) leaves the state
-    # alone; the second pending message just sits as another normal
-    # ChatMessage row and the dispatcher picks them up serially via
-    # the session's sequence ordering on promotion.
+    # alone; the second pending message persists as a normal ChatMessage
+    # row.  When the session eventually promotes, the dispatcher reads
+    # the most-recent user row via ``get_latest_user_message_in_session``;
+    # earlier pending rows aren't independently scheduled, they sit in
+    # the chat history and the model sees them as context.
     await db.update_chat_session_status(
         session_id=session_id,
         expect_status=CHAT_STATUS_IDLE,
@@ -233,16 +235,16 @@ async def claim_queued_session(session_id: str) -> bool:
 
 async def dispatch_next_for_user(user_id: str) -> bool:
     """Promote at most one queued session for ``user_id`` from queued →
-    running.  Called when a running turn ends (slot frees) and on a
-    routine timer to recover from missed dispatch events.
+    running.  Called by ``mark_session_completed`` after every turn
+    ends — the slot-free hook is the only dispatcher trigger.
 
     Returns ``True`` iff a session was actually promoted.
 
     Pre-start re-validation runs *before* claiming so a paywalled
     user's queue head stays queued (rather than consuming a running
     slot for a turn that would immediately 402).  Auto-recovers on
-    the next dispatch tick once eligibility returns, or the user
-    cancels manually.
+    the next completion-driven tick once eligibility returns, or the
+    user cancels manually.
     """
     # ``executor.utils`` stays a local import: it pulls
     # ``turn_queue.count_inflight_turns`` lazily back through this module,

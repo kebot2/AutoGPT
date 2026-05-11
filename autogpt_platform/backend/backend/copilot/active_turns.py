@@ -92,12 +92,6 @@ def queued_turn_message() -> str:
     )
 
 
-# Back-compat shims — older module name.  Prefer the explicit running /
-# inflight variants in new code.
-get_concurrent_turn_limit = get_running_turn_limit
-concurrent_turn_limit_message = running_turn_limit_message
-
-
 class ConcurrentTurnLimitError(Exception):
     """User has reached the configured running AutoPilot turn cap."""
 
