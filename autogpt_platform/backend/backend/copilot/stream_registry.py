@@ -27,6 +27,7 @@ from redis.exceptions import RedisError
 
 from backend.api.model import CopilotCompletionPayload
 from backend.copilot.active_turns import release_turn_slot
+from backend.copilot.turn_queue import dispatch_next_for_user
 from backend.data.db_accessors import chat_db
 from backend.data.notification_bus import (
     AsyncRedisNotificationEventBus,
@@ -900,12 +901,9 @@ async def mark_session_completed(
     # promoted turn races against the just-finished turn's stale locks
     # and stalls until TTL. Best-effort: dispatcher errors are logged
     # inside turn_queue; we never let a queue hiccup break the
-    # completion path. Local import: turn_queue → executor.utils →
-    # stream_registry would be circular at module load.
+    # completion path.
     if user_id:
         try:
-            from backend.copilot.turn_queue import dispatch_next_for_user
-
             await dispatch_next_for_user(user_id)
         except Exception as exc:
             logger.warning(

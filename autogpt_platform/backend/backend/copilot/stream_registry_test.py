@@ -313,7 +313,7 @@ async def test_mark_session_completed_fires_user_queue_dispatcher():
         ),
         patch.object(stream_registry, "release_turn_slot", new=AsyncMock()),
         patch(
-            "backend.copilot.turn_queue.dispatch_next_for_user",
+            "backend.copilot.stream_registry.dispatch_next_for_user",
             new=dispatch_mock,
         ),
     ):
@@ -346,7 +346,7 @@ async def test_mark_session_completed_swallows_dispatcher_errors():
         ),
         patch.object(stream_registry, "release_turn_slot", new=AsyncMock()),
         patch(
-            "backend.copilot.turn_queue.dispatch_next_for_user",
+            "backend.copilot.stream_registry.dispatch_next_for_user",
             new=AsyncMock(side_effect=RuntimeError("queue brown-out")),
         ),
     ):
