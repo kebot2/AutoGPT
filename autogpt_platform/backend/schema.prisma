@@ -277,12 +277,14 @@ model ChatSession {
 
   Messages ChatMessage[]
 
-  @@index([userId, updatedAt])
-  // Covers BOTH the cap-count (count by userId + chatStatus) and the
-  // queue-list ORDER BY updatedAt asc in one B-tree. The 2-col
-  // [userId, updatedAt] above stays because the sidebar list filters
-  // on userId alone — Postgres can't use the 3-col index's sort
-  // ordering without a chatStatus filter in the WHERE clause.
+  // Single compound index covers (a) the cap-count (count by userId +
+  // chatStatus), (b) the queue-list ORDER BY updatedAt asc, AND (c) the
+  // sidebar list (find_many WHERE userId ORDER BY updatedAt desc).
+  // For (c) Postgres scans the per-userId index range across all
+  // chatStatus sub-buckets and sorts by updatedAt in memory — fine at
+  // typical per-user N (≤100s) and not worth a redundant 2-col index.
+  // The migration drops the previously-existing (userId, updatedAt)
+  // index that this one supersedes.
   @@index([userId, chatStatus, updatedAt], name: "ChatSession_user_status_idx")
 }
 

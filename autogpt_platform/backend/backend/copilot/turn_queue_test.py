@@ -42,12 +42,13 @@ def _pyd_message(**overrides) -> PydanticChatMessage:
 
 
 def _mock_session(session_id: str = "s1", title: str | None = "T") -> MagicMock:
-    """Build a Prisma-ish ChatSession mock for list_chat_sessions_by_status
-    return values."""
+    """Build a ChatSessionInfo-ish mock for list_chat_sessions_by_status
+    return values (the function returns app-model rows, not raw Prisma,
+    so the RPC serializer can pass them through)."""
     s = MagicMock()
-    s.id = session_id
+    s.session_id = session_id
     s.title = title
-    s.updatedAt = datetime.now(timezone.utc)
+    s.updated_at = datetime.now(timezone.utc)
     return s
 
 
@@ -175,12 +176,12 @@ async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
 
 
 def _patch_queued_list(rows):
-    """Patches the direct-Prisma ``list_chat_sessions_by_status`` import
-    used by the dispatcher (returns ``rows`` for the queued lookup)."""
+    """Patch ``list_queued_sessions`` (the dispatcher's queue read) to
+    return the given rows.  Patching the helper rather than the
+    underlying RPC keeps the test independent of how chat_db()
+    resolves in-process vs. via DatabaseManagerAsyncClient."""
     return patch.object(
-        turn_queue.copilot_db,
-        "list_chat_sessions_by_status",
-        new=AsyncMock(return_value=rows),
+        turn_queue, "list_queued_sessions", new=AsyncMock(return_value=rows)
     )
 
 

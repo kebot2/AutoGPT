@@ -6,10 +6,15 @@
 ALTER TABLE "ChatSession"
     ADD COLUMN "chatStatus" TEXT NOT NULL DEFAULT 'idle';
 
--- Covers BOTH the cap-count (count by userId + chatStatus) and the
--- queue-list ORDER BY updatedAt asc in one B-tree.  The pre-existing
--- (userId, updatedAt) index handles the sidebar list which filters on
--- userId alone.
+-- Single compound index covers all three ChatSession queries:
+--   * cap-count (count by userId + chatStatus)
+--   * queue-list (find_many WHERE userId + chatStatus ORDER BY updatedAt)
+--   * sidebar list (find_many WHERE userId ORDER BY updatedAt desc) —
+--     Postgres scans the per-userId index range and sorts in memory.
+-- Drop the prior (userId, updatedAt) index so the 3-col one is the
+-- only path for this table's per-user queries.
+DROP INDEX IF EXISTS "ChatSession_userId_updatedAt_idx";
+
 CREATE INDEX "ChatSession_user_status_idx"
     ON "ChatSession" ("userId", "chatStatus", "updatedAt");
 

@@ -34,7 +34,6 @@ the copilot_executor process (RPC via DatabaseManager).
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from backend.copilot import db as copilot_db
 from backend.copilot.model import (
     CHAT_STATUS_IDLE,
     CHAT_STATUS_QUEUED,
@@ -107,16 +106,11 @@ async def count_running_turns(user_id: str) -> int:
 
 
 async def get_running_session_ids(user_id: str) -> set[str]:
-    """Set of the user's session IDs currently running a turn.
-
-    Uses the direct-Prisma module (not ``chat_db()``) because the call
-    surface returns Prisma rows that can't cross the DB-manager RPC
-    boundary.  This path runs in the main API process which holds the
-    Prisma connection, so the direct import is safe."""
-    rows = await copilot_db.list_chat_sessions_by_status(
+    """Set of the user's session IDs currently running a turn."""
+    rows = await chat_db().list_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_RUNNING
     )
-    return {r.id for r in rows}
+    return {r.session_id for r in rows}
 
 
 async def release_turn_slot(user_id: str, session_id: str) -> None:

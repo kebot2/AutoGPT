@@ -726,19 +726,19 @@ async def count_chat_sessions_by_status(*, user_id: str, status: str) -> int:
 
 async def list_chat_sessions_by_status(
     *, user_id: str, status: str
-) -> list[PrismaChatSession]:
+) -> list[ChatSessionInfo]:
     """User's ChatSession rows with the given status, oldest-first.
 
-    Direct-Prisma callers only — not exposed via the DB-manager RPC
-    surface because Prisma objects don't survive RPC serialization.
-    The two existing callers (``turn_queue.dispatch_next_for_user``
-    via ``mark_session_completed`` and ``active_turns.get_running_session_ids``)
-    both run in the main API process which holds a direct Prisma
-    connection."""
-    return await PrismaChatSession.prisma().find_many(
+    Returns application-model :class:`ChatSessionInfo` instances so the
+    function is RPC-safe — ``mark_session_completed`` invokes the
+    dispatcher from the CoPilotExecutor subprocess (no direct Prisma
+    connection), and ``DatabaseManagerAsyncClient``'s response
+    serializer rejects raw Prisma rows."""
+    rows = await PrismaChatSession.prisma().find_many(
         where={"userId": user_id, "chatStatus": status},
         order={"updatedAt": "asc"},
     )
+    return [ChatSessionInfo.from_db(r) for r in rows]
 
 
 async def get_latest_user_message_in_session(

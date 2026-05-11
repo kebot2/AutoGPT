@@ -32,7 +32,6 @@ import logging
 import uuid
 from typing import Any, Mapping
 
-from backend.copilot import db as copilot_db
 from backend.copilot.active_turns import TurnSlot, count_running_turns
 from backend.copilot.config import ChatConfig
 from backend.copilot.model import (
@@ -77,12 +76,8 @@ async def count_inflight_turns(user_id: str) -> int:
 
 async def list_queued_sessions(user_id: str):
     """User's queued sessions, oldest-first (FIFO order).  UX surface
-    for the 'your queued tasks' panel.
-
-    Uses the direct-Prisma module: Prisma rows don't survive the
-    DB-manager RPC serializer, so this function is only safe in the
-    main API process which holds the Prisma connection."""
-    return await copilot_db.list_chat_sessions_by_status(
+    for the 'your queued tasks' panel."""
+    return await chat_db().list_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_QUEUED
     )
 
@@ -260,7 +255,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         logger.info(
             "dispatch_next_for_user: user=%s paywalled, leaving session=%s queued",
             user_id,
-            head.id,
+            head.session_id,
         )
         return False
 
@@ -281,7 +276,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
             "dispatch_next_for_user: user=%s rate-limited (%s), leaving session=%s queued",
             user_id,
             exc,
-            head.id,
+            head.session_id,
         )
         return False
     except RateLimitUnavailable:
@@ -295,20 +290,20 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # Claim by transitioning the session ``queued`` → ``running``.  A
     # parallel cancel between validation and claim rejects this
     # dispatch via the CAS returning False.
-    if not await claim_queued_session(head.id):
+    if not await claim_queued_session(head.session_id):
         return False
 
     # Find the pending user message in this session (the most recent
     # user-role row with no following assistant rows — i.e. the one
     # that triggered the queue).  Its ``metadata`` carries the
     # dispatcher payload.
-    pending = await chat_db().get_latest_user_message_in_session(head.id)
+    pending = await chat_db().get_latest_user_message_in_session(head.session_id)
     if pending is None or pending.content is None:
         # Shouldn't happen — enqueue_turn always persists a row before
         # flipping the session to queued.  If it does (corrupted
         # state), roll back to idle so the next tick doesn't loop.
         await chat_db().update_chat_session_status(
-            session_id=head.id,
+            session_id=head.session_id,
             expect_status=CHAT_STATUS_RUNNING,
             status=CHAT_STATUS_IDLE,
         )
@@ -324,11 +319,11 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # don't re-flip the status (already running).  ``dispatch_turn``
         # calls ``slot.keep()`` internally; release happens via
         # ``mark_session_completed`` → ``release_turn_slot``.
-        slot = TurnSlot(user_id, head.id)
+        slot = TurnSlot(user_id, head.session_id)
         slot.admitted = True
         await dispatch_turn(
             slot,
-            session_id=head.id,
+            session_id=head.session_id,
             user_id=user_id,
             turn_id=turn_id,
             message=pending.content,
@@ -345,7 +340,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # slot-free event can retry.
         try:
             await chat_db().update_chat_session_status(
-                session_id=head.id,
+                session_id=head.session_id,
                 expect_status=CHAT_STATUS_RUNNING,
                 status=CHAT_STATUS_QUEUED,
             )
@@ -354,10 +349,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
                 "dispatch_next_for_user: failed to restore claim for "
                 "session=%s after dispatch failure; session left in "
                 "chatStatus='running' and will need manual recovery: %s",
-                head.id,
+                head.session_id,
                 restore_exc,
             )
         raise
 
-    await invalidate_session_cache(head.id)
+    await invalidate_session_cache(head.session_id)
     return True

@@ -634,16 +634,48 @@ async def test_count_chat_sessions_by_status_filters_by_user_and_status() -> Non
 
 
 @pytest.mark.asyncio
-async def test_list_chat_sessions_by_status_returns_rows_oldest_first() -> None:
+async def test_list_chat_sessions_by_status_returns_app_models_oldest_first() -> None:
+    """Returns RPC-safe ``ChatSessionInfo`` rows (not raw Prisma) so the
+    function can serve the dispatcher across the DatabaseManager RPC
+    boundary from the CoPilotExecutor subprocess."""
     from backend.copilot.db import list_chat_sessions_by_status
 
-    rows = [AsyncMock(id="s1"), AsyncMock(id="s2")]
+    now = datetime.now(UTC)
+    rows = [
+        PrismaChatSession(
+            id="s1",
+            userId="u1",
+            chatStatus="queued",
+            createdAt=now,
+            updatedAt=now,
+            credentials="{}",
+            successfulAgentRuns="{}",
+            successfulAgentSchedules="{}",
+            metadata="{}",
+            totalPromptTokens=0,
+            totalCompletionTokens=0,
+        ),
+        PrismaChatSession(
+            id="s2",
+            userId="u1",
+            chatStatus="queued",
+            createdAt=now,
+            updatedAt=now,
+            credentials="{}",
+            successfulAgentRuns="{}",
+            successfulAgentSchedules="{}",
+            metadata="{}",
+            totalPromptTokens=0,
+            totalCompletionTokens=0,
+        ),
+    ]
     find_many = AsyncMock(return_value=rows)
     with patch.object(
         PrismaChatSession, "prisma", return_value=AsyncMock(find_many=find_many)
     ):
         result = await list_chat_sessions_by_status(user_id="u1", status="queued")
-    assert result == rows
+    assert [r.session_id for r in result] == ["s1", "s2"]
+    assert all(r.chat_status == "queued" for r in result)
     kwargs = find_many.call_args.kwargs
     assert kwargs["where"] == {"userId": "u1", "chatStatus": "queued"}
     assert kwargs["order"] == {"updatedAt": "asc"}
