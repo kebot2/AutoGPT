@@ -594,4 +594,31 @@ describe("ChatMessagesContainer — queue badges on user messages", () => {
     );
     expect(screen.queryByTestId("queue-badge")).toBeNull();
   });
+
+  it("does NOT render the badge when isLatestUserMessage but session is idle", () => {
+    // Guards against regressing the AND-gate: even if a row is the
+    // latest user message, the badge should stay hidden unless the
+    // OWNING session is in the queued state.
+    const userId = "user-q2";
+    const turnStats = new Map([
+      [userId, { isLatestUserMessage: true, rawMessageId: "uuid-q2" }],
+    ]);
+    const messages = [
+      {
+        id: userId,
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: "live", state: "done" }],
+      },
+    ];
+    render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <ChatMessagesContainer
+        {...(baseProps as any)}
+        messages={messages as any}
+        turnStats={turnStats as any}
+        sessionChatStatus="idle"
+      />,
+    );
+    expect(screen.queryByTestId("queue-badge")).toBeNull();
+  });
 });
