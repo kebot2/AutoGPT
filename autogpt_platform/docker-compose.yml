@@ -124,6 +124,9 @@ services:
       - CLAMD_CONF_MaxThreads=12
       - CLAMD_CONF_ReadTimeout=300
       - CLAMD_CONF_TCPAddr=0.0.0.0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "clamdscan --version || exit 1"]
       interval: 30s
@@ -136,12 +139,17 @@ services:
       file: ./docker-compose.platform.yml
       service: frontend
 
-  # Supabase services (minimal: auth + db + kong)
+  # Supabase services (minimal: auth + db + kong).
+  # depends_on rabbitmq:service_healthy gates concurrent infra start to dodge
+  # the E2B Docker concurrent-create race described in docker-compose.platform.yml.
   kong:
     <<: *supabase-services
     extends:
       file: ./db/docker/docker-compose.yml
       service: kong
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   auth:
     <<: *supabase-services
@@ -150,6 +158,9 @@ services:
       service: auth
     environment:
       GOTRUE_MAILER_AUTOCONFIRM: true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   db:
     <<: *supabase-services
@@ -158,6 +169,9 @@ services:
       service: db
     ports:
       - 5432:5432 # We don't use Supavisor locally, so we expose the db directly.
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   # Studio and its dependencies for local development only
   meta:
@@ -167,6 +181,9 @@ services:
     extends:
       file: ./db/docker/docker-compose.yml
       service: meta
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   studio:
     <<: *supabase-services
@@ -177,6 +194,8 @@ services:
       service: studio
     depends_on:
       meta:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     # environment:
     #   NEXT_PUBLIC_ENABLE_LOGS: false  # Disable analytics/logging features
