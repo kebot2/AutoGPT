@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import logging
 import platform
@@ -95,22 +94,6 @@ def launch_darkly_context():
         yield
 
 
-async def _copilot_queue_backfill_loop() -> None:
-    """Periodically promote queued copilot sessions whose slot-free hook
-    didn't fire.  Sleeps between ticks; cancellation stops the loop."""
-    from backend.copilot.turn_queue import dispatch_for_all_queued_users
-
-    interval = settings.config.copilot_queue_dispatch_interval_secs
-    while True:
-        try:
-            await asyncio.sleep(interval)
-            await dispatch_for_all_queued_users()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("copilot queue backfill tick failed")
-
-
 @contextlib.asynccontextmanager
 async def lifespan_context(app: fastapi.FastAPI):
     verify_auth_settings()
@@ -156,26 +139,8 @@ async def lifespan_context(app: fastapi.FastAPI):
     await backend.data.graph.migrate_llm_models(DEFAULT_LLM_MODEL)
     await backend.integrations.webhooks.utils.migrate_legacy_triggered_graphs()
 
-    # Periodic backfill for the copilot per-user task queue.  The main
-    # dispatcher is the slot-free hook in ``mark_session_completed``;
-    # this loop recovers items that hook missed (replica restart, hook
-    # failure, paywall/rate-limit cleared between events) so a queued
-    # session never sits forever.  Lives in the API lifespan because
-    # the dispatcher uses direct Prisma (Prisma rows can't cross the
-    # DB-manager RPC boundary).
-    copilot_queue_task = asyncio.create_task(
-        _copilot_queue_backfill_loop(),
-        name="copilot_queue_backfill",
-    )
-
     with launch_darkly_context():
         yield
-
-    copilot_queue_task.cancel()
-    try:
-        await copilot_queue_task
-    except (asyncio.CancelledError, Exception):
-        pass
 
     try:
         await shutdown_cloud_storage_handler()

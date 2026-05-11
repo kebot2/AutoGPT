@@ -14,7 +14,12 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from redis.exceptions import RedisClusterException, RedisError
 
-from backend.copilot.model import ChatMessage, upsert_chat_session
+from backend.copilot.model import (
+    CHAT_STATUS_QUEUED,
+    CHAT_STATUS_RUNNING,
+    ChatMessage,
+    upsert_chat_session,
+)
 from backend.copilot.pending_messages import (
     MAX_PENDING_MESSAGES,
     PendingMessage,
@@ -26,6 +31,7 @@ from backend.copilot.pending_messages import (
 )
 from backend.copilot.stream_registry import get_session as get_active_session_meta
 from backend.copilot.stream_registry import get_session_meta_key
+from backend.data.db_accessors import chat_db
 from backend.data.redis_client import get_redis_async
 from backend.data.redis_helpers import incr_with_ttl
 from backend.data.workspace import resolve_workspace_files
@@ -93,9 +99,6 @@ async def is_turn_in_flight(session_id: str) -> bool:
         return True
     # Fall through to ChatSession.chatStatus: catches the queued case the
     # Redis registry doesn't know about (dispatcher hasn't claimed yet).
-    from backend.copilot.model import CHAT_STATUS_QUEUED, CHAT_STATUS_RUNNING
-    from backend.data.db_accessors import chat_db
-
     chat_status = await chat_db().get_chat_session_status(session_id)
     return chat_status in (CHAT_STATUS_QUEUED, CHAT_STATUS_RUNNING)
 

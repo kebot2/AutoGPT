@@ -126,43 +126,6 @@ async def _validate_and_get_session(
     return session
 
 
-async def _try_enqueue_chat_turn(
-    *,
-    request: "StreamChatRequest",
-    session_id: str,
-    user_id: str,
-    inflight_cap: int,
-    sanitized_file_ids: list[str] | None,
-    builder_permissions: CopilotPermissions | None,
-    request_arrival_at: float,
-) -> None:
-    """Atomic admission against the user's inflight cap, then persist.
-
-    ``turn_queue.try_enqueue_turn`` does an optimistic count → insert →
-    recount sequence with rollback on a concurrent admission that
-    pushed us over the cap. Raises ``InflightCapExceeded`` so the
-    caller can map to HTTP 429.
-    """
-    await turn_queue.try_enqueue_turn(
-        user_id=user_id,
-        inflight_cap=inflight_cap,
-        session_id=session_id,
-        message=request.message,
-        message_id=request.message_id,
-        is_user_message=request.is_user_message,
-        context=request.context,
-        file_ids=sanitized_file_ids,
-        mode=request.mode,
-        model=request.model,
-        permissions=(
-            builder_permissions.model_dump(exclude_none=True)
-            if builder_permissions
-            else None
-        ),
-        request_arrival_at=request_arrival_at,
-    )
-
-
 router = APIRouter(
     tags=["chat"],
 )
@@ -1132,19 +1095,27 @@ async def stream_chat_post(
     except ConcurrentTurnLimitError:
         # Soft running cap (default 5) hit. Fall through to the queue:
         # if total in-flight (running + queued) is still under the hard
-        # cap (default 15), persist the user's message with
-        # ``isQueued=true`` and return the empty UI stream — the
-        # dispatcher will promote it when a running slot frees. Past
-        # the hard cap the user is blocked at HTTP 429.
+        # cap (default 15), persist the user's message and flip the
+        # session ``idle`` → ``queued`` so the slot-free hook can promote
+        # it later. Past the hard cap the user is blocked at HTTP 429.
         inflight_cap = get_inflight_turn_limit()
         try:
-            await _try_enqueue_chat_turn(
-                request=request,
-                session_id=session_id,
+            await turn_queue.try_enqueue_turn(
                 user_id=user_id,
                 inflight_cap=inflight_cap,
-                sanitized_file_ids=sanitized_file_ids,
-                builder_permissions=builder_permissions,
+                session_id=session_id,
+                message=request.message,
+                message_id=request.message_id,
+                is_user_message=request.is_user_message,
+                context=request.context,
+                file_ids=sanitized_file_ids,
+                mode=request.mode,
+                model=request.model,
+                permissions=(
+                    builder_permissions.model_dump(exclude_none=True)
+                    if builder_permissions
+                    else None
+                ),
                 request_arrival_at=request_arrival_at,
             )
         except turn_queue.InflightCapExceeded:

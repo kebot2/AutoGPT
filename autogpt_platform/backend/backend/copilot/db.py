@@ -741,19 +741,6 @@ async def list_chat_sessions_by_status(
     )
 
 
-async def list_users_with_queued_sessions() -> list[str]:
-    """Distinct userIds that have at least one queued ChatSession.  Used
-    by the periodic queue-backfill job (see
-    :func:`backend.copilot.turn_queue.dispatch_for_all_queued_users`)
-    so it can call the per-user dispatcher once per user instead of
-    iterating every queued row."""
-    rows = await PrismaChatSession.prisma().find_many(
-        where={"chatStatus": "queued"},
-        distinct=["userId"],
-    )
-    return [r.userId for r in rows]
-
-
 async def get_latest_user_message_in_session(
     session_id: str,
 ) -> ChatMessage | None:

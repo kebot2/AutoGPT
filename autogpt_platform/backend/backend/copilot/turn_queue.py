@@ -33,7 +33,8 @@ import uuid
 from typing import Any, Mapping
 
 from backend.copilot import db as copilot_db
-from backend.copilot.active_turns import count_running_turns
+from backend.copilot.active_turns import TurnSlot, count_running_turns
+from backend.copilot.config import ChatConfig
 from backend.copilot.model import (
     CHAT_STATUS_IDLE,
     CHAT_STATUS_QUEUED,
@@ -41,6 +42,13 @@ from backend.copilot.model import (
     ChatMessage,
     _get_session_lock,
     invalidate_session_cache,
+)
+from backend.copilot.rate_limit import (
+    RateLimitExceeded,
+    RateLimitUnavailable,
+    check_rate_limit,
+    get_global_rate_limits,
+    is_user_paywalled,
 )
 from backend.data.db_accessors import chat_db
 
@@ -236,18 +244,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     the next dispatch tick once eligibility returns, or the user
     cancels manually.
     """
-    # Local imports to keep the cold-start path light and avoid pulling
-    # the rate-limit + executor pipeline into modules that just want
-    # queue counts.
-    from backend.copilot.config import ChatConfig
+    # ``executor.utils`` stays a local import: it pulls
+    # ``turn_queue.count_inflight_turns`` lazily back through this module,
+    # so top-leveling it here would deadlock the import graph.
     from backend.copilot.executor.utils import dispatch_turn
-    from backend.copilot.rate_limit import (
-        RateLimitExceeded,
-        RateLimitUnavailable,
-        check_rate_limit,
-        get_global_rate_limits,
-        is_user_paywalled,
-    )
 
     queued = await list_queued_sessions(user_id)
     if not queued:
@@ -322,8 +322,6 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # don't re-flip the status (already running).  ``dispatch_turn``
         # calls ``slot.keep()`` internally; release happens via
         # ``mark_session_completed`` → ``release_turn_slot``.
-        from backend.copilot.active_turns import TurnSlot
-
         slot = TurnSlot(user_id, head.id)
         slot.admitted = True
         await dispatch_turn(
@@ -361,31 +359,3 @@ async def dispatch_next_for_user(user_id: str) -> bool:
 
     await invalidate_session_cache(head.id)
     return True
-
-
-async def dispatch_for_all_queued_users() -> int:
-    """Periodic queue backfill.  Picks every user_id that currently has
-    at least one queued ChatSession and runs ``dispatch_next_for_user``
-    for each — recovers items left queued when ``mark_session_completed``
-    didn't fire (backend restart, slot-free hook swallowed an error, or
-    paywall/rate-limit eligibility cleared between events).
-
-    Per-user errors are logged and skipped so one user's bad state
-    can't stall the rest of the queue.  Returns the number of sessions
-    promoted on this tick.
-    """
-    user_ids = await copilot_db.list_users_with_queued_sessions()
-    if not user_ids:
-        return 0
-    promoted = 0
-    for user_id in user_ids:
-        try:
-            if await dispatch_next_for_user(user_id):
-                promoted += 1
-        except Exception as exc:
-            logger.error(
-                "dispatch_for_all_queued_users: user=%s skipped (%s)",
-                user_id,
-                exc,
-            )
-    return promoted

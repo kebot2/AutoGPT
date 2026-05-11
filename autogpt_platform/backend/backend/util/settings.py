@@ -221,20 +221,6 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         description="Interval in hours between execution accuracy alert checks.",
     )
 
-    copilot_queue_dispatch_interval_secs: int = Field(
-        default=60,
-        ge=10,
-        le=3600,
-        description=(
-            "Interval in seconds for the periodic copilot queue backfill. "
-            "The dispatcher is normally driven by ``mark_session_completed`` "
-            "after each turn ends; this fallback catches missed events "
-            "(backend restart with queued items, dispatch hooks that fail "
-            "silently, paywall/rate-limit clears between events) so queued "
-            "sessions don't sit forever."
-        ),
-    )
-
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="allow",

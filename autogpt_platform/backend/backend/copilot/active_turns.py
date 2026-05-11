@@ -34,6 +34,7 @@ the copilot_executor process (RPC via DatabaseManager).
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from backend.copilot import db as copilot_db
 from backend.copilot.model import (
     CHAT_STATUS_IDLE,
     CHAT_STATUS_QUEUED,
@@ -118,8 +119,6 @@ async def get_running_session_ids(user_id: str) -> set[str]:
     surface returns Prisma rows that can't cross the DB-manager RPC
     boundary.  This path runs in the main API process which holds the
     Prisma connection, so the direct import is safe."""
-    from backend.copilot import db as copilot_db
-
     rows = await copilot_db.list_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_RUNNING
     )

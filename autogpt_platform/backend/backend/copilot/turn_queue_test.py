@@ -201,7 +201,7 @@ async def test_dispatch_leaves_queued_when_user_paywalled() -> None:
         _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
-            "backend.copilot.rate_limit.is_user_paywalled",
+            "backend.copilot.turn_queue.is_user_paywalled",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -222,15 +222,15 @@ async def test_dispatch_leaves_queued_on_rate_limit_exceeded() -> None:
         _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
-            "backend.copilot.rate_limit.is_user_paywalled",
+            "backend.copilot.turn_queue.is_user_paywalled",
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "backend.copilot.rate_limit.get_global_rate_limits",
+            "backend.copilot.turn_queue.get_global_rate_limits",
             new=AsyncMock(return_value=(100, 1000, None)),
         ),
         patch(
-            "backend.copilot.rate_limit.check_rate_limit",
+            "backend.copilot.turn_queue.check_rate_limit",
             new=AsyncMock(
                 side_effect=RateLimitExceeded(
                     "daily", resets_at=datetime.now(timezone.utc)
@@ -253,11 +253,11 @@ async def test_dispatch_defers_on_rate_limit_unavailable() -> None:
         _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
-            "backend.copilot.rate_limit.is_user_paywalled",
+            "backend.copilot.turn_queue.is_user_paywalled",
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "backend.copilot.rate_limit.get_global_rate_limits",
+            "backend.copilot.turn_queue.get_global_rate_limits",
             new=AsyncMock(side_effect=RateLimitUnavailable()),
         ),
     ):
@@ -281,15 +281,15 @@ async def test_dispatch_happy_path_claims_and_dispatches() -> None:
         _patch_queued_list([head]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
-            "backend.copilot.rate_limit.is_user_paywalled",
+            "backend.copilot.turn_queue.is_user_paywalled",
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "backend.copilot.rate_limit.get_global_rate_limits",
+            "backend.copilot.turn_queue.get_global_rate_limits",
             new=AsyncMock(return_value=(100, 1000, None)),
         ),
         patch(
-            "backend.copilot.rate_limit.check_rate_limit",
+            "backend.copilot.turn_queue.check_rate_limit",
             new=AsyncMock(),
         ),
         patch(
@@ -323,15 +323,15 @@ async def test_dispatch_rolls_claim_back_on_dispatch_failure() -> None:
         _patch_queued_list([head]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
-            "backend.copilot.rate_limit.is_user_paywalled",
+            "backend.copilot.turn_queue.is_user_paywalled",
             new=AsyncMock(return_value=False),
         ),
         patch(
-            "backend.copilot.rate_limit.get_global_rate_limits",
+            "backend.copilot.turn_queue.get_global_rate_limits",
             new=AsyncMock(return_value=(100, 1000, None)),
         ),
         patch(
-            "backend.copilot.rate_limit.check_rate_limit",
+            "backend.copilot.turn_queue.check_rate_limit",
             new=AsyncMock(),
         ),
         patch(
@@ -350,63 +350,3 @@ async def test_dispatch_rolls_claim_back_on_dispatch_failure() -> None:
     db.update_chat_session_status.assert_any_await(
         session_id="s1", expect_status="running", status="queued"
     )
-
-
-# ── dispatch_for_all_queued_users (periodic backfill) ──────────────────
-
-
-def _patch_queued_user_ids(user_ids):
-    """Patches the direct-Prisma ``list_users_with_queued_sessions``
-    import used by the periodic backfill."""
-    return patch.object(
-        turn_queue.copilot_db,
-        "list_users_with_queued_sessions",
-        new=AsyncMock(return_value=user_ids),
-    )
-
-
-@pytest.mark.asyncio
-async def test_dispatch_for_all_queued_users_runs_per_user() -> None:
-    """Backfill iterates every user_id returned by
-    list_users_with_queued_sessions and calls dispatch_next_for_user
-    once per user.  Returns the number of promotions."""
-    dispatch_mock = AsyncMock(side_effect=[True, False, True])
-    with (
-        _patch_queued_user_ids(["u1", "u2", "u3"]),
-        patch.object(turn_queue, "dispatch_next_for_user", new=dispatch_mock),
-    ):
-        promoted = await turn_queue.dispatch_for_all_queued_users()
-    assert promoted == 2
-    assert dispatch_mock.await_count == 3
-    dispatch_mock.assert_any_await("u1")
-    dispatch_mock.assert_any_await("u2")
-    dispatch_mock.assert_any_await("u3")
-
-
-@pytest.mark.asyncio
-async def test_dispatch_for_all_queued_users_skips_failing_user() -> None:
-    """One user blowing up must not stall the rest of the tick — failure
-    is logged, the loop continues, and the function returns the number
-    of users that succeeded."""
-    dispatch_mock = AsyncMock(side_effect=[RuntimeError("simulated brown-out"), True])
-    with (
-        _patch_queued_user_ids(["u_bad", "u_good"]),
-        patch.object(turn_queue, "dispatch_next_for_user", new=dispatch_mock),
-    ):
-        promoted = await turn_queue.dispatch_for_all_queued_users()
-    assert promoted == 1
-    assert dispatch_mock.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_dispatch_for_all_queued_users_no_op_when_empty() -> None:
-    """No users with queued sessions → return 0 without invoking the
-    per-user dispatcher."""
-    dispatch_mock = AsyncMock()
-    with (
-        _patch_queued_user_ids([]),
-        patch.object(turn_queue, "dispatch_next_for_user", new=dispatch_mock),
-    ):
-        promoted = await turn_queue.dispatch_for_all_queued_users()
-    assert promoted == 0
-    dispatch_mock.assert_not_awaited()

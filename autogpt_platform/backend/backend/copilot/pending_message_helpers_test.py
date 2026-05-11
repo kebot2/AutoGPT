@@ -61,9 +61,7 @@ def _mock_chat_db(
     reads ``ChatSession.chatStatus`` doesn't hit a real DB connection."""
     db = MagicMock()
     db.get_chat_session_status = AsyncMock(return_value=status)
-    from backend.data import db_accessors
-
-    monkeypatch.setattr(db_accessors, "chat_db", lambda: db)
+    monkeypatch.setattr(helpers_module, "chat_db", lambda: db)
 
 
 @pytest.mark.asyncio
