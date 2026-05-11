@@ -149,11 +149,11 @@ async def test_cancel_queued_turn_returns_false_when_not_owned_or_not_queued() -
     assert ok is False
 
 
-# ── try_enqueue_turn ───────────────────────────────────────────────────
+# ── enqueue_turn (with inflight cap) ───────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
+async def test_enqueue_turn_raises_when_at_inflight_cap() -> None:
     """Pre-check rejects when running + queued already equals the cap."""
     db = MagicMock()
     db.count_chat_sessions_by_status = AsyncMock(return_value=10)
@@ -163,7 +163,7 @@ async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
         patch.object(turn_queue, "count_running_turns", new=AsyncMock(return_value=5)),
     ):
         with pytest.raises(turn_queue.InflightCapExceeded):
-            await turn_queue.try_enqueue_turn(
+            await turn_queue.enqueue_turn(
                 user_id="u1",
                 inflight_cap=15,
                 session_id="s1",
@@ -175,19 +175,21 @@ async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
 # ── dispatch_next_for_user ─────────────────────────────────────────────
 
 
-def _patch_queued_list(rows):
-    """Patch ``list_queued_sessions`` (the dispatcher's queue read) to
-    return the given rows.  Patching the helper rather than the
-    underlying RPC keeps the test independent of how chat_db()
-    resolves in-process vs. via DatabaseManagerAsyncClient."""
-    return patch.object(
-        turn_queue, "list_queued_sessions", new=AsyncMock(return_value=rows)
-    )
+def _dispatcher_db_mock(queued_rows: list) -> MagicMock:
+    """Build a ``chat_db()`` MagicMock pre-seeded for the dispatcher's
+    queue read.  Callers tack on additional method mocks
+    (``update_chat_session_status``, ``get_latest_user_message_in_session``)
+    for the rest of the dispatcher flow."""
+    db = MagicMock()
+    db.list_chat_sessions_by_status = AsyncMock(return_value=queued_rows)
+    db.update_chat_session_status = AsyncMock()
+    return db
 
 
 @pytest.mark.asyncio
 async def test_dispatch_returns_false_when_queue_empty() -> None:
-    with _patch_queued_list([]):
+    db = _dispatcher_db_mock([])
+    with patch.object(turn_queue, "chat_db", return_value=db):
         promoted = await turn_queue.dispatch_next_for_user("u1")
     assert promoted is False
 
@@ -196,10 +198,8 @@ async def test_dispatch_returns_false_when_queue_empty() -> None:
 async def test_dispatch_leaves_queued_when_user_paywalled() -> None:
     """A queued head whose owner has lapsed to NO_TIER stays queued —
     no transition fires."""
-    db = MagicMock()
-    db.update_chat_session_status = AsyncMock()
+    db = _dispatcher_db_mock([_mock_session()])
     with (
-        _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
             "backend.copilot.turn_queue.is_user_paywalled",
@@ -217,10 +217,8 @@ async def test_dispatch_leaves_queued_on_rate_limit_exceeded() -> None:
     re-validates."""
     from backend.copilot.rate_limit import RateLimitExceeded
 
-    db = MagicMock()
-    db.update_chat_session_status = AsyncMock()
+    db = _dispatcher_db_mock([_mock_session()])
     with (
-        _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
             "backend.copilot.turn_queue.is_user_paywalled",
@@ -248,10 +246,8 @@ async def test_dispatch_leaves_queued_on_rate_limit_exceeded() -> None:
 async def test_dispatch_defers_on_rate_limit_unavailable() -> None:
     from backend.copilot.rate_limit import RateLimitUnavailable
 
-    db = MagicMock()
-    db.update_chat_session_status = AsyncMock()
+    db = _dispatcher_db_mock([_mock_session()])
     with (
-        _patch_queued_list([_mock_session()]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
             "backend.copilot.turn_queue.is_user_paywalled",
@@ -273,13 +269,12 @@ async def test_dispatch_happy_path_claims_and_dispatches() -> None:
     dispatch_turn, invalidate cache, return True."""
     head = _mock_session(session_id="s1")
     pending = _pyd_message(metadata={"mode": "extended_thinking"})
-    db = MagicMock()
+    db = _dispatcher_db_mock([head])
     db.update_chat_session_status = AsyncMock(return_value=True)
     db.get_latest_user_message_in_session = AsyncMock(return_value=pending)
     dispatch_turn_mock = AsyncMock()
     invalidate = AsyncMock()
     with (
-        _patch_queued_list([head]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
             "backend.copilot.turn_queue.is_user_paywalled",
@@ -315,13 +310,12 @@ async def test_dispatch_rolls_claim_back_on_dispatch_failure() -> None:
     ``running`` → ``queued`` so the next tick can retry."""
     head = _mock_session(session_id="s1")
     pending = _pyd_message(metadata={"mode": "extended_thinking"})
-    db = MagicMock()
+    db = _dispatcher_db_mock([head])
     # First call (claim) returns True; second call (restore) also True.
     db.update_chat_session_status = AsyncMock(side_effect=[True, True])
     db.get_latest_user_message_in_session = AsyncMock(return_value=pending)
     dispatch_turn_mock = AsyncMock(side_effect=RuntimeError("RabbitMQ blip"))
     with (
-        _patch_queued_list([head]),
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
             "backend.copilot.turn_queue.is_user_paywalled",

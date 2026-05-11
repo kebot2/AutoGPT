@@ -1157,7 +1157,7 @@ async def stream_chat_post(
         # it later. Past the hard cap the user is blocked at HTTP 429.
         inflight_cap = get_inflight_turn_limit()
         try:
-            await turn_queue.try_enqueue_turn(
+            await turn_queue.enqueue_turn(
                 user_id=user_id,
                 inflight_cap=inflight_cap,
                 session_id=session_id,

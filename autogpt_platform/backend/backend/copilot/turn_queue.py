@@ -54,79 +54,27 @@ from backend.data.db_accessors import chat_db
 logger = logging.getLogger(__name__)
 
 
-async def count_queued_turns(user_id: str) -> int:
-    """Number of ``chatStatus='queued'`` ChatSession rows for ``user_id``."""
-    return await chat_db().count_chat_sessions_by_status(
-        user_id=user_id, status=CHAT_STATUS_QUEUED
-    )
-
-
 async def count_inflight_turns(user_id: str) -> int:
-    """Running + queued. Hard cap is enforced against this.
+    """Running + queued.  Hard cap is enforced against this.
 
     Counts queued first then running so a concurrent queued→running
     promotion between the two reads can be double-counted (safe — caller
     rejects one extra task) but never missed.  The cap may briefly read
     high under burst load, never low.
     """
-    queued = await count_queued_turns(user_id)
-    running = await count_running_turns(user_id)
-    return queued + running
-
-
-async def list_queued_sessions(user_id: str):
-    """User's queued sessions, oldest-first (FIFO order).  UX surface
-    for the 'your queued tasks' panel."""
-    return await chat_db().list_chat_sessions_by_status(
+    queued = await chat_db().count_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_QUEUED
     )
+    running = await count_running_turns(user_id)
+    return queued + running
 
 
 class InflightCapExceeded(Exception):
     """User's running + queued total has reached the configured hard cap.
 
-    Raised by :func:`try_enqueue_turn` so the route can map to HTTP 429.
+    Raised by :func:`enqueue_turn` (when called with ``inflight_cap``)
+    so the route can map to HTTP 429.
     """
-
-
-async def try_enqueue_turn(
-    *,
-    user_id: str,
-    inflight_cap: int,
-    session_id: str,
-    message: str,
-    message_id: str | None = None,
-    is_user_message: bool = True,
-    context: Mapping[str, str] | None = None,
-    file_ids: list[str] | None = None,
-    mode: str | None = None,
-    model: str | None = None,
-    permissions: Mapping[str, Any] | None = None,
-    request_arrival_at: float = 0.0,
-) -> ChatMessage:
-    """Admit a queued turn against the user's hard cap.
-
-    Non-locked count-then-insert: under burst, two concurrent submits
-    can both pass the count and both insert, leaving the user briefly
-    one or two over the cap.  Same trade-off the graph-execution credit
-    rate-limit accepts on its INCRBY path; the cap is a safeguard, not
-    a budget.
-    """
-    if await count_inflight_turns(user_id) >= inflight_cap:
-        raise InflightCapExceeded()
-    return await enqueue_turn(
-        user_id=user_id,
-        session_id=session_id,
-        message=message,
-        message_id=message_id,
-        is_user_message=is_user_message,
-        context=context,
-        file_ids=file_ids,
-        mode=mode,
-        model=model,
-        permissions=permissions,
-        request_arrival_at=request_arrival_at,
-    )
 
 
 async def enqueue_turn(
@@ -142,16 +90,25 @@ async def enqueue_turn(
     model: str | None = None,
     permissions: Mapping[str, Any] | None = None,
     request_arrival_at: float = 0.0,
+    inflight_cap: int | None = None,
 ) -> ChatMessage:
     """Persist the user's pending message and flip the session to
-    ``"queued"``.  Caller is responsible for the in-flight cap check
-    AND session-ownership check upstream — once the row is committed
-    the dispatcher owns it.
+    ``"queued"``.
+
+    When ``inflight_cap`` is provided, a non-locked count-then-insert
+    pre-check enforces the user's hard cap and raises
+    :class:`InflightCapExceeded` if exceeded.  Under burst, two
+    concurrent submits can both pass the count and both insert, leaving
+    the user briefly one or two over the cap — same trade-off the
+    graph-execution credit rate-limit accepts on its INCRBY path; the
+    cap is a safeguard, not a budget.
 
     The user message is a regular ChatMessage row (no special status).
     The dispatcher's submit-time payload is stashed in the row's
     ``metadata`` JSONB so a later promotion replays the turn faithfully.
     """
+    if inflight_cap is not None and await count_inflight_turns(user_id) >= inflight_cap:
+        raise InflightCapExceeded()
     metadata: dict[str, Any] = {}
     if context is not None:
         metadata["context"] = dict(context)
@@ -216,18 +173,6 @@ async def cancel_queued_turn(*, user_id: str, session_id: str) -> bool:
     return True
 
 
-async def claim_queued_session(session_id: str) -> bool:
-    """Atomically claim a queued session by transitioning ``chatStatus``
-    ``"queued"`` → ``"running"``.  Returns True iff the CAS matched
-    (i.e. the session was still queued; not cancelled / claimed by a
-    concurrent dispatcher)."""
-    return await chat_db().update_chat_session_status(
-        session_id=session_id,
-        expect_status=CHAT_STATUS_QUEUED,
-        status=CHAT_STATUS_RUNNING,
-    )
-
-
 async def dispatch_next_for_user(user_id: str) -> bool:
     """Promote at most one queued session for ``user_id`` from queued →
     running.  Called by ``mark_session_completed`` after every turn
@@ -246,7 +191,9 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # so top-leveling it here would deadlock the import graph.
     from backend.copilot.executor.utils import dispatch_turn
 
-    queued = await list_queued_sessions(user_id)
+    queued = await chat_db().list_chat_sessions_by_status(
+        user_id=user_id, status=CHAT_STATUS_QUEUED
+    )
     if not queued:
         return False
     head = queued[0]
@@ -290,7 +237,12 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     # Claim by transitioning the session ``queued`` → ``running``.  A
     # parallel cancel between validation and claim rejects this
     # dispatch via the CAS returning False.
-    if not await claim_queued_session(head.session_id):
+    claimed = await chat_db().update_chat_session_status(
+        session_id=head.session_id,
+        expect_status=CHAT_STATUS_QUEUED,
+        status=CHAT_STATUS_RUNNING,
+    )
+    if not claimed:
         return False
 
     # Find the pending user message in this session (the most recent
@@ -316,7 +268,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
     turn_id = str(uuid.uuid4())
     try:
         # The user's message is already persisted AND the session is
-        # already ``chatStatus='running'`` from claim_queued_session.
+        # already ``chatStatus='running'`` from the claim CAS above.
         # Build a TurnSlot directly (no acquire) so we don't re-check
         # the cap (would over-count our own just-promoted session) and
         # don't re-flip the status (already running).  ``dispatch_turn``
