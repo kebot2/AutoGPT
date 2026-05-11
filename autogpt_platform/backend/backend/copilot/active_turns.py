@@ -34,7 +34,11 @@ the copilot_executor process (RPC via DatabaseManager).
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from backend.copilot.model import CHAT_STATUS_IDLE, CHAT_STATUS_RUNNING
+from backend.copilot.model import (
+    CHAT_STATUS_IDLE,
+    CHAT_STATUS_QUEUED,
+    CHAT_STATUS_RUNNING,
+)
 from backend.data.db_accessors import chat_db
 from backend.util.settings import Settings
 
@@ -179,9 +183,7 @@ async def acquire_turn_slot(
     resolved_capacity = capacity if capacity is not None else get_running_turn_limit()
     db = chat_db()
 
-    # Promote idle → running (one statement, CAS-gated).  If the row is
-    # already running this returns False — a refresh path; no release
-    # ownership.
+    # Try fresh admit: promote idle → running in one CAS-gated update.
     if await db.update_chat_session_status(
         session_id=session_id,
         expect_status=CHAT_STATUS_IDLE,
@@ -193,13 +195,27 @@ async def acquire_turn_slot(
         # exceeds the cap — the user gets one extra slot at most under
         # burst, same trade-off as the prior count-then-update path.
         if await count_running_turns(user_id) > resolved_capacity:
-            # Roll back our flip; we'll let the caller fall through to
-            # the queue.
+            # Roll back our flip; the caller falls through to the queue.
             await release_turn_slot(user_id, session_id)
             raise ConcurrentTurnLimitError(
                 running_turn_limit_message(resolved_capacity)
             )
         handle.admitted = True
+    else:
+        # CAS failed: session was not idle.  Disambiguate by reading
+        # the current status — running (legitimate SSE-retry refresh)
+        # vs queued (this user already has a pending task for this
+        # session; the route must fall through to the queue path
+        # instead of double-dispatching).
+        current = await db.get_chat_session_status(session_id)
+        if current == CHAT_STATUS_QUEUED:
+            raise ConcurrentTurnLimitError(
+                running_turn_limit_message(resolved_capacity)
+            )
+        # Any other state (running, or unexpectedly idle from a
+        # parallel transition) is treated as refresh: no admit, no
+        # release ownership, no error.  Caller's dispatch path is
+        # idempotent on duplicate message_ids via the ChatMessage PK.
 
     try:
         yield handle

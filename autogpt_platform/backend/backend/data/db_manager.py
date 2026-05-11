@@ -402,6 +402,7 @@ class DatabaseManager(AppService):
     count_chat_sessions_by_status = _(chat_db.count_chat_sessions_by_status)
     list_chat_sessions_by_status = _(chat_db.list_chat_sessions_by_status)
     update_chat_session_status = _(chat_db.update_chat_session_status)
+    get_chat_session_status = _(chat_db.get_chat_session_status)
     get_latest_user_message_in_session = _(chat_db.get_latest_user_message_in_session)
     add_chat_message = _(chat_db.add_chat_message)
 
@@ -633,5 +634,6 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     count_chat_sessions_by_status = d.count_chat_sessions_by_status
     list_chat_sessions_by_status = d.list_chat_sessions_by_status
     update_chat_session_status = d.update_chat_session_status
+    get_chat_session_status = d.get_chat_session_status
     get_latest_user_message_in_session = d.get_latest_user_message_in_session
     add_chat_message = d.add_chat_message

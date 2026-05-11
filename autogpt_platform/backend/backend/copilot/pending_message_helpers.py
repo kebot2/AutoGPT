@@ -56,12 +56,21 @@ class StreamRegistryUnavailable(Exception):
 
 
 async def is_turn_in_flight(session_id: str) -> bool:
-    """Return ``True`` when a copilot turn is actively running for *session_id*.
+    """Return ``True`` when a copilot turn is actively running OR
+    waiting in the cross-session queue for *session_id*.
 
     Used by the HTTP pending-message endpoint and the autopilot block so a
-    second message arriving while an earlier turn is still executing gets
-    queued into the pending buffer instead of racing the in-flight turn on
-    the cluster lock.
+    second message arriving while an earlier turn is still executing (or
+    waiting in queue) gets buffered via ``queue_pending_for_http``
+    instead of racing the in-flight turn on the cluster lock.
+
+    Two sources are consulted:
+
+    * Redis stream registry (``status='running'``) — catches actively
+      streaming turns.
+    * ``ChatSession.chatStatus`` — catches both ``"running"`` and
+      ``"queued"`` so a session whose turn hasn't been claimed by the
+      dispatcher yet is still treated as in flight.
 
     Raises :class:`StreamRegistryUnavailable` when the underlying Redis
     lookup fails. The HTTP layer must catch this and map it to 503 — letting
@@ -80,7 +89,15 @@ async def is_turn_in_flight(session_id: str) -> bool:
             exc,
         )
         raise StreamRegistryUnavailable() from exc
-    return active is not None and active.status == "running"
+    if active is not None and active.status == "running":
+        return True
+    # Fall through to ChatSession.chatStatus: catches the queued case the
+    # Redis registry doesn't know about (dispatcher hasn't claimed yet).
+    from backend.copilot.model import CHAT_STATUS_QUEUED, CHAT_STATUS_RUNNING
+    from backend.data.db_accessors import chat_db
+
+    chat_status = await chat_db().get_chat_session_status(session_id)
+    return chat_status in (CHAT_STATUS_QUEUED, CHAT_STATUS_RUNNING)
 
 
 class QueuePendingMessageResponse(BaseModel):

@@ -748,6 +748,15 @@ async def get_latest_user_message_in_session(
     return ChatMessage.from_db(row) if row else None
 
 
+async def get_chat_session_status(session_id: str) -> str | None:
+    """Return ``ChatSession.chatStatus`` for ``session_id``, or ``None``
+    if the row doesn't exist.  Used by in-flight gates that need to
+    distinguish queued from running (the CAS-only ``update`` path can't
+    tell them apart on its own)."""
+    row = await PrismaChatSession.prisma().find_unique(where={"id": session_id})
+    return row.chatStatus if row else None
+
+
 async def update_chat_session_status(
     *,
     session_id: str,
