@@ -15,10 +15,13 @@ def _patch_search(return_value):
     whose ``unified_hybrid_search`` returns ``return_value``."""
     mock_shim = MagicMock()
     mock_shim.unified_hybrid_search = AsyncMock(return_value=return_value)
-    return patch(
-        "backend.api.features.library.search.search",
-        return_value=mock_shim,
-    ), mock_shim
+    return (
+        patch(
+            "backend.api.features.library.search.search",
+            return_value=mock_shim,
+        ),
+        mock_shim,
+    )
 
 
 @pytest.mark.asyncio

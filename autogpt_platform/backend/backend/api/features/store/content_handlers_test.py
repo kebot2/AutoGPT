@@ -560,9 +560,7 @@ async def test_content_handlers_registry():
     assert isinstance(CONTENT_HANDLERS[ContentType.STORE_AGENT], StoreAgentHandler)
     assert isinstance(CONTENT_HANDLERS[ContentType.BLOCK], BlockHandler)
     assert isinstance(CONTENT_HANDLERS[ContentType.DOCUMENTATION], DocumentationHandler)
-    assert isinstance(
-        CONTENT_HANDLERS[ContentType.LIBRARY_AGENT], LibraryAgentHandler
-    )
+    assert isinstance(CONTENT_HANDLERS[ContentType.LIBRARY_AGENT], LibraryAgentHandler)
 
 
 @pytest.mark.asyncio(loop_scope="session")
