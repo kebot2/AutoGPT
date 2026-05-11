@@ -32,6 +32,7 @@ import logging
 import uuid
 from typing import Any, Mapping
 
+from backend.copilot import db as copilot_db
 from backend.copilot.active_turns import count_running_turns
 from backend.copilot.model import (
     CHAT_STATUS_IDLE,
@@ -68,8 +69,12 @@ async def count_inflight_turns(user_id: str) -> int:
 
 async def list_queued_sessions(user_id: str):
     """User's queued sessions, oldest-first (FIFO order).  UX surface
-    for the 'your queued tasks' panel."""
-    return await chat_db().list_chat_sessions_by_status(
+    for the 'your queued tasks' panel.
+
+    Uses the direct-Prisma module: Prisma rows don't survive the
+    DB-manager RPC serializer, so this function is only safe in the
+    main API process which holds the Prisma connection."""
+    return await copilot_db.list_chat_sessions_by_status(
         user_id=user_id, status=CHAT_STATUS_QUEUED
     )
 
@@ -369,7 +374,7 @@ async def dispatch_for_all_queued_users() -> int:
     can't stall the rest of the queue.  Returns the number of sessions
     promoted on this tick.
     """
-    user_ids = await chat_db().list_users_with_queued_sessions()
+    user_ids = await copilot_db.list_users_with_queued_sessions()
     if not user_ids:
         return 0
     promoted = 0
