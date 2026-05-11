@@ -174,19 +174,13 @@ services:
     <<: *backend-env-files
     environment:
       <<: *backend-env
-    # Wipe a stale .erlang.cookie left over from snapshot/restore. E2B
-    # prewarmed sandboxes resume with the cookie owned by a uid that the
-    # container's rabbitmq user can't read, producing
+    # Mount /var/lib/rabbitmq as tmpfs so .erlang.cookie and mnesia state are
+    # always fresh. E2B prewarmed sandboxes resume with these files owned by a
+    # uid the in-container rabbitmq user can't read, producing
     #   Error when reading /var/lib/rabbitmq/.erlang.cookie: eacces
-    # on boot. RabbitMQ regenerates the file on first start when missing.
-    entrypoint:
-      - /bin/bash
-      - -c
-      - >-
-        rm -f /var/lib/rabbitmq/.erlang.cookie
-        && exec /usr/local/bin/docker-entrypoint.sh "$$@"
-      - --
-    command: ["rabbitmq-server"]
+    # on boot. No queue persistence is required for review environments.
+    tmpfs:
+      - /var/lib/rabbitmq
     ports:
       - "5672:5672"
 
