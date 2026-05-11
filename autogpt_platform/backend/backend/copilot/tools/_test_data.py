@@ -42,7 +42,9 @@ async def _ensure_db_connected() -> None:
         await db_module.connect()
 
 
-def make_session(user_id: str, *, guide_read: bool = True):
+def make_session(
+    user_id: str, *, guide_read: bool = True, library_check: bool = True
+):
     """Build a fake ChatSession for tool tests.
 
     ``guide_read=True`` (default) pre-populates the session with a
@@ -50,6 +52,11 @@ def make_session(user_id: str, *, guide_read: bool = True):
     generation gate (see ``helpers.require_guide_read``) lets through any
     subsequent ``create_agent`` / ``edit_agent`` / ``validate_agent_graph``
     / ``fix_agent_graph`` call.
+
+    ``library_check=True`` (default) pre-populates the session with a
+    ``find_library_agent`` tool-call history entry so the create-time
+    library-similarity gate (see ``helpers.require_library_check``) lets
+    through ``create_agent``. Set to ``False`` to exercise the gate.
     """
     messages: list[ChatMessage] = []
     if guide_read:
@@ -58,6 +65,14 @@ def make_session(user_id: str, *, guide_read: bool = True):
                 role="assistant",
                 content="",
                 tool_calls=[{"function": {"name": "get_agent_building_guide"}}],
+            )
+        )
+    if library_check:
+        messages.append(
+            ChatMessage(
+                role="assistant",
+                content="",
+                tool_calls=[{"function": {"name": "find_library_agent"}}],
             )
         )
     return ChatSession(

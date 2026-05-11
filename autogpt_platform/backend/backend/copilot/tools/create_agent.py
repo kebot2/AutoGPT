@@ -8,7 +8,7 @@ from backend.copilot.model import ChatSession
 
 from .agent_generator.pipeline import fetch_library_agents, fix_validate_and_save
 from .base import BaseTool
-from .helpers import require_guide_read
+from .helpers import require_guide_read, require_library_check
 from .models import ErrorResponse, ToolResponseBase
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,11 @@ class CreateAgentTool(BaseTool):
         return (
             "Create a new agent from JSON (nodes + links). Validates, "
             "auto-fixes, and saves. "
-            "Requires get_agent_building_guide first (refuses otherwise)."
+            "Requires get_agent_building_guide first (refuses otherwise). "
+            "Also requires find_library_agent(for_creation=true, "
+            "goal_summary=...) first to check whether the user already has "
+            "a similar agent — pass `library_check_ack=true` only after the "
+            "user has explicitly chosen to build new despite the matches."
         )
 
     @property
@@ -66,6 +70,18 @@ class CreateAgentTool(BaseTool):
                     ),
                     "default": False,
                 },
+                "library_check_ack": {
+                    "type": "boolean",
+                    "description": (
+                        "Acknowledge that the user has been shown similar "
+                        "library agents (via find_library_agent with "
+                        "for_creation=true) and has explicitly chosen to "
+                        "build a new agent anyway. Bypasses the library "
+                        "similarity gate. Set this only after the user "
+                        "explicitly declines to reuse a matched agent."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["agent_json"],
         }
@@ -79,6 +95,7 @@ class CreateAgentTool(BaseTool):
         library_agent_ids: list[str] | None = None,
         folder_id: str | None = None,
         is_hidden: bool = False,
+        library_check_ack: bool = False,
         **kwargs,
     ) -> ToolResponseBase:
         session_id = session.session_id if session else None
@@ -86,6 +103,11 @@ class CreateAgentTool(BaseTool):
         guide_gate = require_guide_read(session, "create_agent")
         if guide_gate is not None:
             return guide_gate
+
+        if not library_check_ack:
+            library_gate = require_library_check(session, "create_agent")
+            if library_gate is not None:
+                return library_gate
 
         if not agent_json:
             return ErrorResponse(

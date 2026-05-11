@@ -928,3 +928,46 @@ def require_guide_read(session: ChatSession, tool_name: str):
         ),
         session_id=session.session_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Library-similarity gate
+# ---------------------------------------------------------------------------
+#
+# Before ``create_agent`` runs, the parent agent must have searched the
+# user's library for a functionally similar agent (hybrid semantic +
+# lexical match via ``find_library_agent(for_creation=true)``). The goal is
+# to avoid producing near-duplicate agents when the user already has one
+# that does the job. ``require_library_check`` mirrors
+# ``require_guide_read``: it returns an ``ErrorResponse`` to short-circuit
+# with, or ``None`` when the check has been performed (or is unnecessary).
+
+
+_LIBRARY_CHECK_TOOL_NAME = "find_library_agent"
+
+
+def require_library_check(session: ChatSession, tool_name: str):
+    """Return an ErrorResponse if ``find_library_agent`` hasn't been called.
+
+    Bypassed in builder-bound sessions because those already operate on a
+    specific agent — there is no "should we create one?" decision to make.
+    """
+    from .models import ErrorResponse  # noqa: PLC0415 — avoid circular import
+
+    if session.metadata.builder_graph_id:
+        return None
+    if session.has_tool_been_called(_LIBRARY_CHECK_TOOL_NAME):
+        return None
+    return ErrorResponse(
+        message=(
+            f"Before {tool_name} can run, search the user's library for an "
+            "agent that already does what they want. Call "
+            "`find_library_agent` with `for_creation=true` and "
+            "`goal_summary=<one-sentence description of the user's goal>`. "
+            "If any agents are returned, present them to the user and ask "
+            "whether they want to reuse one. Only retry "
+            f"{tool_name} with `library_check_ack=true` if the user "
+            "explicitly chooses to build a new agent anyway."
+        ),
+        session_id=session.session_id,
+    )

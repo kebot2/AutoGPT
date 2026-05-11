@@ -1330,3 +1330,50 @@ class TestExecuteBlockAutoCredentials:
         assert isinstance(result, ErrorResponse)
         assert "Insufficient credits" in result.message
         mock_lock.release.assert_awaited_once()
+
+
+class TestRequireLibraryCheck:
+    """Tests for the library-similarity gate."""
+
+    def test_passes_when_tool_was_called_in_messages(self):
+        from backend.copilot.tools.helpers import require_library_check
+
+        from ._test_data import make_session
+
+        session = make_session("user-lib-check", guide_read=False, library_check=True)
+        assert require_library_check(session, "create_agent") is None
+
+    def test_passes_when_tool_was_announced_inflight(self):
+        from backend.copilot.tools.helpers import require_library_check
+
+        from ._test_data import make_session
+
+        session = make_session("user-lib-check", guide_read=False, library_check=False)
+        session.announce_inflight_tool_call("find_library_agent")
+        assert require_library_check(session, "create_agent") is None
+
+    def test_returns_error_when_not_called(self):
+        from backend.copilot.tools.helpers import require_library_check
+        from backend.copilot.tools.models import ErrorResponse
+
+        from ._test_data import make_session
+
+        session = make_session(
+            "user-lib-check", guide_read=False, library_check=False
+        )
+        result = require_library_check(session, "create_agent")
+        assert isinstance(result, ErrorResponse)
+        assert "find_library_agent" in result.message
+        assert "for_creation" in result.message
+        assert "library_check_ack" in result.message
+
+    def test_bypassed_in_builder_context(self):
+        from backend.copilot.tools.helpers import require_library_check
+
+        from ._test_data import make_session
+
+        session = make_session(
+            "user-lib-check", guide_read=False, library_check=False
+        )
+        session.metadata.builder_graph_id = "some-graph-id"
+        assert require_library_check(session, "create_agent") is None

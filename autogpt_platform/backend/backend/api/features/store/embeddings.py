@@ -462,6 +462,7 @@ async def backfill_all_content_types(batch_size: int = 10) -> dict[str, Any]:
         ContentType.BLOCK,
         ContentType.STORE_AGENT,
         ContentType.DOCUMENTATION,
+        ContentType.LIBRARY_AGENT,
     ]
 
     for content_type in processing_order:

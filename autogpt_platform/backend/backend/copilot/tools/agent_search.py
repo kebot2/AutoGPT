@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from backend.api.features.library.model import LibraryAgent
     from backend.api.features.store.model import StoreAgent, StoreAgentDetails
 
+from backend.api.features.library.search import hybrid_search_library_agents
 from backend.data.db_accessors import graph_db, library_db, store_db
 from backend.util.exceptions import DatabaseError, NotFoundError
 
@@ -339,6 +340,158 @@ async def _get_marketplace_agent_by_slug(creator: str, slug: str) -> AgentInfo |
             exc_info=True,
         )
     return None
+
+
+async def search_library_for_creation(
+    goal_summary: str,
+    session_id: str | None,
+    user_id: str | None,
+) -> ToolResponseBase:
+    """Hybrid (semantic + lexical) library search used by the create-agent
+    similarity gate.
+
+    Unlike ``_search_library`` (substring), this is intended to surface
+    *functionally similar* agents the user may want to reuse before
+    creating a new one. The response message instructs the LLM to ask the
+    user before proceeding to ``create_agent``.
+    """
+    if not user_id:
+        return ErrorResponse(
+            message="User authentication required to search library",
+            session_id=session_id,
+        )
+
+    goal_summary = (goal_summary or "").strip()
+    if not goal_summary:
+        # Soft-fail instead of an error response so the UI doesn't render
+        # "Error finding agents" and the gate still recognises this as a
+        # valid call (the tool *was* invoked).
+        return NoResultsResponse(
+            message=(
+                "No `goal_summary` was provided, so no similarity check "
+                "ran. If the user is asking for a new agent, retry "
+                "find_library_agent with for_creation=true and a "
+                "goal_summary describing what they want. If the user has "
+                "since clarified they want a new agent regardless, "
+                "proceed with create_agent and pass "
+                "library_check_ack=true."
+            ),
+            suggestions=[
+                "Retry with for_creation=true and goal_summary=<user's goal>",
+                "Proceed with create_agent + library_check_ack=true",
+            ],
+            session_id=session_id,
+        )
+
+    try:
+        matches = await hybrid_search_library_agents(
+            query=goal_summary, user_id=user_id
+        )
+    except DatabaseError as e:
+        logger.error(f"Error during hybrid library search: {e}", exc_info=True)
+        return NoResultsResponse(
+            message=(
+                "Could not run the library similarity check (database "
+                "error). Proceeding to create_agent is safe; pass "
+                "library_check_ack=true to satisfy the gate."
+            ),
+            suggestions=["Proceed with create_agent + library_check_ack=true"],
+            session_id=session_id,
+        )
+    except Exception as e:
+        # Anything else (e.g. embedding-service down, pgvector edge case)
+        # — degrade gracefully rather than surface an error in chat.
+        logger.warning(
+            f"Hybrid library search failed unexpectedly: {e}", exc_info=True
+        )
+        return NoResultsResponse(
+            message=(
+                "Could not run the library similarity check. Proceeding "
+                "to create_agent is safe; pass library_check_ack=true to "
+                "satisfy the gate."
+            ),
+            suggestions=["Proceed with create_agent + library_check_ack=true"],
+            session_id=session_id,
+        )
+
+    if not matches:
+        return NoResultsResponse(
+            message=(
+                "No functionally similar agents found in the user's library. "
+                "You may proceed to create a new agent: call `create_agent` "
+                "with `library_check_ack=true` to satisfy the similarity "
+                "gate."
+            ),
+            suggestions=[
+                "Proceed with create_agent (no similar library agent to reuse)",
+            ],
+            session_id=session_id,
+        )
+
+    lib_db = library_db()
+    agents: list[AgentInfo] = []
+    for match in matches:
+        content_id = match.get("content_id")
+        if not content_id:
+            continue
+        try:
+            library_agent = await lib_db.get_library_agent(content_id, user_id)
+        except NotFoundError:
+            continue
+        except DatabaseError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"Could not fetch matched library agent {content_id}: {e}",
+                exc_info=True,
+            )
+            continue
+
+        info = _library_agent_to_info(library_agent)
+        # Use combined_score (pre-BM25, always in [0, 1]) for the display
+        # percentage. ``relevance`` is post-BM25 and can go negative on
+        # near-duplicate corpora (low/negative IDF), which would render
+        # as 0% and confuse the user.
+        score = match.get("combined_score") or 0.0
+        percent = max(0, min(100, int(round(float(score) * 100))))
+        prefix = f"[{percent}% match] "
+        info.description = (
+            prefix + info.description if info.description else prefix.strip()
+        )
+        agents.append(info)
+
+    if not agents:
+        return NoResultsResponse(
+            message=(
+                "No functionally similar agents found in the user's library. "
+                "You may proceed to create a new agent: call `create_agent` "
+                "with `library_check_ack=true` to satisfy the similarity "
+                "gate."
+            ),
+            suggestions=[
+                "Proceed with create_agent (no similar library agent to reuse)",
+            ],
+            session_id=session_id,
+        )
+
+    return AgentsFoundResponse(
+        message=(
+            "Found agents in the user's library that may already match the "
+            "user's goal. Present them, including the [% match] prefix, and "
+            "ask whether the user wants to reuse one of these instead of "
+            "creating a new agent. Use run_agent to execute a chosen "
+            "existing agent. ONLY call `create_agent` with "
+            "`library_check_ack=true` if the user explicitly chooses to "
+            "build a new one anyway."
+        ),
+        title=(
+            f"Found {len(agents)} potentially similar agent"
+            f"{'s' if len(agents) != 1 else ''} in your library"
+        ),
+        agents=agents,
+        count=len(agents),
+        session_id=session_id,
+    )
 
 
 async def _get_library_agent_by_id(user_id: str, agent_id: str) -> AgentInfo | None:
