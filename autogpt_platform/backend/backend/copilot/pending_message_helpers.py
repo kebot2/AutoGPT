@@ -99,7 +99,19 @@ async def is_turn_in_flight(session_id: str) -> bool:
         return True
     # Fall through to ChatSession.chatStatus: catches the queued case the
     # Redis registry doesn't know about (dispatcher hasn't claimed yet).
-    chat_status = await chat_db().get_chat_session_status(session_id)
+    # If the DB is unavailable we can't tell whether the session is
+    # queued or running — fail-closed the same way the Redis branch
+    # above does so the HTTP layer maps the unknown state to 503 with a
+    # Retry-After header instead of a raw 500.
+    try:
+        chat_status = await chat_db().get_chat_session_status(session_id)
+    except Exception as exc:
+        logger.warning(
+            "is_turn_in_flight: chat_status lookup failed for session=%s: %s",
+            session_id,
+            exc,
+        )
+        raise StreamRegistryUnavailable() from exc
     return chat_status in (CHAT_STATUS_QUEUED, CHAT_STATUS_RUNNING)
 
 

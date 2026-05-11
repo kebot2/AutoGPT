@@ -143,6 +143,27 @@ async def test_is_turn_in_flight_raises_on_redis_cluster_exception(
         await is_turn_in_flight("sess-1")
 
 
+@pytest.mark.asyncio
+async def test_is_turn_in_flight_raises_when_chat_status_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB-side ``get_chat_session_status`` failure must surface as the
+    same typed ``StreamRegistryUnavailable`` the Redis branch raises so
+    the HTTP layer's existing 503 + Retry-After mapping covers it.
+    Without this the Prisma error would bubble as a raw 500."""
+    monkeypatch.setattr(
+        helpers_module,
+        "get_active_session_meta",
+        AsyncMock(return_value=None),
+    )
+    db = MagicMock()
+    db.get_chat_session_status = AsyncMock(side_effect=RuntimeError("db down"))
+    monkeypatch.setattr(helpers_module, "chat_db", lambda: db)
+
+    with pytest.raises(StreamRegistryUnavailable):
+        await is_turn_in_flight("sess-1")
+
+
 # ── queue_pending_for_http: gate-then-bump ordering ───────────────────
 
 
