@@ -86,6 +86,12 @@ model User {
   PlatformUserLinks PlatformUserLink[]
 }
 
+enum ChatSessionStatus {
+  idle
+  queued
+  running
+}
+
 enum SubscriptionTier {
   NO_TIER
   BASIC
@@ -272,9 +278,24 @@ model ChatSession {
   totalPromptTokens     Int @default(0)
   totalCompletionTokens Int @default(0)
 
+  // Session lifecycle for the per-user soft running cap + cross-session
+  // queue.  ``idle`` (DEFAULT, no turn in flight), ``queued`` (waiting
+  // for a running slot to free), ``running`` (a turn is currently
+  // being processed).  ``updatedAt`` doubles as the status-change
+  // timestamp (every transition touches the row).
+  chatStatus ChatSessionStatus @default(idle)
+
   Messages ChatMessage[]
 
-  @@index([userId, updatedAt])
+  // Single compound index covers (a) the cap-count (count by userId +
+  // chatStatus), (b) the queue-list ORDER BY updatedAt asc, AND (c) the
+  // sidebar list (find_many WHERE userId ORDER BY updatedAt desc).
+  // For (c) Postgres scans the per-userId index range across all
+  // chatStatus sub-buckets and sorts by updatedAt in memory — fine at
+  // typical per-user N (≤100s) and not worth a redundant 2-col index.
+  // The migration drops the previously-existing (userId, updatedAt)
+  // index that this one supersedes.
+  @@index([userId, chatStatus, updatedAt], name: "ChatSession_user_status_idx")
 }
 
 model ChatMessage {
@@ -296,6 +317,13 @@ model ChatMessage {
   // Ordering within session
   sequence   Int
   durationMs Int? // Wall-clock milliseconds for this assistant turn
+
+  // Per-row JSONB metadata bag.  Currently holds the dispatcher's
+  // submit-time payload (file_ids, mode, model, permissions, context,
+  // request_arrival_at) on the user row that triggered a queued turn,
+  // so a later promotion can replay the original turn faithfully.
+  // Generic so future per-row state can land here without a migration.
+  metadata Json?
 
   @@unique([sessionId, sequence])
 }
@@ -470,6 +498,7 @@ model LibraryAgent {
 
   isFavorite      Boolean @default(false)
   isCreatedByUser Boolean @default(false)
+  isHidden        Boolean @default(false)
   isArchived      Boolean @default(false)
   isDeleted       Boolean @default(false)
 
