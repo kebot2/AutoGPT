@@ -16,6 +16,7 @@ from autogpt_libs.auth.models import RequestContext
 from fastapi import (
     APIRouter,
     Body,
+    Depends,
     File,
     HTTPException,
     Path,
@@ -49,7 +50,7 @@ from backend.api.model import (
     UploadFileResponse,
 )
 from backend.blocks import get_block, get_blocks
-from backend.copilot.rate_limit import get_tier_multipliers
+from backend.copilot.rate_limit import enforce_payment_paywall, get_tier_multipliers
 from backend.data import execution as execution_db
 from backend.data import graph as graph_db
 from backend.data.auth import api_key as api_key_db
@@ -78,6 +79,7 @@ from backend.data.credit import (
     set_subscription_tier,
     sync_subscription_from_stripe,
     sync_subscription_schedule_from_stripe,
+    sync_tier_from_checkout_session,
 )
 from backend.data.graph import GraphSettings
 from backend.data.model import CredentialsMetaInput, UserOnboarding
@@ -463,7 +465,10 @@ async def get_graph_blocks() -> Response:
     path="/blocks/{block_id}/execute",
     summary="Execute graph block",
     tags=["blocks"],
-    dependencies=[Security(requires_user)],
+    dependencies=[Security(requires_user), Depends(enforce_payment_paywall)],
+    responses={
+        402: {"description": "Subscription required (NO_TIER user, paywall on)"},
+    },
 )
 async def execute_graph_block(
     block_id: str,
@@ -1333,6 +1338,7 @@ async def stripe_webhook(request: Request):
             )
             return Response(status_code=200)
         await UserCredit().fulfill_checkout(session_id=session_id)
+        await sync_tier_from_checkout_session(data_object)
 
     if event_type in (
         "customer.subscription.created",
@@ -1721,7 +1727,19 @@ async def update_graph_settings(
     path="/graphs/{graph_id}/execute/{graph_version}",
     summary="Execute graph agent",
     tags=["graphs"],
-    dependencies=[Security(requires_user)],
+    dependencies=[Security(requires_user), Depends(enforce_payment_paywall)],
+    # The route dep enforces fail-closed (503-on-blip) so a transient
+    # Supabase outage surfaces as a retryable error, not a free run
+    # for a paywalled user. The deep gate inside ``add_graph_execution``
+    # still covers scheduled / webhook / copilot-internal runs that
+    # don't pass through this route — those callers prefer fail-open
+    # so background work doesn't abandon valid jobs during a blip.
+    responses={
+        402: {
+            "description": "Payment required: NO_TIER paywall, or insufficient credit balance"
+        },
+        503: {"description": "Subscription state temporarily unavailable"},
+    },
 )
 async def execute_graph(
     graph_id: str,

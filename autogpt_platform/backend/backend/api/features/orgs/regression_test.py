@@ -141,6 +141,7 @@ def _make_chat_session_row(
     m.metadata = "{}"
     m.totalPromptTokens = 0
     m.totalCompletionTokens = 0
+    m.chatStatus = "idle"
     m.createdAt = datetime(2025, 6, 1, tzinfo=timezone.utc)
     m.updatedAt = datetime(2025, 6, 1, tzinfo=timezone.utc)
     m.Messages = []
@@ -768,7 +769,7 @@ class TestChatSessionUserIdIsolation:
             "backend.copilot.db.PrismaChatSession.prisma",
             return_value=mock_actions,
         ):
-            from backend.copilot.db import get_chat_session
+            from backend.copilot.db import get_chat_session_metadata as get_chat_session
 
             result = await get_chat_session(SESSION_ID)
 
@@ -792,7 +793,7 @@ class TestChatSessionUserIdIsolation:
             "backend.copilot.db.PrismaChatSession.prisma",
             return_value=mock_actions,
         ):
-            from backend.copilot.db import get_chat_session
+            from backend.copilot.db import get_chat_session_metadata as get_chat_session
 
             result = await get_chat_session(SESSION_ID)
 

@@ -78,3 +78,21 @@ def mock_jwt_admin(admin_user_id):
         "get_request_context": override_get_request_context,
         "user_id": admin_user_id,
     }
+
+
+@pytest.fixture(autouse=True)
+def _bypass_paywall(mocker):
+    """Make every API test treat the user as paid by default.
+
+    Tests have no real Supabase row backing the JWT, so without this
+    bypass every paywalled route would 503 on the tier-lookup failure
+    inside ``enforce_payment_paywall`` and every graph execution would
+    raise ``UserPaywalledError`` from ``add_graph_execution`` once the
+    paywall is wired up. Tests that specifically exercise the paywall
+    (e.g. ``TestEnforcePaymentPaywall``, ``TestIsUserPaywalled``) live
+    in ``rate_limit_test.py`` and patch ``_fetch_user_tier`` directly,
+    bypassing this helper.
+    """
+    paywall_off = mocker.AsyncMock(return_value=False)
+    mocker.patch("backend.copilot.rate_limit.is_user_paywalled", new=paywall_off)
+    mocker.patch("backend.executor.utils.is_user_paywalled", new=paywall_off)
