@@ -307,6 +307,9 @@ async def dispatch_next_for_user(user_id: str) -> bool:
             expect_status=CHAT_STATUS_RUNNING,
             status=CHAT_STATUS_IDLE,
         )
+        # Drop the cache so the sidebar doesn't keep showing the
+        # stale ``running`` indicator after the rollback.
+        await invalidate_session_cache(head.session_id)
         return False
 
     metadata = pending.metadata or {}
@@ -350,6 +353,7 @@ async def dispatch_next_for_user(user_id: str) -> bool:
                 expect_status=CHAT_STATUS_RUNNING,
                 status=CHAT_STATUS_QUEUED,
             )
+            await invalidate_session_cache(head.session_id)
         except BaseException as restore_exc:
             logger.error(
                 "dispatch_next_for_user: failed to restore claim for "
