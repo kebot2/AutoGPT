@@ -1558,9 +1558,15 @@ class TestRegressionUserSettings:
 
         from backend.data.user import update_user_timezone
 
-        # Also patch the cache_delete to avoid side effects
-        with patch("backend.data.user.get_user_by_id") as mock_cached:
-            mock_cached.cache_delete = MagicMock()
+        # Patch all cache functions to avoid side effects
+        with (
+            patch("backend.data.user.get_user_by_id") as mock_cached_id,
+            patch("backend.data.user.get_user_by_email") as mock_cached_email,
+            patch("backend.data.user.get_or_create_user") as mock_cached_create,
+        ):
+            mock_cached_id.cache_delete = MagicMock()
+            mock_cached_email.cache_delete = MagicMock()
+            mock_cached_create.cache_clear = MagicMock()
             await update_user_timezone(USER_ID, "US/Eastern")
 
         self.mock_user_actions.update.assert_called_once()
