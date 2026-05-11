@@ -25,12 +25,8 @@ class CreateAgentTool(BaseTool):
     def description(self) -> str:
         return (
             "Create a new agent from JSON (nodes + links). Validates, "
-            "auto-fixes, and saves. "
-            "Requires get_agent_building_guide first (refuses otherwise). "
-            "Also requires find_library_agent(for_creation=true, "
-            "goal_summary=...) first to check whether the user already has "
-            "a similar agent — pass `library_check_ack=true` only after the "
-            "user has explicitly chosen to build new despite the matches."
+            "auto-fixes, and saves. Requires get_agent_building_guide and "
+            "find_library_agent(for_creation=true) first."
         )
 
     @property
@@ -73,12 +69,8 @@ class CreateAgentTool(BaseTool):
                 "library_check_ack": {
                     "type": "boolean",
                     "description": (
-                        "Acknowledge that the user has been shown similar "
-                        "library agents (via find_library_agent with "
-                        "for_creation=true) and has explicitly chosen to "
-                        "build a new agent anyway. Bypasses the library "
-                        "similarity gate. Set this only after the user "
-                        "explicitly declines to reuse a matched agent."
+                        "Bypass the library-similarity gate after the user "
+                        "declined a match."
                     ),
                     "default": False,
                 },

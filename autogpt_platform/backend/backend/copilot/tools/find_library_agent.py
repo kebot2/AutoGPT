@@ -19,15 +19,10 @@ class FindLibraryAgentTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Search user's library agents. Returns graph_id, schemas for "
-            "sub-agent composition. Omit query to list all. Set "
-            "include_graph=true to fetch the full graph structure (nodes + "
-            "links) for debugging or editing. "
-            "Set for_creation=true with a `goal_summary` BEFORE calling "
-            "`create_agent` to check whether the user already has a "
-            "functionally similar agent (hybrid semantic + lexical search); "
-            "the response will tell you whether to suggest an existing "
-            "agent or proceed with creation."
+            "Search user's library agents. Omit query to list all; "
+            "include_graph=true returns full nodes+links. for_creation=true "
+            "with goal_summary runs the similarity check required before "
+            "create_agent."
         )
 
     @property
@@ -50,23 +45,12 @@ class FindLibraryAgentTool(BaseTool):
                 },
                 "for_creation": {
                     "type": "boolean",
-                    "description": (
-                        "Run a hybrid semantic + lexical similarity search "
-                        "over the user's library to surface functionally "
-                        "similar agents BEFORE calling create_agent. "
-                        "Requires `goal_summary`. Call this once per "
-                        "create-agent intent to satisfy the similarity "
-                        "gate."
-                    ),
+                    "description": "Similarity check before create_agent.",
                     "default": False,
                 },
                 "goal_summary": {
                     "type": "string",
-                    "description": (
-                        "One- or two-sentence description of what the user "
-                        "wants the new agent to do. Required when "
-                        "for_creation=true."
-                    ),
+                    "description": "Required when for_creation=true.",
                 },
             },
             # ``goal_summary`` is deliberately NOT listed as a required
