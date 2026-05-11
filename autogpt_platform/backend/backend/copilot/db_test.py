@@ -618,7 +618,7 @@ async def test_update_message_content_by_sequence_sanitizes_content():
 # above and the integration coverage in ``model_test.py``.
 
 
-# ChatSession lifecycle primitives + insert_chat_message.
+# ChatSession lifecycle primitives + add_chat_message.
 
 
 @pytest.mark.asyncio
@@ -650,21 +650,19 @@ async def test_list_chat_sessions_by_status_returns_rows_oldest_first() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transition_chat_session_status_owner_gated_returns_true_on_match() -> (
-    None
-):
+async def test_update_chat_session_status_owner_gated_returns_true_on_match() -> None:
     """User-initiated transition (cancel) gates on both ``chatStatus``
     AND ``userId`` — both guards in one atomic update."""
-    from backend.copilot.db import transition_chat_session_status
+    from backend.copilot.db import update_chat_session_status
 
     update_many = AsyncMock(return_value=1)
     with patch.object(
         PrismaChatSession, "prisma", return_value=AsyncMock(update_many=update_many)
     ):
-        ok = await transition_chat_session_status(
+        ok = await update_chat_session_status(
             session_id="s1",
-            from_status="queued",
-            to_status="idle",
+            expect_status="queued",
+            status="idle",
             user_id="u1",
         )
     assert ok is True
@@ -674,31 +672,31 @@ async def test_transition_chat_session_status_owner_gated_returns_true_on_match(
 
 
 @pytest.mark.asyncio
-async def test_transition_chat_session_status_returns_false_when_cas_fails() -> None:
-    from backend.copilot.db import transition_chat_session_status
+async def test_update_chat_session_status_returns_false_when_cas_fails() -> None:
+    from backend.copilot.db import update_chat_session_status
 
     update_many = AsyncMock(return_value=0)
     with patch.object(
         PrismaChatSession, "prisma", return_value=AsyncMock(update_many=update_many)
     ):
-        ok = await transition_chat_session_status(
-            session_id="s1", from_status="queued", to_status="idle"
+        ok = await update_chat_session_status(
+            session_id="s1", expect_status="queued", status="idle"
         )
     assert ok is False
 
 
 @pytest.mark.asyncio
-async def test_transition_chat_session_status_dispatcher_path_omits_user_gate() -> None:
+async def test_update_chat_session_status_dispatcher_path_omits_user_gate() -> None:
     """Dispatcher-initiated transitions (claim / restore / release) don't
     pass ``user_id`` — they act on the session regardless of owner."""
-    from backend.copilot.db import transition_chat_session_status
+    from backend.copilot.db import update_chat_session_status
 
     update_many = AsyncMock(return_value=1)
     with patch.object(
         PrismaChatSession, "prisma", return_value=AsyncMock(update_many=update_many)
     ):
-        await transition_chat_session_status(
-            session_id="s1", from_status="queued", to_status="running"
+        await update_chat_session_status(
+            session_id="s1", expect_status="queued", status="running"
         )
     where = update_many.call_args.kwargs["where"]
     assert "userId" not in where
@@ -706,14 +704,20 @@ async def test_transition_chat_session_status_dispatcher_path_omits_user_gate() 
 
 
 @pytest.mark.asyncio
-async def test_insert_chat_message_serialises_metadata_via_safejson() -> None:
-    from backend.copilot.db import insert_chat_message
+async def test_add_chat_message_serialises_metadata_via_safejson() -> None:
+    from backend.copilot.db import add_chat_message
 
     create = AsyncMock(return_value=_make_msg(sequence=1))
-    with patch.object(
-        PrismaChatMessage, "prisma", return_value=AsyncMock(create=create)
+    session_update = AsyncMock()
+    with (
+        patch.object(
+            PrismaChatMessage, "prisma", return_value=AsyncMock(create=create)
+        ),
+        patch.object(
+            PrismaChatSession, "prisma", return_value=AsyncMock(update=session_update)
+        ),
     ):
-        await insert_chat_message(
+        await add_chat_message(
             message_id="m1",
             session_id="s1",
             role="user",
@@ -729,14 +733,20 @@ async def test_insert_chat_message_serialises_metadata_via_safejson() -> None:
 
 
 @pytest.mark.asyncio
-async def test_insert_chat_message_omits_metadata_when_none() -> None:
-    from backend.copilot.db import insert_chat_message
+async def test_add_chat_message_omits_metadata_when_none() -> None:
+    from backend.copilot.db import add_chat_message
 
     create = AsyncMock(return_value=_make_msg(sequence=1))
-    with patch.object(
-        PrismaChatMessage, "prisma", return_value=AsyncMock(create=create)
+    session_update = AsyncMock()
+    with (
+        patch.object(
+            PrismaChatMessage, "prisma", return_value=AsyncMock(create=create)
+        ),
+        patch.object(
+            PrismaChatSession, "prisma", return_value=AsyncMock(update=session_update)
+        ),
     ):
-        await insert_chat_message(
+        await add_chat_message(
             message_id="m1",
             session_id="s1",
             role="user",

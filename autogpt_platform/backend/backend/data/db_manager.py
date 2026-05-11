@@ -401,8 +401,8 @@ class DatabaseManager(AppService):
     # cap-count + cross-session queue (count/list/transition).
     count_chat_sessions_by_status = _(chat_db.count_chat_sessions_by_status)
     list_chat_sessions_by_status = _(chat_db.list_chat_sessions_by_status)
-    transition_chat_session_status = _(chat_db.transition_chat_session_status)
-    insert_chat_message = _(chat_db.insert_chat_message)
+    update_chat_session_status = _(chat_db.update_chat_session_status)
+    add_chat_message = _(chat_db.add_chat_message)
 
 
 class DatabaseManagerClient(AppServiceClient):
@@ -631,5 +631,5 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     set_turn_duration = d.set_turn_duration
     count_chat_sessions_by_status = d.count_chat_sessions_by_status
     list_chat_sessions_by_status = d.list_chat_sessions_by_status
-    transition_chat_session_status = d.transition_chat_session_status
-    insert_chat_message = d.insert_chat_message
+    update_chat_session_status = d.update_chat_session_status
+    add_chat_message = d.add_chat_message

@@ -338,8 +338,18 @@ async def add_chat_message(
     refusal: str | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     function_call: dict[str, Any] | None = None,
+    *,
+    message_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ChatMessage:
-    """Add a message to a chat session."""
+    """Add a message to a chat session.
+
+    Pass ``message_id`` to use an explicit PK (e.g. when the queue
+    layer needs to reference the row before promotion) — otherwise
+    Prisma generates one.  ``metadata`` is a generic per-row JSONB bag
+    used by the queue path to stash dispatcher payload on the user
+    row that triggered a queued turn.
+    """
     # Build ChatMessageCreateInput with only non-None values
     # (Prisma TypedDict rejects optional fields set to None)
     data: ChatMessageCreateInput = {
@@ -347,6 +357,9 @@ async def add_chat_message(
         "role": role,
         "sequence": sequence,
     }
+
+    if message_id is not None:
+        data["id"] = message_id
 
     # Add optional string fields — sanitize to strip PostgreSQL-incompatible
     # control characters (null bytes etc.) that may appear in tool outputs.
@@ -364,6 +377,8 @@ async def add_chat_message(
         data["toolCalls"] = SafeJson(tool_calls)
     if function_call is not None:
         data["functionCall"] = SafeJson(function_call)
+    if metadata is not None:
+        data["metadata"] = SafeJson(metadata)
 
     # Run message create and session timestamp update in parallel for lower latency
     _, message = await asyncio.gather(
@@ -719,48 +734,27 @@ async def list_chat_sessions_by_status(
     )
 
 
-async def transition_chat_session_status(
+async def update_chat_session_status(
     *,
     session_id: str,
-    from_status: str,
-    to_status: str,
+    status: str,
+    expect_status: str | None = None,
     user_id: str | None = None,
 ) -> bool:
-    """Atomic CAS on ``ChatSession.chatStatus``: ``from_status`` →
-    ``to_status``.  Pass ``user_id`` for user-initiated transitions
-    (e.g. cancel) so the same statement enforces ownership.  Returns
-    True iff the gate matched.  Cancel/dispatch/complete all share
-    this primitive."""
-    where: ChatSessionWhereInput = {"id": session_id, "chatStatus": from_status}
+    """Update ``ChatSession.chatStatus`` to ``status``.
+
+    Pass ``expect_status`` to CAS-gate the update on the current
+    value — required for race-safe cancel/claim/restore (so two
+    concurrent transitions can't both win).  Pass ``user_id`` to
+    enforce ownership in the same statement (used by the user-initiated
+    cancel path).  Returns True iff the row was matched and updated.
+    """
+    where: ChatSessionWhereInput = {"id": session_id}
+    if expect_status is not None:
+        where["chatStatus"] = expect_status
     if user_id is not None:
         where["userId"] = user_id
     updated = await PrismaChatSession.prisma().update_many(
-        where=where, data={"chatStatus": to_status}
+        where=where, data={"chatStatus": status}
     )
     return updated > 0
-
-
-async def insert_chat_message(
-    *,
-    message_id: str,
-    session_id: str,
-    role: str,
-    content: str,
-    sequence: int,
-    metadata: dict[str, Any] | None = None,
-) -> ChatMessage:
-    """Insert a ChatMessage row.  ``metadata`` is wrapped in
-    :class:`SafeJson`; pass ``None`` to leave the column NULL.  Used
-    by the queue path to persist the user message + dispatcher payload
-    before flipping the session status to ``"queued"``."""
-    data: ChatMessageCreateInput = {
-        "id": message_id,
-        "Session": {"connect": {"id": session_id}},
-        "role": role,
-        "content": content,
-        "sequence": sequence,
-    }
-    if metadata:
-        data["metadata"] = SafeJson(metadata)
-    row = await PrismaChatMessage.prisma().create(data=data)
-    return ChatMessage.from_db(row)

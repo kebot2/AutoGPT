@@ -2143,62 +2143,6 @@
         }
       }
     },
-    "/api/chat/queued-tasks": {
-      "get": {
-        "tags": ["v2", "chat", "chat"],
-        "summary": "List the user's queued AutoPilot tasks",
-        "description": "Sessions waiting for a running slot, ordered FIFO.",
-        "operationId": "getV2List the user's queued autopilot tasks",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/QueuedTaskList" }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
-          }
-        },
-        "security": [{ "HTTPBearerJWT": [] }]
-      }
-    },
-    "/api/chat/queued-tasks/{session_id}": {
-      "delete": {
-        "tags": ["v2", "chat", "chat"],
-        "summary": "Cancel Queued Task",
-        "description": "Cancel a queued session before the dispatcher claims it.\n\nNo-op (404) if the session was already promoted to running, already\nidle / cancelled, or doesn't belong to this user — the cancel\ntransition is gated on ``chatStatus='queued'`` AND\n``ChatSession.userId=user_id`` in a single atomic update.",
-        "operationId": "deleteV2CancelQueuedTask",
-        "security": [{ "HTTPBearerJWT": [] }],
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string", "title": "Session Id" }
-          }
-        ],
-        "responses": {
-          "204": { "description": "Successful Response" },
-          "401": {
-            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
-          },
-          "404": {
-            "description": "Queued session not found or not owned by user"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/chat/schema/tool-responses": {
       "get": {
         "tags": ["v2", "chat", "chat"],
@@ -2503,7 +2447,7 @@
       "post": {
         "tags": ["v2", "chat", "chat"],
         "summary": "Cancel Session Task",
-        "description": "Cancel the active streaming task for a session.\n\nPublishes a cancel event to the executor via RabbitMQ FANOUT, then\npolls Redis until the task status flips from ``running`` or a timeout\n(5 s) is reached.  Returns only after the cancellation is confirmed.",
+        "description": "Cancel an in-flight task for a session.\n\nHandles both lifecycle states uniformly:\n\n* **Queued** (``chatStatus='queued'``) — the dispatcher hasn't\n  claimed the row yet.  Flip the session back to ``idle`` and\n  return; no executor cancel event needed.\n* **Running** (``chatStatus='running'``) — publish a cancel event\n  to the executor via RabbitMQ FANOUT, then poll Redis until the\n  task status flips out of ``running`` or a 5 s timeout is hit.",
         "operationId": "postV2CancelSessionTask",
         "security": [{ "HTTPBearerJWT": [] }],
         "parameters": [
@@ -15342,47 +15286,6 @@
         "required": ["buffer_length", "max_buffer_length", "turn_in_flight"],
         "title": "QueuePendingMessageResponse",
         "description": "Response returned when a message is queued because the session already\nhas a turn in flight.\n\n- ``buffer_length``: how many messages are now in the session's\n  pending buffer (after this push)\n- ``max_buffer_length``: the per-session cap (server-side constant)\n- ``turn_in_flight``: ``True`` if a copilot turn was running when\n  we checked — purely informational for UX feedback."
-      },
-      "QueuedTaskItem": {
-        "properties": {
-          "session_id": {
-            "type": "string",
-            "title": "Session Id",
-            "description": "ChatSession id; cancel via DELETE"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "title": {
-            "anyOf": [
-              { "type": "string", "maxLength": 500 },
-              { "type": "null" }
-            ],
-            "title": "Title"
-          }
-        },
-        "type": "object",
-        "required": ["session_id", "updated_at"],
-        "title": "QueuedTaskItem",
-        "description": "One queued AutoPilot task — a session waiting for a running slot.\nFrontend renders these in the 'your queued tasks' panel."
-      },
-      "QueuedTaskList": {
-        "properties": {
-          "running": { "type": "integer", "title": "Running" },
-          "queued": {
-            "items": { "$ref": "#/components/schemas/QueuedTaskItem" },
-            "type": "array",
-            "title": "Queued"
-          },
-          "running_cap": { "type": "integer", "title": "Running Cap" },
-          "inflight_cap": { "type": "integer", "title": "Inflight Cap" }
-        },
-        "type": "object",
-        "required": ["running", "queued", "running_cap", "inflight_cap"],
-        "title": "QueuedTaskList",
-        "description": "Response shape for ``GET /chat/queued-tasks``. ``running`` is the\nuser's current active-turn count; ``queued`` are the FIFO waiting\nsessions. Caps are echoed so the frontend can render '5/5 running,\n2 queued, room for 8 more' without a second settings fetch."
       },
       "RateLimitResetResponse": {
         "properties": {

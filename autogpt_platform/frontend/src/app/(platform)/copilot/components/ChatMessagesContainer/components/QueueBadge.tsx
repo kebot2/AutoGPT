@@ -2,7 +2,7 @@
 
 import {
   getGetV2GetSessionQueryKey,
-  useDeleteV2CancelQueuedTask,
+  usePostV2CancelSessionTask,
 } from "@/app/api/__generated__/endpoints/chat/chat";
 import {
   Tooltip,
@@ -24,7 +24,7 @@ const QUEUED_TOOLTIP =
 export function QueueBadge({ sessionID }: Props) {
   const queryClient = useQueryClient();
   const { mutate: cancelTask, isPending: isCancelling } =
-    useDeleteV2CancelQueuedTask({
+    usePostV2CancelSessionTask({
       mutation: {
         onSuccess: () => {
           if (sessionID) {
@@ -32,13 +32,10 @@ export function QueueBadge({ sessionID }: Props) {
               queryKey: getGetV2GetSessionQueryKey(sessionID),
             });
           }
-          queryClient.invalidateQueries({
-            queryKey: ["/api/chat/queued-tasks"],
-          });
         },
         onError: (error) => {
-          // 404 means the session was already promoted / not owned — sync
-          // the UI with reality and suppress the toast.
+          // 404 = session not found / not owned: sync the UI and
+          // suppress the destructive toast.
           const status = (error as { response?: { status?: number } })?.response
             ?.status;
           if (status === 404) {

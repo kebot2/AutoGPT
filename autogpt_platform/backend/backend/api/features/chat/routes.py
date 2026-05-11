@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
-from datetime import datetime
 from typing import Annotated
 from uuid import uuid4
 
@@ -16,9 +15,7 @@ from backend.copilot import service as chat_service
 from backend.copilot import stream_registry, turn_queue
 from backend.copilot.active_turns import (
     ConcurrentTurnLimitError,
-    count_running_turns,
     get_inflight_turn_limit,
-    get_running_turn_limit,
     inflight_turn_limit_message,
 )
 from backend.copilot.builder_context import resolve_session_permissions
@@ -658,80 +655,6 @@ async def get_session(
     )
 
 
-class QueuedTaskItem(BaseModel):
-    """One queued AutoPilot task — a session waiting for a running slot.
-    Frontend renders these in the 'your queued tasks' panel."""
-
-    session_id: str = Field(description="ChatSession id; cancel via DELETE")
-    updated_at: datetime
-    title: str | None = Field(default=None, max_length=500)
-
-
-class QueuedTaskList(BaseModel):
-    """Response shape for ``GET /chat/queued-tasks``. ``running`` is the
-    user's current active-turn count; ``queued`` are the FIFO waiting
-    sessions. Caps are echoed so the frontend can render '5/5 running,
-    2 queued, room for 8 more' without a second settings fetch."""
-
-    running: int
-    queued: list[QueuedTaskItem]
-    running_cap: int
-    inflight_cap: int
-
-
-@router.get(
-    "/queued-tasks",
-    summary="List the user's queued AutoPilot tasks",
-)
-async def list_queued_tasks(
-    user_id: Annotated[str, Security(auth.get_user_id)],
-) -> QueuedTaskList:
-    """Sessions waiting for a running slot, ordered FIFO."""
-    queued = await turn_queue.list_queued_sessions(user_id)
-    running = await count_running_turns(user_id)
-
-    return QueuedTaskList(
-        running=running,
-        queued=[
-            QueuedTaskItem(
-                session_id=s.id,
-                updated_at=s.updatedAt,
-                title=(s.title or "")[:500] if s.title else None,
-            )
-            for s in queued
-        ],
-        running_cap=get_running_turn_limit(),
-        inflight_cap=get_inflight_turn_limit(),
-    )
-
-
-@router.delete(
-    "/queued-tasks/{session_id}",
-    status_code=204,
-    responses={404: {"description": "Queued session not found or not owned by user"}},
-)
-async def cancel_queued_task(
-    session_id: str,
-    user_id: Annotated[str, Security(auth.get_user_id)],
-) -> Response:
-    """Cancel a queued session before the dispatcher claims it.
-
-    No-op (404) if the session was already promoted to running, already
-    idle / cancelled, or doesn't belong to this user — the cancel
-    transition is gated on ``chatStatus='queued'`` AND
-    ``ChatSession.userId=user_id`` in a single atomic update.
-    """
-    cancelled = await turn_queue.cancel_queued_turn(
-        user_id=user_id, session_id=session_id
-    )
-    if not cancelled:
-        raise HTTPException(
-            status_code=404,
-            detail="Queued task not found, already running, or not owned by you.",
-        )
-    return Response(status_code=204)
-
-
 @router.get(
     "/usage",
 )
@@ -952,13 +875,23 @@ async def cancel_session_task(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
 ) -> CancelSessionResponse:
-    """Cancel the active streaming task for a session.
+    """Cancel an in-flight task for a session.
 
-    Publishes a cancel event to the executor via RabbitMQ FANOUT, then
-    polls Redis until the task status flips from ``running`` or a timeout
-    (5 s) is reached.  Returns only after the cancellation is confirmed.
+    Handles both lifecycle states uniformly:
+
+    * **Queued** (``chatStatus='queued'``) — the dispatcher hasn't
+      claimed the row yet.  Flip the session back to ``idle`` and
+      return; no executor cancel event needed.
+    * **Running** (``chatStatus='running'``) — publish a cancel event
+      to the executor via RabbitMQ FANOUT, then poll Redis until the
+      task status flips out of ``running`` or a 5 s timeout is hit.
     """
     await _validate_and_get_session(session_id, user_id)
+
+    # Queued sessions: just flip back to idle.  The user clicked X
+    # before any compute was spent; no executor involvement needed.
+    if await turn_queue.cancel_queued_turn(user_id=user_id, session_id=session_id):
+        return CancelSessionResponse(cancelled=True, reason="dequeued")
 
     active_session, _ = await stream_registry.get_active_session(session_id, user_id)
     if not active_session:

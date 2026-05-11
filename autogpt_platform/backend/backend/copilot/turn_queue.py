@@ -14,7 +14,7 @@ status of its own).  The dispatcher's submit-time payload (``file_ids``,
 is stashed in that row's ``metadata`` JSONB so a later promotion can
 replay the turn faithfully.
 
-State transitions live in :func:`backend.copilot.db.transition_chat_session_status`:
+State transitions live in :func:`backend.copilot.db.update_chat_session_status`:
 
 * (insert + flip)  ``"idle"`` → ``"queued"`` via :func:`enqueue_turn`
 * ``"queued"``     → ``"running"`` via :func:`claim_queued_turn` (dispatcher)
@@ -164,7 +164,7 @@ async def enqueue_turn(
     db = chat_db()
     async with _get_session_lock(session_id):
         live_sequence = await db.get_next_sequence(session_id)
-        row = await db.insert_chat_message(
+        row = await db.add_chat_message(
             message_id=message_id or str(uuid.uuid4()),
             session_id=session_id,
             role="user" if is_user_message else "assistant",
@@ -177,10 +177,10 @@ async def enqueue_turn(
     # alone; the second pending message just sits as another normal
     # ChatMessage row and the dispatcher picks them up serially via
     # the session's sequence ordering on promotion.
-    await db.transition_chat_session_status(
+    await db.update_chat_session_status(
         session_id=session_id,
-        from_status=CHAT_STATUS_IDLE,
-        to_status=CHAT_STATUS_QUEUED,
+        expect_status=CHAT_STATUS_IDLE,
+        status=CHAT_STATUS_QUEUED,
         user_id=user_id,
     )
     # Invalidate the session cache so the next /chat read picks up the
@@ -194,10 +194,10 @@ async def cancel_queued_turn(*, user_id: str, session_id: str) -> bool:
     """Flip the user's session from ``"queued"`` → ``"idle"``.  Returns
     True iff the CAS matched AND the session is owned by the user.
     Cancel/dispatch races resolve in a single atomic update."""
-    ok = await chat_db().transition_chat_session_status(
+    ok = await chat_db().update_chat_session_status(
         session_id=session_id,
-        from_status=CHAT_STATUS_QUEUED,
-        to_status=CHAT_STATUS_IDLE,
+        expect_status=CHAT_STATUS_QUEUED,
+        status=CHAT_STATUS_IDLE,
         user_id=user_id,
     )
     if not ok:
@@ -211,10 +211,10 @@ async def claim_queued_session(session_id: str) -> bool:
     ``"queued"`` → ``"running"``.  Returns True iff the CAS matched
     (i.e. the session was still queued; not cancelled / claimed by a
     concurrent dispatcher)."""
-    return await chat_db().transition_chat_session_status(
+    return await chat_db().update_chat_session_status(
         session_id=session_id,
-        from_status=CHAT_STATUS_QUEUED,
-        to_status=CHAT_STATUS_RUNNING,
+        expect_status=CHAT_STATUS_QUEUED,
+        status=CHAT_STATUS_RUNNING,
     )
 
 
@@ -300,10 +300,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # Shouldn't happen — enqueue_turn always persists a row before
         # flipping the session to queued.  If it does (corrupted
         # state), roll back to idle so the next tick doesn't loop.
-        await chat_db().transition_chat_session_status(
+        await chat_db().update_chat_session_status(
             session_id=head.id,
-            from_status=CHAT_STATUS_RUNNING,
-            to_status=CHAT_STATUS_IDLE,
+            expect_status=CHAT_STATUS_RUNNING,
+            status=CHAT_STATUS_IDLE,
         )
         return False
 
@@ -339,10 +339,10 @@ async def dispatch_next_for_user(user_id: str) -> bool:
         # Roll the claim back so a missed-dispatch tick or the next
         # slot-free event can retry.
         try:
-            await chat_db().transition_chat_session_status(
+            await chat_db().update_chat_session_status(
                 session_id=head.id,
-                from_status=CHAT_STATUS_RUNNING,
-                to_status=CHAT_STATUS_QUEUED,
+                expect_status=CHAT_STATUS_RUNNING,
+                status=CHAT_STATUS_QUEUED,
             )
         except Exception as restore_exc:
             logger.error(

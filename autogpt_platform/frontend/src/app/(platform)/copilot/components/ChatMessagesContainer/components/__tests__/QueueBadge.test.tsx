@@ -11,7 +11,7 @@ type ErrorResponse = { response?: { status?: number } } | null;
 let errorResponse: ErrorResponse = null;
 
 vi.mock("@/app/api/__generated__/endpoints/chat/chat", () => ({
-  useDeleteV2CancelQueuedTask: ({
+  usePostV2CancelSessionTask: ({
     mutation,
   }: {
     mutation?: {
@@ -25,7 +25,7 @@ vi.mock("@/app/api/__generated__/endpoints/chat/chat", () => ({
         mutation?.onError?.(errorResponse);
         return;
       }
-      mutation?.onSuccess?.({ status: 204 });
+      mutation?.onSuccess?.({ status: 200 });
     },
     isPending,
   }),

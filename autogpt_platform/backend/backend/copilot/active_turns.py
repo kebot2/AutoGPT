@@ -121,10 +121,10 @@ async def release_turn_slot(user_id: str, session_id: str) -> None:
     changed (e.g. a parallel cancel)."""
     if not user_id:
         return
-    await chat_db().transition_chat_session_status(
+    await chat_db().update_chat_session_status(
         session_id=session_id,
-        from_status=CHAT_STATUS_RUNNING,
-        to_status=CHAT_STATUS_IDLE,
+        expect_status=CHAT_STATUS_RUNNING,
+        status=CHAT_STATUS_IDLE,
         user_id=user_id,
     )
 
@@ -182,10 +182,10 @@ async def acquire_turn_slot(
     # Promote idle → running (one statement, CAS-gated).  If the row is
     # already running this returns False — a refresh path; no release
     # ownership.
-    if await db.transition_chat_session_status(
+    if await db.update_chat_session_status(
         session_id=session_id,
-        from_status=CHAT_STATUS_IDLE,
-        to_status=CHAT_STATUS_RUNNING,
+        expect_status=CHAT_STATUS_IDLE,
+        status=CHAT_STATUS_RUNNING,
         user_id=user_id,
     ):
         # Fresh admit: enforce the cap by counting AFTER the flip.

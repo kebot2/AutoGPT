@@ -62,8 +62,8 @@ async def test_enqueue_turn_packs_metadata_into_metadata_payload() -> None:
     shape later."""
     db = MagicMock()
     db.get_next_sequence = AsyncMock(return_value=42)
-    db.insert_chat_message = AsyncMock(return_value=_pyd_message(sequence=42))
-    db.transition_chat_session_status = AsyncMock(return_value=True)
+    db.add_chat_message = AsyncMock(return_value=_pyd_message(sequence=42))
+    db.update_chat_session_status = AsyncMock(return_value=True)
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch.object(turn_queue, "_get_session_lock", return_value=_NoopAsyncCM()),
@@ -81,7 +81,7 @@ async def test_enqueue_turn_packs_metadata_into_metadata_payload() -> None:
             permissions={"tool_filter": "allow"},
             request_arrival_at=123.45,
         )
-    kwargs = db.insert_chat_message.call_args.kwargs
+    kwargs = db.add_chat_message.call_args.kwargs
     assert kwargs["session_id"] == "s1"
     assert kwargs["sequence"] == 42
     metadata = kwargs["metadata"]
@@ -92,8 +92,8 @@ async def test_enqueue_turn_packs_metadata_into_metadata_payload() -> None:
     assert metadata["permissions"] == {"tool_filter": "allow"}
     assert metadata["request_arrival_at"] == 123.45
     # Session is flipped idle → queued.
-    db.transition_chat_session_status.assert_awaited_once_with(
-        session_id="s1", from_status="idle", to_status="queued", user_id="u1"
+    db.update_chat_session_status.assert_awaited_once_with(
+        session_id="s1", expect_status="idle", status="queued", user_id="u1"
     )
 
 
@@ -103,15 +103,15 @@ async def test_enqueue_turn_omits_null_fields_from_metadata() -> None:
     instead of an empty object."""
     db = MagicMock()
     db.get_next_sequence = AsyncMock(return_value=1)
-    db.insert_chat_message = AsyncMock(return_value=_pyd_message())
-    db.transition_chat_session_status = AsyncMock(return_value=True)
+    db.add_chat_message = AsyncMock(return_value=_pyd_message())
+    db.update_chat_session_status = AsyncMock(return_value=True)
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch.object(turn_queue, "_get_session_lock", return_value=_NoopAsyncCM()),
         patch.object(turn_queue, "invalidate_session_cache", new=AsyncMock()),
     ):
         await turn_queue.enqueue_turn(user_id="u1", session_id="s1", message="hello")
-    assert db.insert_chat_message.call_args.kwargs["metadata"] is None
+    assert db.add_chat_message.call_args.kwargs["metadata"] is None
 
 
 # ── cancel_queued_turn ─────────────────────────────────────────────────
@@ -122,7 +122,7 @@ async def test_cancel_queued_turn_returns_true_and_invalidates_cache() -> None:
     """A successful cancel flips the session ``queued`` → ``idle`` and
     invalidates the session cache so the frontend drops the badge."""
     db = MagicMock()
-    db.transition_chat_session_status = AsyncMock(return_value=True)
+    db.update_chat_session_status = AsyncMock(return_value=True)
     invalidate = AsyncMock()
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
@@ -131,10 +131,10 @@ async def test_cancel_queued_turn_returns_true_and_invalidates_cache() -> None:
         ok = await turn_queue.cancel_queued_turn(user_id="u1", session_id="s1")
     assert ok is True
     invalidate.assert_awaited_once_with("s1")
-    db.transition_chat_session_status.assert_awaited_once_with(
+    db.update_chat_session_status.assert_awaited_once_with(
         session_id="s1",
-        from_status="queued",
-        to_status="idle",
+        expect_status="queued",
+        status="idle",
         user_id="u1",
     )
 
@@ -142,7 +142,7 @@ async def test_cancel_queued_turn_returns_true_and_invalidates_cache() -> None:
 @pytest.mark.asyncio
 async def test_cancel_queued_turn_returns_false_when_not_owned_or_not_queued() -> None:
     db = MagicMock()
-    db.transition_chat_session_status = AsyncMock(return_value=False)
+    db.update_chat_session_status = AsyncMock(return_value=False)
     with patch.object(turn_queue, "chat_db", return_value=db):
         ok = await turn_queue.cancel_queued_turn(user_id="u1", session_id="s1")
     assert ok is False
@@ -156,7 +156,7 @@ async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
     """Pre-check rejects when running + queued already equals the cap."""
     db = MagicMock()
     db.count_chat_sessions_by_status = AsyncMock(return_value=10)
-    db.insert_chat_message = AsyncMock()
+    db.add_chat_message = AsyncMock()
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch.object(turn_queue, "count_running_turns", new=AsyncMock(return_value=5)),
@@ -168,7 +168,7 @@ async def test_try_enqueue_turn_raises_when_at_inflight_cap() -> None:
                 session_id="s1",
                 message="hi",
             )
-    db.insert_chat_message.assert_not_awaited()
+    db.add_chat_message.assert_not_awaited()
 
 
 # ── dispatch_next_for_user ─────────────────────────────────────────────
@@ -189,7 +189,7 @@ async def test_dispatch_leaves_queued_when_user_paywalled() -> None:
     no transition fires."""
     db = MagicMock()
     db.list_chat_sessions_by_status = AsyncMock(return_value=[_mock_session()])
-    db.transition_chat_session_status = AsyncMock()
+    db.update_chat_session_status = AsyncMock()
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
@@ -199,7 +199,7 @@ async def test_dispatch_leaves_queued_when_user_paywalled() -> None:
     ):
         promoted = await turn_queue.dispatch_next_for_user("u1")
     assert promoted is False
-    db.transition_chat_session_status.assert_not_awaited()
+    db.update_chat_session_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -210,7 +210,7 @@ async def test_dispatch_leaves_queued_on_rate_limit_exceeded() -> None:
 
     db = MagicMock()
     db.list_chat_sessions_by_status = AsyncMock(return_value=[_mock_session()])
-    db.transition_chat_session_status = AsyncMock()
+    db.update_chat_session_status = AsyncMock()
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
@@ -232,7 +232,7 @@ async def test_dispatch_leaves_queued_on_rate_limit_exceeded() -> None:
     ):
         promoted = await turn_queue.dispatch_next_for_user("u1")
     assert promoted is False
-    db.transition_chat_session_status.assert_not_awaited()
+    db.update_chat_session_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -241,7 +241,7 @@ async def test_dispatch_defers_on_rate_limit_unavailable() -> None:
 
     db = MagicMock()
     db.list_chat_sessions_by_status = AsyncMock(return_value=[_mock_session()])
-    db.transition_chat_session_status = AsyncMock()
+    db.update_chat_session_status = AsyncMock()
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
         patch(
@@ -255,7 +255,7 @@ async def test_dispatch_defers_on_rate_limit_unavailable() -> None:
     ):
         promoted = await turn_queue.dispatch_next_for_user("u1")
     assert promoted is False
-    db.transition_chat_session_status.assert_not_awaited()
+    db.update_chat_session_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -266,7 +266,7 @@ async def test_dispatch_happy_path_claims_and_dispatches() -> None:
     pending = _pyd_message(metadata={"mode": "extended_thinking"})
     db = MagicMock()
     db.list_chat_sessions_by_status = AsyncMock(return_value=[head])
-    db.transition_chat_session_status = AsyncMock(return_value=True)
+    db.update_chat_session_status = AsyncMock(return_value=True)
     dispatch_turn_mock = AsyncMock()
     invalidate = AsyncMock()
     with (
@@ -299,8 +299,8 @@ async def test_dispatch_happy_path_claims_and_dispatches() -> None:
     dispatch_turn_mock.assert_awaited_once()
     invalidate.assert_awaited_once_with("s1")
     # Single claim transition fired (no restore).
-    db.transition_chat_session_status.assert_awaited_once_with(
-        session_id="s1", from_status="queued", to_status="running"
+    db.update_chat_session_status.assert_awaited_once_with(
+        session_id="s1", expect_status="queued", status="running"
     )
 
 
@@ -313,7 +313,7 @@ async def test_dispatch_rolls_claim_back_on_dispatch_failure() -> None:
     db = MagicMock()
     db.list_chat_sessions_by_status = AsyncMock(return_value=[head])
     # First call (claim) returns True; second call (restore) also True.
-    db.transition_chat_session_status = AsyncMock(side_effect=[True, True])
+    db.update_chat_session_status = AsyncMock(side_effect=[True, True])
     dispatch_turn_mock = AsyncMock(side_effect=RuntimeError("RabbitMQ blip"))
     with (
         patch.object(turn_queue, "chat_db", return_value=db),
@@ -343,10 +343,10 @@ async def test_dispatch_rolls_claim_back_on_dispatch_failure() -> None:
         with pytest.raises(RuntimeError, match="RabbitMQ blip"):
             await turn_queue.dispatch_next_for_user("u1")
     # Two transitions: claim then restore.
-    assert db.transition_chat_session_status.await_count == 2
-    db.transition_chat_session_status.assert_any_await(
-        session_id="s1", from_status="queued", to_status="running"
+    assert db.update_chat_session_status.await_count == 2
+    db.update_chat_session_status.assert_any_await(
+        session_id="s1", expect_status="queued", status="running"
     )
-    db.transition_chat_session_status.assert_any_await(
-        session_id="s1", from_status="running", to_status="queued"
+    db.update_chat_session_status.assert_any_await(
+        session_id="s1", expect_status="running", status="queued"
     )
