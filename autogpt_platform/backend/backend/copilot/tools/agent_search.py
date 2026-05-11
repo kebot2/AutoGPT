@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from backend.api.features.library.model import LibraryAgent
@@ -428,37 +428,7 @@ async def search_library_for_creation(
             session_id=session_id,
         )
 
-    lib_db = library_db()
-    agents: list[AgentInfo] = []
-    for match in matches:
-        content_id = match.get("content_id")
-        if not content_id:
-            continue
-        try:
-            library_agent = await lib_db.get_library_agent(content_id, user_id)
-        except NotFoundError:
-            continue
-        except DatabaseError:
-            raise
-        except Exception as e:
-            logger.warning(
-                f"Could not fetch matched library agent {content_id}: {e}",
-                exc_info=True,
-            )
-            continue
-
-        info = _library_agent_to_info(library_agent)
-        # Use combined_score (pre-BM25, always in [0, 1]) for the display
-        # percentage. ``relevance`` is post-BM25 and can go negative on
-        # near-duplicate corpora (low/negative IDF), which would render
-        # as 0% and confuse the user.
-        score = match.get("combined_score") or 0.0
-        percent = max(0, min(100, int(round(float(score) * 100))))
-        prefix = f"[{percent}% match] "
-        info.description = (
-            prefix + info.description if info.description else prefix.strip()
-        )
-        agents.append(info)
+    agents = await _load_and_format_matched_agents(matches, user_id)
 
     if not agents:
         return NoResultsResponse(
@@ -492,6 +462,48 @@ async def search_library_for_creation(
         count=len(agents),
         session_id=session_id,
     )
+
+
+async def _load_and_format_matched_agents(
+    matches: list[dict[str, Any]], user_id: str
+) -> list[AgentInfo]:
+    """Resolve hybrid-search matches to ``AgentInfo`` rows with ``[N% match]``
+    prefixed descriptions.
+
+    Skips matches that can no longer be loaded (deleted agents, wrong user)
+    and lets ``DatabaseError`` propagate to the caller's soft-fail handler.
+    Uses ``combined_score`` (pre-BM25, always in [0, 1]) for the display
+    percentage; ``relevance`` is post-BM25 and can go negative on
+    near-duplicate corpora.
+    """
+    lib_db = library_db()
+    agents: list[AgentInfo] = []
+    for match in matches:
+        content_id = match.get("content_id")
+        if not content_id:
+            continue
+        try:
+            library_agent = await lib_db.get_library_agent(content_id, user_id)
+        except NotFoundError:
+            continue
+        except DatabaseError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"Could not fetch matched library agent {content_id}: {e}",
+                exc_info=True,
+            )
+            continue
+
+        info = _library_agent_to_info(library_agent)
+        score = match.get("combined_score") or 0.0
+        percent = max(0, min(100, int(round(score * 100))))
+        prefix = f"[{percent}% match] "
+        info.description = (
+            prefix + info.description if info.description else prefix.strip()
+        )
+        agents.append(info)
+    return agents
 
 
 async def _get_library_agent_by_id(user_id: str, agent_id: str) -> AgentInfo | None:

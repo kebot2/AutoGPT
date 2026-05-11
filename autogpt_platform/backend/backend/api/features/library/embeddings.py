@@ -19,6 +19,13 @@ from backend.data import graph as graph_db
 
 logger = logging.getLogger(__name__)
 
+# Strong references to in-flight embedding tasks. ``asyncio.create_task``
+# only holds a weak reference, so without this set a task could be
+# garbage-collected mid-run on Python implementations that don't follow
+# CPython 3.11+'s strong-reference behaviour. Tasks remove themselves via
+# ``add_done_callback`` once they complete.
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 def _build_searchable_text(graph: graph_db.GraphModel) -> str:
     parts = [
@@ -64,6 +71,11 @@ def schedule_library_agent_embedding(
     Always passes ``force=True`` so updates (name/description/instructions
     changes via ``update_library_agent_version_and_settings``) refresh the
     embedding. The returned task is not awaited by callers; failures are
-    logged inside ``_run_embedding``.
+    logged inside ``_run_embedding``. The task is held by
+    ``_background_tasks`` until it completes to keep it from being
+    garbage-collected mid-run.
     """
-    return asyncio.create_task(_run_embedding(library_agent_id, user_id, graph))
+    task = asyncio.create_task(_run_embedding(library_agent_id, user_id, graph))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task

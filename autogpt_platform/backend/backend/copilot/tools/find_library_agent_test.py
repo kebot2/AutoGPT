@@ -9,6 +9,7 @@ from backend.copilot.tools.models import (
     AgentsFoundResponse,
     NoResultsResponse,
 )
+from backend.util.exceptions import DatabaseError
 
 from ._test_data import make_session
 
@@ -124,8 +125,6 @@ async def test_for_creation_without_goal_summary_soft_fails(tool, session):
 async def test_for_creation_db_error_soft_fails(tool, session):
     """A DatabaseError from the hybrid search degrades to NoResults so the
     UI stays clean and the LLM can proceed."""
-    from backend.util.exceptions import DatabaseError
-
     with patch(
         "backend.copilot.tools.agent_search.hybrid_search_library_agents",
         new=AsyncMock(side_effect=DatabaseError("connection refused")),

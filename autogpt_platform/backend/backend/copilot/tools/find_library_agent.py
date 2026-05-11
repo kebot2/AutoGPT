@@ -69,6 +69,12 @@ class FindLibraryAgentTool(BaseTool):
                     ),
                 },
             },
+            # ``goal_summary`` is deliberately NOT listed as a required
+            # property even though it is required in for_creation mode:
+            # ``search_library_for_creation`` returns a ``NoResultsResponse``
+            # with a recovery message instead of a hard validation error
+            # when it's missing, so the LLM can retry without a tool-call
+            # error surfacing in chat.
             "required": [],
         }
 
