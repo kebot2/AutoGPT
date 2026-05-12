@@ -17,10 +17,6 @@ images: {
 ```
 """
 
-import sys
-
-print("[seed] starting imports...", flush=True)
-
 import asyncio
 import json
 import random
@@ -28,55 +24,25 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-print("[seed] stdlib imports done", flush=True)
-
 import prisma.enums as prisma_enums
 import prisma.models as prisma_models
-
-print("[seed] prisma imports done", flush=True)
-
 from faker import Faker
 
-print("[seed] faker imported", flush=True)
-
 # Import API functions from the backend
-print("[seed] importing backend.api.features.library.db...", flush=True)
 from backend.api.features.library.db import create_library_agent, create_preset
-
-print("[seed] importing backend.api.features.library.model...", flush=True)
 from backend.api.features.library.model import LibraryAgentPresetCreatable
-
-print("[seed] importing backend.api.features.store.db...", flush=True)
 from backend.api.features.store.db import (
     create_store_submission,
     review_store_submission,
 )
-
-print("[seed] importing backend.api.features.store.model...", flush=True)
 from backend.api.features.store.model import StoreSubmission
-
-print("[seed] importing backend.blocks.io...", flush=True)
 from backend.blocks.io import AgentInputBlock
-
-print("[seed] importing backend.data.auth.api_key...", flush=True)
 from backend.data.auth.api_key import create_api_key
-
-print("[seed] importing backend.data.credit...", flush=True)
 from backend.data.credit import get_user_credit_model
-
-print("[seed] importing backend.data.db...", flush=True)
 from backend.data.db import prisma
-
-print("[seed] importing backend.data.graph...", flush=True)
 from backend.data.graph import Graph, Link, Node, create_graph, make_graph_model
-
-print("[seed] importing backend.data.user...", flush=True)
 from backend.data.user import get_or_create_user
-
-print("[seed] importing backend.util.clients...", flush=True)
 from backend.util.clients import get_supabase
-
-print("[seed] all imports complete!", flush=True)
 
 faker = Faker()
 
