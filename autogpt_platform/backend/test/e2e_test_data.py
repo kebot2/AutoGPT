@@ -20,7 +20,6 @@ images: {
 import asyncio
 import json
 import random
-import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -259,8 +258,7 @@ class TestDataCreator:
         print("Creating test graphs...")
 
         graphs = []
-        for user_idx, user in enumerate(self.users):
-            user_t0 = time.time()
+        for user in self.users:
             num_graphs = random.randint(MIN_GRAPHS_PER_USER, MAX_GRAPHS_PER_USER)
 
             for graph_num in range(num_graphs):
@@ -431,12 +429,6 @@ class TestDataCreator:
                     print(f"Error creating graph: {e}")
                     continue
 
-            print(
-                f"[seed-timing] graphs for user {user_idx+1}/{len(self.users)}: "
-                f"{time.time()-user_t0:.1f}s ({num_graphs} graphs)",
-                flush=True,
-            )
-
         self.agent_graphs = graphs
         return graphs
 
@@ -445,8 +437,7 @@ class TestDataCreator:
         print("Creating test library agents...")
 
         library_agents = []
-        for user_idx, user in enumerate(self.users):
-            user_t0 = time.time()
+        for user in self.users:
             num_agents = random.randint(MIN_AGENTS_PER_USER, MAX_AGENTS_PER_USER)
 
             # Get available graphs for this user
@@ -479,12 +470,6 @@ class TestDataCreator:
                 except Exception as e:
                     print(f"Error creating library agent: {e}")
                     continue
-
-            print(
-                f"[seed-timing] library agents for user {user_idx+1}/{len(self.users)}: "
-                f"{time.time()-user_t0:.1f}s ({len(selected_graphs)} agents)",
-                flush=True,
-            )
 
         self.library_agents = library_agents
         return library_agents
@@ -847,8 +832,7 @@ class TestDataCreator:
                     traceback.print_exc()
 
         # Create regular submissions for all users
-        for user_idx, user in enumerate(self.users):
-            user_t0 = time.time()
+        for user in self.users:
             user_graphs = [
                 g for g in self.agent_graphs if g.get("userId") == user["id"]
             ]
@@ -974,12 +958,6 @@ class TestDataCreator:
                     traceback.print_exc()
                     continue
 
-            print(
-                f"[seed-timing] store submissions for user {user_idx+1}/{len(self.users)}: "
-                f"{time.time()-user_t0:.1f}s",
-                flush=True,
-            )
-
         print("\n📊 Store Submissions Summary:")
         print(f"   Created: {len(submissions)}")
         print(f"   Approved: {len(approved_submissions)}")
@@ -1023,64 +1001,41 @@ class TestDataCreator:
     async def create_all_test_data(self):
         """Create all test data."""
         print("Starting E2E test data creation...")
-        wall_t0 = time.time()
 
         # Create users first
-        t0 = time.time()
         await self.create_test_users()
-        print(f"[seed-timing] create_test_users: {time.time()-t0:.1f}s", flush=True)
 
         # Get available blocks
-        t0 = time.time()
         await self.get_available_blocks()
-        print(f"[seed-timing] get_available_blocks: {time.time()-t0:.1f}s", flush=True)
 
         # Create graphs
-        t0 = time.time()
         await self.create_test_graphs()
-        print(f"[seed-timing] create_test_graphs: {time.time()-t0:.1f}s", flush=True)
 
         # Create library agents
-        t0 = time.time()
         await self.create_test_library_agents()
-        print(f"[seed-timing] create_test_library_agents: {time.time()-t0:.1f}s", flush=True)
 
         # Create presets
-        t0 = time.time()
         await self.create_test_presets()
-        print(f"[seed-timing] create_test_presets: {time.time()-t0:.1f}s", flush=True)
 
         # Create API keys
-        t0 = time.time()
         await self.create_test_api_keys()
-        print(f"[seed-timing] create_test_api_keys: {time.time()-t0:.1f}s", flush=True)
 
         # Update user profiles to create featured creators
-        t0 = time.time()
         await self.update_test_profiles()
-        print(f"[seed-timing] update_test_profiles: {time.time()-t0:.1f}s", flush=True)
 
         # Create store submissions
-        t0 = time.time()
         await self.create_test_store_submissions()
-        print(f"[seed-timing] create_test_store_submissions: {time.time()-t0:.1f}s", flush=True)
 
         # Add user credits
-        t0 = time.time()
         await self.add_user_credits()
-        print(f"[seed-timing] add_user_credits: {time.time()-t0:.1f}s", flush=True)
 
         # Refresh materialized views
         print("Refreshing materialized views...")
-        t0 = time.time()
         try:
             await prisma.execute_raw("SELECT refresh_store_materialized_views();")
         except Exception as e:
             print(f"Error refreshing materialized views: {e}")
-        print(f"[seed-timing] refresh_materialized_views: {time.time()-t0:.1f}s", flush=True)
 
-        wall_elapsed = time.time() - wall_t0
-        print(f"\n[seed-timing] create_all_test_data TOTAL: {wall_elapsed:.1f}s", flush=True)
         print("E2E test data creation completed successfully!")
 
         # Print summary
@@ -1103,7 +1058,6 @@ class TestDataCreator:
 
 async def main():
     """Main function to run the test data creation."""
-    main_t0 = time.time()
     # Connect to database
     await prisma.connect()
 
@@ -1113,8 +1067,6 @@ async def main():
     finally:
         # Disconnect from database
         await prisma.disconnect()
-
-    print(f"[seed-timing] main() TOTAL (incl. connect/disconnect): {time.time()-main_t0:.1f}s", flush=True)
 
 
 if __name__ == "__main__":
