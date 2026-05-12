@@ -48,6 +48,7 @@ export function EditAgentForm({
 }: EditAgentFormProps) {
   const {
     form,
+    images,
     categoryOptions,
     isSubmitting,
     handleFormSubmit,
@@ -81,7 +82,7 @@ export function EditAgentForm({
     !!watched.description &&
     !!watched.youtubeLink &&
     !!watched.agentOutputDemo;
-  const thumbnailsComplete = !thumbnailsHasError;
+  const thumbnailsComplete = !thumbnailsHasError && images.length > 0;
 
   const isSubmitDisabled =
     Object.keys(form.formState.errors).length > 0 || isSubmitting;
