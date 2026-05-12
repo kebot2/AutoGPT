@@ -109,11 +109,13 @@ class TestSanitizeChatMessage:
         assert args["url"] == "https://example.com"
 
     def test_strips_injected_context_from_user_messages(self):
-        # Real injected contexts start with these tags; the sanitizer
-        # delegates stripping to ``strip_injected_context_for_display``.
+        # Real injected contexts use a ``\n\n`` separator between the
+        # closing tag and the user's actual text — the regex in
+        # ``strip_injected_context_for_display`` requires that to anchor
+        # the leading-block match.  This mirrors the production format.
         msg = _msg(
             role="user",
-            content="<memory_context>secret</memory_context>hello",
+            content="<memory_context>secret</memory_context>\n\nhello",
         )
         sanitized = sanitize_chat_message(msg)
         assert sanitized.content is not None

@@ -63,6 +63,22 @@ def setup_app_auth(mock_jwt_user):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def mock_frontend_base_url():
+    """Pin ``settings.config.frontend_base_url`` for the share-enable path.
+
+    The route fails fast with 500 when this is unset (it'd otherwise
+    return a broken localhost URL in production).  CI runs without the
+    setting populated, so the route tests need an explicit value.
+    """
+    from backend.api.features.chat import share as share_module
+
+    original = share_module.settings.config.frontend_base_url
+    share_module.settings.config.frontend_base_url = "http://localhost:3000"
+    yield
+    share_module.settings.config.frontend_base_url = original
+
+
 @pytest.fixture
 def client():
     return TestClient(app, raise_server_exceptions=False)
@@ -145,6 +161,8 @@ class TestDisableChatSharing:
 
 class TestListLinkedExecutions:
     def test_returns_listing(self, client):
+        from backend.copilot.sharing.db import ChatShareState
+
         listing = [
             SharedChatLinkedExecution(
                 execution_id="exec-1",
@@ -153,10 +171,17 @@ class TestListLinkedExecutions:
                 share_token=None,
             ),
         ]
-        with patch(
-            "backend.api.features.chat.share.share_db.find_linked_executions_in_session",
-            new_callable=AsyncMock,
-            return_value=listing,
+        with (
+            patch(
+                "backend.api.features.chat.share.share_db.get_chat_share_state",
+                new_callable=AsyncMock,
+                return_value=ChatShareState(is_shared=False, share_token=None),
+            ),
+            patch(
+                "backend.api.features.chat.share.share_db.find_linked_executions_in_session",
+                new_callable=AsyncMock,
+                return_value=listing,
+            ),
         ):
             response = client.get(
                 f"/api/chat/sessions/{SESSION_ID}/share/linked-executions"
