@@ -13,15 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from prisma.enums import SharedVia
-from prisma.models import (
-    AgentGraphExecution,
-    ChatLinkedShare,
-    ChatSession as PrismaChatSession,
-    SharedChatFile,
-)
+from prisma.models import AgentGraphExecution, ChatLinkedShare
+from prisma.models import ChatSession as PrismaChatSession
+from prisma.models import SharedChatFile
 
 from backend.copilot.sharing.db import disable_chat_session_share
-
 
 SESSION_ID = "sess-A"
 OTHER_SESSION_ID = "sess-B"
@@ -98,9 +94,7 @@ class _TxStub:
 
 @pytest.fixture()
 def mock_transaction():
-    with patch(
-        "backend.copilot.sharing.db.transaction", return_value=_TxStub()
-    ) as m:
+    with patch("backend.copilot.sharing.db.transaction", return_value=_TxStub()) as m:
         yield m
 
 
@@ -146,9 +140,7 @@ class TestDisableCascade:
         mock_prisma_calls["linked"].return_value.find_first = AsyncMock(
             return_value=None
         )
-        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(
-            return_value=1
-        )
+        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(return_value=1)
         mock_prisma_calls["execution"].return_value.update = AsyncMock()
         mock_prisma_calls["file"].return_value.delete_many = AsyncMock(return_value=0)
         mock_prisma_calls["session"].return_value.update = AsyncMock()
@@ -157,9 +149,9 @@ class TestDisableCascade:
 
         # Execution was revoked.
         mock_prisma_calls["execution"].return_value.update.assert_called_once()
-        update_data = mock_prisma_calls["execution"].return_value.update.call_args.kwargs[
-            "data"
-        ]
+        update_data = mock_prisma_calls[
+            "execution"
+        ].return_value.update.call_args.kwargs["data"]
         assert update_data == {
             "isShared": False,
             "shareToken": None,
@@ -190,9 +182,7 @@ class TestDisableCascade:
         mock_prisma_calls["linked"].return_value.find_first = AsyncMock(
             return_value=other_link
         )
-        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(
-            return_value=1
-        )
+        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(return_value=1)
         mock_prisma_calls["execution"].return_value.update = AsyncMock()
         mock_prisma_calls["file"].return_value.delete_many = AsyncMock(return_value=0)
         mock_prisma_calls["session"].return_value.update = AsyncMock()
@@ -224,9 +214,7 @@ class TestDisableCascade:
         mock_prisma_calls["linked"].return_value.find_first = AsyncMock(
             return_value=None
         )
-        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(
-            return_value=1
-        )
+        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(return_value=1)
         mock_prisma_calls["execution"].return_value.update = AsyncMock()
         mock_prisma_calls["file"].return_value.delete_many = AsyncMock(return_value=0)
         mock_prisma_calls["session"].return_value.update = AsyncMock()
