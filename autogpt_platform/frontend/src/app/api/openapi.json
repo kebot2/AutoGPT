@@ -2627,10 +2627,7 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EnableShareRequest",
-                "default": { "linked_execution_ids": [] }
-              }
+              "schema": { "$ref": "#/components/schemas/EnableShareRequest" }
             }
           }
         },
