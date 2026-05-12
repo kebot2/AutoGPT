@@ -17,7 +17,11 @@ from prisma.models import AgentGraphExecution, ChatLinkedShare
 from prisma.models import ChatSession as PrismaChatSession
 from prisma.models import SharedChatFile
 
-from backend.copilot.sharing.db import disable_chat_session_share
+from backend.copilot.sharing.db import (
+    disable_chat_session_share,
+    enable_chat_session_share,
+    get_chat_share_state,
+)
 
 SESSION_ID = "sess-A"
 OTHER_SESSION_ID = "sess-B"
@@ -237,3 +241,64 @@ class TestDisableCascade:
 
         mock_prisma_calls["linked"].return_value.delete_many.assert_not_called()
         mock_prisma_calls["session"].return_value.update.assert_not_called()
+
+
+class TestEnableChatShareState:
+    """Smoke tests for enable_chat_session_share + helpers."""
+
+    @pytest.mark.asyncio
+    async def test_enable_session_update_is_last_inside_transaction(
+        self, mock_prisma_calls, mock_transaction
+    ):
+        """Session update must happen LAST so a crash before it can't
+        leave the chat publicly readable with an empty file allowlist."""
+        mock_prisma_calls["session"].return_value.find_first = AsyncMock(
+            return_value=_mock_session()
+        )
+        # No executions to validate / link.
+        mock_prisma_calls["execution"].return_value.find_many = AsyncMock(
+            return_value=[]
+        )
+        mock_prisma_calls["file"].return_value.delete_many = AsyncMock(return_value=0)
+        mock_prisma_calls["linked"].return_value.delete_many = AsyncMock(return_value=0)
+        # _build_shared_chat_files needs to find no messages → no files.
+        with patch("backend.copilot.sharing.db.PrismaChatMessage") as msg_mock:
+            msg_mock.prisma.return_value.find_many = AsyncMock(return_value=[])
+            mock_prisma_calls["session"].return_value.update = AsyncMock()
+
+            token = await enable_chat_session_share(SESSION_ID, USER_ID, [])
+
+        # Token returned, session.update called with isShared=True.
+        assert isinstance(token, str)
+        assert len(token) > 10
+        update_call = mock_prisma_calls["session"].return_value.update.call_args
+        assert update_call.kwargs["data"]["isShared"] is True
+        assert update_call.kwargs["data"]["shareToken"] == token
+
+    @pytest.mark.asyncio
+    async def test_get_chat_share_state_returns_default_for_unknown_session(
+        self, mock_prisma_calls
+    ):
+        """Non-existent / non-owned session reports unshared shape uniformly."""
+        mock_prisma_calls["session"].return_value.find_first = AsyncMock(
+            return_value=None
+        )
+
+        state = await get_chat_share_state(SESSION_ID, USER_ID)
+
+        assert state.is_shared is False
+        assert state.share_token is None
+
+    @pytest.mark.asyncio
+    async def test_get_chat_share_state_returns_token_when_shared(
+        self, mock_prisma_calls
+    ):
+        """Owner of a shared session sees the actual token surfaced."""
+        mock_prisma_calls["session"].return_value.find_first = AsyncMock(
+            return_value=_mock_session()
+        )
+
+        state = await get_chat_share_state(SESSION_ID, USER_ID)
+
+        assert state.is_shared is True
+        assert state.share_token == "token-A"
