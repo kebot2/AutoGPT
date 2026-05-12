@@ -1,7 +1,5 @@
-import {
-  SharedChatLinkedExecution,
-  SharedChatMessage,
-} from "@/app/(platform)/copilot/sharing/api";
+import type { SharedChatLinkedExecution } from "@/app/api/__generated__/models/sharedChatLinkedExecution";
+import type { SharedChatMessage } from "@/app/api/__generated__/models/sharedChatMessage";
 import { executionSharePath } from "@/lib/share/routes";
 
 type Props = {

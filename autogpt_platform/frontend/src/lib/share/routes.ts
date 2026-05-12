@@ -30,16 +30,3 @@ export function executionShareUrl(token: string): string {
 export function chatShareUrl(token: string): string {
   return `${getBaseUrl()}${chatSharePath(token)}`;
 }
-
-// API paths used by the chat-share hooks until orval regenerates against
-// the updated backend OpenAPI spec.  Once generated hooks exist for these
-// operations, the hooks below should be replaced and these consts removed.
-export const shareApiPaths = {
-  enableChat: (sessionId: string) => `/api/chat/sessions/${sessionId}/share`,
-  disableChat: (sessionId: string) => `/api/chat/sessions/${sessionId}/share`,
-  chatLinkedExecutions: (sessionId: string) =>
-    `/api/chat/sessions/${sessionId}/share/linked-executions`,
-  getSharedChat: (token: string) => `/api/public/shared/chats/${token}`,
-  getSharedChatMessages: (token: string) =>
-    `/api/public/shared/chats/${token}/messages`,
-};
